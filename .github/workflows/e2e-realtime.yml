@@ -28,6 +28,16 @@ jobs:
       - name: Install backend dependencies
         run: pip install -r requirements.txt
 
+      - name: Gemini model/capability probe
+        if: ${{ always() }}
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "SKIP probe: no GEMINI_API_KEY"; exit 0
+          fi
+          python scripts/gemini_probe.py
+
       - name: Gemini E2E
         env:
           AI_PROVIDER: gemini
