@@ -34,9 +34,9 @@ services:
       # rather than the SQLite dev default baked into config.py.
       AI_PROVIDER: ${AI_PROVIDER:-mock}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash-live-001}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-native-audio-latest}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_REALTIME_MODEL: ${OPENAI_REALTIME_MODEL:-gpt-4o-realtime-preview}
+      OPENAI_REALTIME_MODEL: ${OPENAI_REALTIME_MODEL:-gpt-realtime}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://farryon:farryon@postgres:5432/farryon}
       WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-mock}
       WEB_SEARCH_API_KEY: ${WEB_SEARCH_API_KEY:-}

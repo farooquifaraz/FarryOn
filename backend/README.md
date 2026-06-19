@@ -49,9 +49,9 @@ All config is environment-driven (see `.env.example` for the annotated list).
 | --- | --- | --- |
 | `AI_PROVIDER` | `mock` | `gemini` \| `openai` \| `mock` |
 | `GEMINI_API_KEY` | – | Required when `AI_PROVIDER=gemini` |
-| `GEMINI_MODEL` | `gemini-2.0-flash-live-001` | Gemini Live model id |
+| `GEMINI_MODEL` | `gemini-2.5-flash-native-audio-latest` | Gemini Live model id |
 | `OPENAI_API_KEY` | – | Required when `AI_PROVIDER=openai` |
-| `OPENAI_REALTIME_MODEL` | `gpt-4o-realtime-preview` | Realtime model id |
+| `OPENAI_REALTIME_MODEL` | `gpt-realtime` | Realtime model id |
 | `DATABASE_URL` | `sqlite+aiosqlite:///./farryon.db` | Async SQLAlchemy URL |
 | `WEB_SEARCH_PROVIDER` | `mock` | `mock` \| `tavily` \| `serpapi` |
 | `WEB_SEARCH_API_KEY` | – | Key for the chosen search provider |
