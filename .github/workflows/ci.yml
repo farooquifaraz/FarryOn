@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------ backend
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # The mock gateway needs no API keys and makes the suite fully offline.
+      AI_PROVIDER: mock
+      DATABASE_URL: sqlite+aiosqlite:///./test.db
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Lint (ruff)
+        # Non-fatal lint signal; tests are the gate. Remove `|| true` to enforce.
+        run: ruff check . || true
+
+      - name: Run tests
+        run: pytest -q
+
+  # ------------------------------------------------------------------- mobile
+  mobile:
+    name: Mobile (flutter analyze + test)
+    runs-on: ubuntu-latest
+    # The Flutter toolchain is heavy and the app is still evolving; keep this
+    # job advisory so it never blocks a backend/docs merge.
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Fetch packages
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test

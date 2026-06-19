@@ -1,0 +1,56 @@
+# =====================================================================
+# FarryOn .dockerignore
+# Keeps the backend build context small and reproducible. Anything the
+# image does not need at build/run time is excluded so `docker build`
+# does not ship local venvs, caches, secrets, or the Flutter app.
+# =====================================================================
+
+# ---------- Version control / CI ----------
+.git
+.gitignore
+.github
+
+# ---------- Docs & infra (not needed inside the image) ----------
+docs
+deploy
+*.md
+LICENSE
+Makefile
+docker-compose.yml
+
+# ---------- Python / backend ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+dist/
+build/
+
+# Secrets & local DBs never go in the image.
+.env
+.env.*
+!.env.example
+*.sqlite3
+*.db
+
+# ---------- Flutter / Dart / mobile ----------
+# The backend image never contains the mobile app.
+mobile/
+
+# ---------- Runtime data / volumes ----------
+data/
+
+# ---------- IDE / OS ----------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

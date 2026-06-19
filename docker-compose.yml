@@ -1,0 +1,125 @@
+# =====================================================================
+# FarryOn — local development & demo stack
+#
+#   docker compose up -d --build
+#
+# Services:
+#   backend      FastAPI + WebSocket (/ws/live), built from ./backend
+#   postgres     Postgres 16 (prod-parity persistence)
+#   prometheus   scrapes backend /metrics
+#   grafana      dashboards over Prometheus
+#
+# Config comes from a local .env file (see backend/.env.example). Nothing
+# here hard-codes a secret. For production deployment guidance — multiple
+# uvicorn workers, sticky sessions, Redis, TLS termination — see
+# docs/DEPLOYMENT.md.
+# =====================================================================
+
+name: farryon
+
+services:
+  # ------------------------------------------------------------------ backend
+  backend:
+    build:
+      context: ./backend          # the backend agent owns ./backend/Dockerfile
+      dockerfile: Dockerfile
+    image: farryon-backend:dev
+    restart: unless-stopped
+    ports:
+      - "8000:8000"               # ws://localhost:8000/ws/live  +  /metrics
+    env_file:
+      - .env                      # operator-supplied; see backend/.env.example
+    environment:
+      # Explicit overrides so the container talks to the compose Postgres
+      # rather than the SQLite dev default baked into config.py.
+      AI_PROVIDER: ${AI_PROVIDER:-mock}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash-live-001}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_REALTIME_MODEL: ${OPENAI_REALTIME_MODEL:-gpt-4o-realtime-preview}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://farryon:farryon@postgres:5432/farryon}
+      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-mock}
+      WEB_SEARCH_API_KEY: ${WEB_SEARCH_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-dev-insecure-change-me}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      HOST: 0.0.0.0
+      PORT: "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # The backend exposes a lightweight liveness endpoint.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status==200 else sys.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - farryon
+
+  # ----------------------------------------------------------------- postgres
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-farryon}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-farryon}
+      POSTGRES_DB: ${POSTGRES_DB:-farryon}
+    ports:
+      - "5432:5432"               # exposed for local psql / debugging only
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-farryon} -d ${POSTGRES_DB:-farryon}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - farryon
+
+  # --------------------------------------------------------------- prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    depends_on:
+      - backend
+    networks:
+      - farryon
+
+  # ------------------------------------------------------------------ grafana
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - farryon
+
+# --------------------------------------------------------------------- shared
+networks:
+  farryon:
+    driver: bridge
+
+volumes:
+  pgdata:
+  promdata:
+  grafanadata:

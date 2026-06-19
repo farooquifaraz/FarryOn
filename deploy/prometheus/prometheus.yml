@@ -1,0 +1,20 @@
+# Prometheus scrape config for the local FarryOn stack.
+# Mounted read-only into the prometheus container by docker-compose.yml.
+# The backend exposes a Prometheus exposition endpoint at /metrics
+# (prometheus-fastapi-instrumentator / prometheus_client).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: farryon-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8000"]
+        labels:
+          service: farryon-backend
+          env: local
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

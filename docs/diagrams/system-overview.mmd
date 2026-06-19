@@ -1,0 +1,38 @@
+%% FarryOn — system overview (source for docs/ARCHITECTURE.md §1)
+%% Render: mmdc -i system-overview.mmd -o system-overview.svg
+flowchart LR
+  subgraph Device["Capture device (CaptureSource)"]
+    cam["Camera ~1 fps JPEG"]
+    mic["Mic PCM16 16 kHz"]
+    spk["Speaker PCM16 24 kHz"]
+  end
+
+  subgraph Mobile["Flutter app (mobile/)"]
+    ws_c["WS client + codec\n(protocol.dart)"]
+    ui["UI: transcripts,\nstate, tool cards"]
+  end
+
+  subgraph Backend["FastAPI backend (backend/)"]
+    ws_s["WS endpoint /ws/live"]
+    sess["Session / SessionManager"]
+    gw["AIGateway\n(gemini | openai | mock)"]
+    agent["Agent + Tool engine"]
+    db[("DB\nSQLite dev / Postgres prod")]
+    obs["Observability\nstructlog + Prometheus"]
+  end
+
+  subgraph Provider["AI provider (realtime)"]
+    ai["Gemini Live /\nOpenAI Realtime"]
+  end
+
+  cam --> ws_c
+  mic --> ws_c
+  ws_c -- "wss /ws/live\n(binary media + JSON events)" --> ws_s
+  ws_s --> sess --> gw <--> ai
+  gw --> agent
+  agent --> db
+  agent --> gw
+  sess -- "OUTPUT_AUDIO + events" --> ws_c
+  ws_c --> spk
+  ws_c --> ui
+  ws_s -.-> obs

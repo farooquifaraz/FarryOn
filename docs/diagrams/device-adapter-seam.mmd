@@ -1,0 +1,22 @@
+%% FarryOn — CaptureSource seam (source for docs/DEVICE_ADAPTER.md §1)
+%% Render: mmdc -i device-adapter-seam.mmd -o device-adapter-seam.svg
+flowchart TB
+  subgraph Stable["Stable above the seam (device-agnostic)"]
+    UI["Flutter UI / state"]
+    WS["WS client + codec\n(protocol.dart)\n0x01/0x02/0x03"]
+    BE["Backend -> AIGateway -> Agent"]
+  end
+
+  SEAM{{"CaptureSource seam\naudio16k + jpegFrames + deviceInfo + sink(ttsAudio24k)"}}
+
+  subgraph Devices["Swappable below the seam"]
+    PHONE["PhoneCaptureSource\ncamera + mic + speaker"]
+    GLASS["GlassesCaptureSource\nBLE / Wi-Fi / SDK"]
+    EXT["ExternalCaptureSource\nUVC cam / RTSP / test fixture"]
+  end
+
+  UI --- WS --- SEAM
+  SEAM --- PHONE
+  SEAM --- GLASS
+  SEAM --- EXT
+  WS == "wss /ws/live" ==> BE
