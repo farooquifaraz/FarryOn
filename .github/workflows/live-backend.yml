@@ -1,0 +1,140 @@
+name: Live test backend (tunnel)
+
+# Runs the FarryOn backend ON the GitHub Actions runner (which HAS open internet,
+# unlike a locked-down sandbox) and exposes it through a Cloudflare quick tunnel.
+# A phone anywhere can then connect to the printed wss:// URL — no cloud account,
+# no local setup. The backend is fully managed here; you only add the API key(s)
+# once as Actions secrets.
+#
+#   Settings → Secrets and variables → Actions → New repository secret
+#     OPENAI_API_KEY = <your key>      (for provider "openai")
+#     GEMINI_API_KEY = <your key>      (for provider "gemini")
+#
+# The public host + app settings are written to the run's Summary panel.
+#
+# NOTE: ephemeral — the tunnel/backend live only for `duration_minutes` (then the
+# job ends and the URL dies). Re-run the workflow to get a fresh window. The
+# trycloudflare URL changes every run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "AI provider to run"
+        type: choice
+        options: [openai, gemini]
+        default: openai
+      duration_minutes:
+        description: "Minutes to keep the tunnel up (max ~350)"
+        default: "60"
+  push:
+    branches: ["claude/gallant-franklin-j6qzbx"]
+    paths: [".github/workflows/live-backend.yml"]
+
+# Only one live backend at a time; a new run cancels the previous tunnel.
+concurrency:
+  group: live-backend
+  cancel-in-progress: true
+
+jobs:
+  live-backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      AI_PROVIDER: ${{ github.event.inputs.provider || 'openai' }}
+      DURATION_MINUTES: ${{ github.event.inputs.duration_minutes || '60' }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_REALTIME_MODEL: gpt-4o-realtime-preview
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: gemini-2.0-flash-live-001
+      ALLOWED_ORIGINS: "*"
+      WEB_SEARCH_PROVIDER: mock
+      LOG_LEVEL: INFO
+      # JWT_SECRET left unset → backend keeps its dev default → auth disabled,
+      # so the phone can connect without a token (fine for a test session).
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run backend + Cloudflare tunnel
+        run: |
+          set -uo pipefail
+
+          # ── Guard: is the active provider's key present? ──────────────────
+          NEEDKEY=0
+          if [ "$AI_PROVIDER" = "openai" ] && [ -z "${OPENAI_API_KEY:-}" ]; then NEEDKEY=1; fi
+          if [ "$AI_PROVIDER" = "gemini" ] && [ -z "${GEMINI_API_KEY:-}" ]; then NEEDKEY=1; fi
+          if [ "$NEEDKEY" = "1" ]; then
+            {
+              echo "## ⚠️ API key secret missing"
+              echo ""
+              echo "Provider \`$AI_PROVIDER\` has no key. Add it once:"
+              echo "**Settings → Secrets and variables → Actions → New repository secret**"
+              echo "- \`OPENAI_API_KEY\` (for provider openai)"
+              echo "- \`GEMINI_API_KEY\` (for provider gemini)"
+              echo ""
+              echo "Then re-run this workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Secret for provider '$AI_PROVIDER' is not set. Add it and re-run."
+            exit 1
+          fi
+
+          # ── Start the backend ─────────────────────────────────────────────
+          nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 \
+            > /tmp/backend.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/healthz >/dev/null; then
+              echo "backend healthy"; break
+            fi
+            sleep 2
+          done
+          curl -sf http://localhost:8000/healthz || { echo "backend never came up"; cat /tmp/backend.log; exit 1; }
+
+          # ── Start a Cloudflare quick tunnel ───────────────────────────────
+          curl -fsSL -o /tmp/cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x /tmp/cloudflared
+          nohup /tmp/cloudflared tunnel --no-autoupdate --url http://localhost:8000 \
+            > /tmp/cf.log 2>&1 &
+
+          URL=""
+          for i in $(seq 1 40); do
+            URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cf.log | head -n1)
+            [ -n "$URL" ] && break
+            sleep 2
+          done
+          if [ -z "$URL" ]; then echo "tunnel URL not found"; cat /tmp/cf.log; exit 1; fi
+          HOST=${URL#https://}
+
+          # ── Publish connection details ────────────────────────────────────
+          echo "TUNNEL_URL=$URL"
+          echo "WS_URL=wss://$HOST/ws/live"
+          {
+            echo "## 🔌 FarryOn live test backend is UP"
+            echo ""
+            echo "Provider: **$AI_PROVIDER**  •  window: **$DURATION_MINUTES min**"
+            echo ""
+            echo "### Set these in the app's ⚙️ settings:"
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Host | \`$HOST\` |"
+            echo "| Port | \`443\` |"
+            echo "| Secure (wss) | \`ON\` |"
+            echo ""
+            echo "Full URL: \`wss://$HOST/ws/live\`"
+            echo ""
+            echo "_Ephemeral — dies when this job ends. Re-run for a fresh URL._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # ── Keep the backend + tunnel alive for the test window ───────────
+          echo "Keeping backend alive for $DURATION_MINUTES minutes…"
+          sleep $(( DURATION_MINUTES * 60 ))
