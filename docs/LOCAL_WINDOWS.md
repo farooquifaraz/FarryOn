@@ -1,140 +1,140 @@
-# Running FarryOn locally on Windows (`D:\FarryOn`)
+# Complete local setup on Windows (`D:\FarryOn`)
 
-This is the fastest dev loop: your PC has open internet, so the backend talks to
-Gemini/OpenAI directly — **no CI, no Cloudflare tunnel**. Your phone can connect
-to the backend over your home WiFi (LAN), reusing the APK you already installed.
+Run the **whole project** — the FastAPI **backend** *and* the Flutter **app** —
+on your own PC. Your machine has open internet, so the backend talks to
+Gemini/OpenAI directly: no CI, no tunnel.
 
-> Both providers are already verified working in CI:
-> - **Gemini** → `gemini-2.5-flash-native-audio-latest`
-> - **OpenAI** → `gpt-realtime` (the adapter auto-falls back to it; your account
->   doesn't have `gpt-4o-realtime-preview`)
+The project has two halves:
+- **backend/** — the realtime "brain" (WebSocket `/ws/live`, AI providers, tools)
+- **mobile/** — the Flutter app (the "face"); ships Dart code only, the native
+  Android project is generated locally with `flutter create`.
+
+> Both providers are already verified working:
+> Gemini → `gemini-2.5-flash-native-audio-latest`, OpenAI → `gpt-realtime`.
 
 ---
 
-## 0. Prerequisites
-- **Git** and **Python 3.11** (`python --version` → 3.11.x)
-- Optional: **Docker Desktop** (alternative one-command path)
-- Optional: **Flutter SDK** (only if you want to run the app from the PC)
+## Part A — Install the tools (one time)
 
-## 1. Get the code into `D:\FarryOn`
+| Tool | Why | Get it |
+| --- | --- | --- |
+| **Git** | fetch the code | <https://git-scm.com/download/win> |
+| **Python 3.11** | run the backend | <https://www.python.org/downloads/> — tick **Add to PATH** |
+| **Flutter SDK** | build/run the app | <https://docs.flutter.dev/get-started/install/windows> |
+| **Android Studio** | Android SDK + emulator + JDK | <https://developer.android.com/studio> |
 
-**If `D:\FarryOn` is already a clone of this repo:**
+After installing Flutter + Android Studio, open a **new** terminal and run:
 ```powershell
-cd D:\FarryOn
-git fetch origin claude/gallant-franklin-j6qzbx
-git checkout claude/gallant-franklin-j6qzbx
-git pull origin claude/gallant-franklin-j6qzbx
+flutter doctor                  # shows what's still missing
+flutter doctor --android-licenses   # type 'y' to accept all
 ```
+Get `flutter doctor` to a state where **Flutter** and **Android toolchain** show
+green check-marks. (You can ignore the Visual Studio / Chrome lines — those are
+for Windows/web targets we don't need.)
 
-**Fresh clone:**
+> **Don't want to install Flutter/Android Studio?** You can skip Part D2 and use
+> the **prebuilt APK** instead (Part D1) — only the backend needs setting up then.
+
+---
+
+## Part B — Get the code into `D:\FarryOn`
 ```powershell
 git clone https://github.com/farooquifaraz/FarryOn.git D:\FarryOn
 cd D:\FarryOn
 git checkout claude/gallant-franklin-j6qzbx
 ```
+`dir` should now show `backend\`, `mobile\`, `docs\`, `README.md`, …
 
 ---
 
-## 2. Run the backend — Path A: Python (recommended for fast iteration)
+## Part C — Backend
 
 ```powershell
 cd D:\FarryOn\backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-
 copy .env.example .env
 notepad .env
 ```
-
-In `.env` set the provider + key (pick one). **Models are already the working
-defaults — you only need the key:**
+In `.env`, set the provider and key (models are already correct defaults):
 ```ini
-# Gemini:
 AI_PROVIDER=gemini
-GEMINI_API_KEY=your-rotated-gemini-key
-
-# …or OpenAI (comment out the Gemini lines, uncomment these):
+GEMINI_API_KEY=your-gemini-key
+# or:
 # AI_PROVIDER=openai
-# OPENAI_API_KEY=your-rotated-openai-key
+# OPENAI_API_KEY=your-openai-key
 ```
-
-Start it (binds on all interfaces so your phone can reach it over WiFi):
+Run it (listens on all interfaces so the phone can reach it):
 ```powershell
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
-Check in a browser: <http://localhost:8000/healthz> → `{"status":"ok",...}`
+Verify: open <http://localhost:8000/healthz> → `{"status":"ok",...}`.
 
-## 2. Run the backend — Path B: Docker Desktop (one command)
-
-```powershell
-cd D:\FarryOn
-notepad .env        # create it at the repo root for docker compose
-```
-Put your key(s) in that root `.env`:
-```ini
-AI_PROVIDER=gemini
-GEMINI_API_KEY=your-rotated-gemini-key
-```
-Then:
-```powershell
-docker compose up -d --build backend
-docker compose logs -f backend
-```
-(`docker compose up -d` brings the full stack — Postgres + Prometheus + Grafana — if you want it.)
-
----
-
-## 3. Test it — Option 1: smoke test (no phone, instant)
-
-With the backend running, open a **second** terminal:
+**Quick provider test (no app, instant)** — in a *second* terminal:
 ```powershell
 cd D:\FarryOn\backend
-.\.venv\Scripts\Activate.ps1          # Path A only
-python scripts\e2e_smoke.py
+.\.venv\Scripts\Activate.ps1
+python scripts\e2e_smoke.py        # expect: PASS
 ```
-Expect: `READY[...] → RESULT ... audio_frames>0 → PASS`. This drives a full
-realtime turn (hello → text → audio + transcript) against your key — the exact
-check I run in CI.
 
-## 3. Test it — Option 2: your phone over WiFi (reuse the installed APK)
-
-No rebuild needed — just point the app at your PC.
-1. Find your PC's LAN IP:
-   ```powershell
-   ipconfig    # look for IPv4 Address, e.g. 192.168.1.50
-   ```
-2. Make sure phone + PC are on the **same WiFi**. If Windows Firewall prompts on
-   first run, **Allow** access on **Private** networks (so port 8000 is reachable).
-3. In **FarryOn** → ⚙️ settings:
-   - **Host:** `192.168.1.50`   *(your PC's IPv4)*
-   - **Port:** `8000`
-   - **Secure (wss):** **OFF**   *(LAN is plain `ws://`, no TLS)*
-4. Grant camera + mic → connect → speak. Backend logs stream live in your
-   terminal, so any error is right there instantly.
-
-## 3. Test it — Option 3: run the app from the PC (optional, needs Flutter)
-```powershell
-cd D:\FarryOn\mobile
-flutter pub get
-flutter run        # on an emulator or USB-connected device
-```
-On the Android emulator, reach the host backend at `10.0.2.2:8000` (Secure OFF).
+> Keep this backend terminal **running** while you use the app. Every request +
+> any provider error prints here live.
 
 ---
 
-## Handy `make` targets (if you have `make`)
+## Part D — The app
+
+### D1 — Easiest: prebuilt APK over WiFi (no Flutter install)
+1. Download the APK artifact from GitHub → **Actions → Build Android APK →**
+   latest run → **Artifacts → farryon-release-apk** → install on the phone.
+2. Phone + PC on the **same WiFi**.
+3. Find your PC IP: `ipconfig` → IPv4 (e.g. `192.168.1.50`). Allow port 8000
+   through the Windows Firewall prompt (**Private** network).
+4. App → ⚙️ → **Host** = `192.168.1.50`, **Port** = `8000`, **Secure (wss)** =
+   **OFF** → connect.
+
+### D2 — Full: build & run the app from source
+```powershell
+cd D:\FarryOn\mobile
+flutter create --platforms=android .     # generates the android\ project
+flutter pub get
 ```
-make backend   # uvicorn with autoreload (uses AI_PROVIDER, default mock)
-make test      # offline pytest suite (mock provider)
-make up        # docker stack up
+Then add the runtime permissions — open
+`mobile\android\app\src\main\AndroidManifest.xml` and paste these three lines
+just inside the `<manifest ...>` tag (above `<application>`):
+```xml
+<uses-permission android:name="android.permission.INTERNET"/>
+<uses-permission android:name="android.permission.CAMERA"/>
+<uses-permission android:name="android.permission.RECORD_AUDIO"/>
 ```
+Pick a device and run:
+```powershell
+flutter devices        # list emulators / connected phones
+flutter run            # builds & launches; press 'r' to hot-reload
+```
+- **Android emulator** (start one from Android Studio → Device Manager): the host
+  PC is `10.0.2.2`. App ⚙️ → Host `10.0.2.2`, Port `8000`, Secure **OFF**.
+- **Physical phone over USB** (enable Developer options → USB debugging): run
+  `adb reverse tcp:8000 tcp:8000`, then App ⚙️ → Host `127.0.0.1`, Port `8000`,
+  Secure **OFF**.
+- **Physical phone over WiFi**: App ⚙️ → Host = PC IPv4, Port `8000`, Secure **OFF**.
+
+---
+
+## Part E — Use it
+Backend terminal running + app connected → grant camera/mic → tap-to-talk or
+type. You'll see transcripts, hear replies, and watch tool calls
+(e.g. `create_note`) — all served by your local backend.
+
+---
 
 ## Troubleshooting
 | Symptom | Fix |
 | --- | --- |
-| Phone can't connect over LAN | Same WiFi? Firewall allowed for port 8000 (Private)? Use the PC IPv4, Secure **OFF**, port **8000**. |
-| `uvicorn` not found | Activate the venv: `.\.venv\Scripts\Activate.ps1` |
-| Backend won't start | Re-check `.env` — set `AI_PROVIDER` and the matching key. |
-| Connects, no voice reply | Check the backend terminal logs — provider errors print there (e.g. wrong key). |
-| Want to confirm the key alone | Run `python scripts\e2e_smoke.py` (Option 1). |
+| `python`/`git`/`flutter` not recognized | Tool not on PATH — reopen the terminal after install; for Python re-run installer with **Add to PATH**. |
+| `.\.venv\Scripts\Activate.ps1` blocked | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` then retry; or call `.\.venv\Scripts\python.exe -m uvicorn ...` directly. |
+| `flutter doctor` Android licenses | `flutter doctor --android-licenses` → accept all. |
+| App can't reach backend | Same WiFi? Firewall allowed (Private, port 8000)? Correct host (10.0.2.2 emulator / 127.0.0.1 with `adb reverse` / PC-IP on WiFi), Secure **OFF**, port **8000**. |
+| Connects but no reply | Look at the backend terminal — provider/key errors print there. |
+| Verify the key alone | `python scripts\e2e_smoke.py`. |
