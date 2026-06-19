@@ -15,9 +15,15 @@ Uri buildLiveUri({
   required bool secure,
   String? token,
 }) {
+  // Be forgiving about the host field: accept a pasted full URL (strip any
+  // scheme like `https://` or `wss://`), a trailing path such as `/ws/live`,
+  // and stray slashes/whitespace, reducing it to the bare hostname.
+  var h = host.trim();
+  h = h.replaceFirst(RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://'), '');
+  h = h.split('/').first;
   return Uri(
     scheme: secure ? 'wss' : 'ws',
-    host: host,
+    host: h,
     port: port,
     path: '/ws/live',
     queryParameters:
