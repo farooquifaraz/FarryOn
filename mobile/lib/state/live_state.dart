@@ -1,0 +1,132 @@
+import '../data/live_client.dart';
+import '../protocol/protocol.dart';
+
+/// One line of conversation transcript shown in the UI.
+class TranscriptEntry {
+  const TranscriptEntry({
+    required this.role,
+    required this.text,
+    required this.isFinal,
+  });
+
+  /// `"user"` or `"assistant"`.
+  final String role;
+  final String text;
+  final bool isFinal;
+
+  bool get isUser => role == 'user';
+
+  TranscriptEntry copyWith({String? text, bool? isFinal}) => TranscriptEntry(
+        role: role,
+        text: text ?? this.text,
+        isFinal: isFinal ?? this.isFinal,
+      );
+}
+
+/// A tool invocation and (eventually) its result, for the activity view.
+class ToolActivity {
+  const ToolActivity({
+    required this.id,
+    required this.name,
+    required this.args,
+    this.ok,
+    this.result,
+    this.error,
+    this.needsPermission = false,
+  });
+
+  final String id;
+  final String name;
+  final Map<String, dynamic> args;
+
+  /// Null while pending; true/false once a `tool_result` arrives.
+  final bool? ok;
+  final Map<String, dynamic>? result;
+  final String? error;
+  final bool needsPermission;
+
+  bool get isPending => ok == null;
+
+  ToolActivity copyWith({
+    bool? ok,
+    Map<String, dynamic>? result,
+    String? error,
+  }) =>
+      ToolActivity(
+        id: id,
+        name: name,
+        args: args,
+        ok: ok ?? this.ok,
+        result: result ?? this.result,
+        error: error ?? this.error,
+        needsPermission: needsPermission,
+      );
+}
+
+/// Immutable snapshot of everything the live UI renders.
+class LiveSessionState {
+  const LiveSessionState({
+    this.connection = ConnectionStatus.disconnected,
+    this.liveState = LiveState.idle,
+    this.micOpen = false,
+    this.cameraOn = false,
+    this.transcripts = const [],
+    this.tools = const [],
+    this.deviceKind = 'phone',
+    this.lastError,
+    this.permissionsGranted = false,
+  });
+
+  /// Socket-level status.
+  final ConnectionStatus connection;
+
+  /// Conversational state reported by the server (`state` events).
+  final LiveState liveState;
+
+  /// Whether the mic is currently streaming.
+  final bool micOpen;
+
+  /// Whether the camera is currently streaming frames.
+  final bool cameraOn;
+
+  /// Ordered transcript lines (oldest first).
+  final List<TranscriptEntry> transcripts;
+
+  /// Tool activity, most-recent last.
+  final List<ToolActivity> tools;
+
+  /// Active capture device kind (for the UI badge).
+  final String deviceKind;
+
+  /// Last non-fatal error message for a transient banner, if any.
+  final String? lastError;
+
+  /// Whether mic+camera OS permissions have been granted.
+  final bool permissionsGranted;
+
+  bool get isConnected => connection == ConnectionStatus.connected;
+
+  LiveSessionState copyWith({
+    ConnectionStatus? connection,
+    LiveState? liveState,
+    bool? micOpen,
+    bool? cameraOn,
+    List<TranscriptEntry>? transcripts,
+    List<ToolActivity>? tools,
+    String? deviceKind,
+    String? lastError,
+    bool clearError = false,
+    bool? permissionsGranted,
+  }) =>
+      LiveSessionState(
+        connection: connection ?? this.connection,
+        liveState: liveState ?? this.liveState,
+        micOpen: micOpen ?? this.micOpen,
+        cameraOn: cameraOn ?? this.cameraOn,
+        transcripts: transcripts ?? this.transcripts,
+        tools: tools ?? this.tools,
+        deviceKind: deviceKind ?? this.deviceKind,
+        lastError: clearError ? null : (lastError ?? this.lastError),
+        permissionsGranted: permissionsGranted ?? this.permissionsGranted,
+      );
+}

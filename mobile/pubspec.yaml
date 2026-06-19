@@ -1,0 +1,39 @@
+name: farryon
+description: FarryOn — real-time multimodal AI assistant (voice + vision + agentic actions).
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  # Flutter 3.22+/Dart 3.4+ for the Material 3 surfaceContainer* roles and
+  # Color.withValues used in the UI.
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management.
+  flutter_riverpod: ^2.5.1
+
+  # Realtime transport.
+  web_socket_channel: ^2.4.5
+  stream_channel: ^2.1.2
+
+  # Capture: camera frames + streaming PCM audio (capture & playback).
+  # flutter_sound >= 9.21.1 is required for feedUint8FromStream() and the
+  # interleaved / bufferSize params used by PcmPlayer (startPlayerFromStream).
+  camera: ^0.10.6
+  flutter_sound: ^9.21.1
+  image: ^4.1.7
+
+  # Permissions for mic + camera.
+  permission_handler: ^11.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
