@@ -7,9 +7,10 @@ name: Live test backend (tunnel)
 # once as Actions secrets.
 #
 #   Settings → Secrets and variables → Actions → New repository secret
-#     OPENAI_API_KEY = <your key>      (for provider "openai")
-#     GEMINI_API_KEY = <your key>      (for provider "gemini")
+#     OPENAI_API_KEY = <your key>      (runs provider "openai")
+#     GEMINI_API_KEY = <your key>      (runs provider "gemini")
 #
+# Provider is auto-detected from whichever key exists (OpenAI preferred if both).
 # The public host + app settings are written to the run's Summary panel.
 #
 # NOTE: ephemeral — the tunnel/backend live only for `duration_minutes` (then the
@@ -20,10 +21,10 @@ on:
   workflow_dispatch:
     inputs:
       provider:
-        description: "AI provider to run"
+        description: "AI provider (auto = pick by key present)"
         type: choice
-        options: [openai, gemini]
-        default: openai
+        options: [auto, openai, gemini]
+        default: auto
       duration_minutes:
         description: "Minutes to keep the tunnel up (max ~350)"
         default: "60"
@@ -44,7 +45,7 @@ jobs:
       run:
         working-directory: backend
     env:
-      AI_PROVIDER: ${{ github.event.inputs.provider || 'openai' }}
+      AI_PROVIDER: ${{ github.event.inputs.provider || 'auto' }}
       DURATION_MINUTES: ${{ github.event.inputs.duration_minutes || '60' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_REALTIME_MODEL: gpt-4o-realtime-preview
@@ -67,26 +68,35 @@ jobs:
 
       - name: Run backend + Cloudflare tunnel
         run: |
-          set -uo pipefail
+          set -euo pipefail
 
-          # ── Guard: is the active provider's key present? ──────────────────
-          NEEDKEY=0
-          if [ "$AI_PROVIDER" = "openai" ] && [ -z "${OPENAI_API_KEY:-}" ]; then NEEDKEY=1; fi
-          if [ "$AI_PROVIDER" = "gemini" ] && [ -z "${GEMINI_API_KEY:-}" ]; then NEEDKEY=1; fi
-          if [ "$NEEDKEY" = "1" ]; then
+          # ── Resolve provider: explicit input wins; else auto-pick by key ──
+          PROVIDER="$AI_PROVIDER"
+          if [ "$PROVIDER" = "auto" ]; then
+            if   [ -n "${OPENAI_API_KEY:-}" ]; then PROVIDER=openai
+            elif [ -n "${GEMINI_API_KEY:-}" ]; then PROVIDER=gemini
+            fi
+          fi
+
+          KEY_OK=1
+          if [ "$PROVIDER" = "openai" ] && [ -z "${OPENAI_API_KEY:-}" ]; then KEY_OK=0; fi
+          if [ "$PROVIDER" = "gemini" ] && [ -z "${GEMINI_API_KEY:-}" ]; then KEY_OK=0; fi
+          if [ "$PROVIDER" != "openai" ] && [ "$PROVIDER" != "gemini" ]; then KEY_OK=0; fi
+          if [ "$KEY_OK" != "1" ]; then
             {
-              echo "## ⚠️ API key secret missing"
+              echo "## ⚠️ No usable API key secret found"
               echo ""
-              echo "Provider \`$AI_PROVIDER\` has no key. Add it once:"
-              echo "**Settings → Secrets and variables → Actions → New repository secret**"
-              echo "- \`OPENAI_API_KEY\` (for provider openai)"
-              echo "- \`GEMINI_API_KEY\` (for provider gemini)"
+              echo "Add ONE of these (Settings → Secrets and variables → Actions → New repository secret):"
+              echo "- \`OPENAI_API_KEY\`  → runs provider openai"
+              echo "- \`GEMINI_API_KEY\`  → runs provider gemini"
               echo ""
-              echo "Then re-run this workflow."
+              echo "Then push a change to this file (or re-run)."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::Secret for provider '$AI_PROVIDER' is not set. Add it and re-run."
+            echo "::error::No usable API key secret (need OPENAI_API_KEY or GEMINI_API_KEY)."
             exit 1
           fi
+          export AI_PROVIDER="$PROVIDER"
+          echo "Using provider: $PROVIDER"
 
           # ── Start the backend ─────────────────────────────────────────────
           nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 \
@@ -97,23 +107,27 @@ jobs:
             fi
             sleep 2
           done
-          curl -sf http://localhost:8000/healthz || { echo "backend never came up"; cat /tmp/backend.log; exit 1; }
+          if ! curl -sf http://localhost:8000/healthz >/dev/null; then
+            echo "backend never came up"; cat /tmp/backend.log; exit 1
+          fi
 
           # ── Start a Cloudflare quick tunnel ───────────────────────────────
-          curl -fsSL -o /tmp/cloudflared \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          if ! curl -fsSL -o /tmp/cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64; then
+            echo "cloudflared download failed"; exit 1
+          fi
           chmod +x /tmp/cloudflared
           nohup /tmp/cloudflared tunnel --no-autoupdate --url http://localhost:8000 \
             > /tmp/cf.log 2>&1 &
 
           URL=""
           for i in $(seq 1 40); do
-            URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cf.log | head -n1)
-            [ -n "$URL" ] && break
+            URL="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cf.log | head -n1 || true)"
+            if [ -n "$URL" ]; then break; fi
             sleep 2
           done
           if [ -z "$URL" ]; then echo "tunnel URL not found"; cat /tmp/cf.log; exit 1; fi
-          HOST=${URL#https://}
+          HOST="${URL#https://}"
 
           # ── Publish connection details ────────────────────────────────────
           echo "TUNNEL_URL=$URL"
@@ -121,7 +135,7 @@ jobs:
           {
             echo "## 🔌 FarryOn live test backend is UP"
             echo ""
-            echo "Provider: **$AI_PROVIDER**  •  window: **$DURATION_MINUTES min**"
+            echo "Provider: **$PROVIDER**  •  window: **$DURATION_MINUTES min**"
             echo ""
             echo "### Set these in the app's ⚙️ settings:"
             echo "| Field | Value |"
