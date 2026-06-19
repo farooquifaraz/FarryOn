@@ -1,0 +1,72 @@
+name: E2E realtime smoke
+
+# Self-contained end-to-end check (no phone, no tunnel): starts the backend on
+# the runner and drives a real WebSocket turn against each provider whose key is
+# present. The job completes quickly, so its full logs are readable for a clear
+# PASS/FAIL verdict per provider.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["claude/gallant-franklin-j6qzbx"]
+    paths:
+      - ".github/workflows/e2e-realtime.yml"
+      - "backend/scripts/e2e_smoke.py"
+      - "backend/app/ai/**"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Gemini E2E
+        env:
+          AI_PROVIDER: gemini
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.0-flash-live-001
+        run: |
+          set -uo pipefail
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "SKIP[gemini] no GEMINI_API_KEY secret"; exit 0
+          fi
+          nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 \
+            > /tmp/be_gemini.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/healthz >/dev/null && break || sleep 1
+          done
+          RC=0
+          python scripts/e2e_smoke.py || RC=$?
+          echo "──────── gemini backend log (tail) ────────"
+          tail -n 60 /tmp/be_gemini.log || true
+          exit $RC
+
+      - name: OpenAI E2E
+        if: ${{ always() }}
+        env:
+          AI_PROVIDER: openai
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_REALTIME_MODEL: gpt-4o-realtime-preview
+        run: |
+          set -uo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "SKIP[openai] no OPENAI_API_KEY secret"; exit 0
+          fi
+          nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 \
+            > /tmp/be_openai.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/healthz >/dev/null && break || sleep 1
+          done
+          RC=0
+          python scripts/e2e_smoke.py || RC=$?
+          echo "──────── openai backend log (tail) ────────"
+          tail -n 60 /tmp/be_openai.log || true
+          exit $RC
