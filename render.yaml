@@ -1,0 +1,46 @@
+# Render Blueprint — one-click cloud deploy of the FarryOn backend.
+#
+# How to use (nothing to install locally):
+#   1. Push this repo to GitHub (already done).
+#   2. On https://render.com → New → Blueprint → connect the repo and pick the
+#      branch. Render reads this file.
+#   3. In the service's Environment tab, set the SECRET values that are marked
+#      `sync: false` below (OPENAI_API_KEY / GEMINI_API_KEY) to your *rotated*
+#      keys. NEVER commit keys to git.
+#   4. Deploy. You get a public URL like
+#      https://farryon-backend-xxxx.onrender.com  →  the app connects to
+#      wss://farryon-backend-xxxx.onrender.com:443/ws/live
+#
+# Notes:
+#   * Free instances sleep after ~15 min idle; the first connection cold-starts
+#     (~30–60s). Fine for testing; use a paid plan / Postgres for anything real.
+#   * SQLite here is ephemeral (resets on redeploy). Add a Render Postgres and
+#     set DATABASE_URL=postgresql+asyncpg://... for persistence.
+#   * Realtime needs a realtime/live-capable model (see values below) — standard
+#     models like gpt-4.1 / gemini-1.5-flash do NOT work with the streaming APIs.
+services:
+  - type: web
+    name: farryon-backend
+    runtime: docker
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    plan: free
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: AI_PROVIDER
+        value: openai                       # or "gemini"
+      - key: OPENAI_API_KEY
+        sync: false                         # set in the Render dashboard (secret)
+      - key: OPENAI_REALTIME_MODEL
+        value: gpt-4o-realtime-preview      # a REALTIME model (not gpt-4.1)
+      - key: GEMINI_API_KEY
+        sync: false                         # set in the Render dashboard (secret)
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash-live-001    # a LIVE model (not gemini-1.5-flash)
+      - key: WEB_SEARCH_PROVIDER
+        value: mock
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      - key: LOG_LEVEL
+        value: INFO
