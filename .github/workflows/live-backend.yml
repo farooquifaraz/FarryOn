@@ -151,6 +151,6 @@ jobs:
             echo "_Ephemeral — dies when this job ends. Re-run for a fresh URL._"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # ── Keep the backend + tunnel alive for the test window ───────────
-          echo "Keeping backend alive for $DURATION_MINUTES minutes…"
-          sleep $(( DURATION_MINUTES * 60 ))
+          # ── Keep alive + stream backend logs live (so failures are visible) ─
+          echo "──────── backend log starts here — connect your phone now ────────"
+          timeout "$(( DURATION_MINUTES * 60 ))" tail -n +1 -f /tmp/backend.log || true

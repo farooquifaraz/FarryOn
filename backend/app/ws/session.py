@@ -92,7 +92,21 @@ class Session:
                 reason = "handshake_failed"
                 return
 
-            await self._gateway.connect()
+            try:
+                await self._gateway.connect()
+            except Exception as exc:  # noqa: BLE001 - surface provider failures
+                logger.error(
+                    "gateway.connect_failed",
+                    session_id=self.session_id,
+                    provider=self._gateway.provider,
+                    model=self._gateway.model_label,
+                    error=repr(exc),
+                )
+                await self._send_error(
+                    "provider_unavailable", repr(exc), fatal=True
+                )
+                reason = "connect_failed"
+                return
             await self._persist_session_start()
             await self._send_json(
                 {
