@@ -6,6 +6,12 @@ name: Build Android APK
 # Download the APK from the run's "Artifacts" section and sideload it on a phone
 # (enable "Install unknown apps"). Point it at your deployed backend in the app's
 # in-app settings sheet (⚙️): host = <name>.onrender.com, port = 443, secure = ON.
+#
+# Note: the app ships its Dart code (lib/), pubspec, and tests, but not the
+# generated Android Gradle project. We materialise a version-correct Android
+# project (v2 embedding) at build time with `flutter create`, then patch in the
+# camera/mic/internet permissions. This keeps the repo free of generated gradle
+# while guaranteeing the scaffold matches the pinned Flutter version.
 
 on:
   workflow_dispatch:
@@ -32,10 +38,38 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.44.2
           cache: true
 
       - name: Flutter version
         run: flutter --version
+
+      - name: Materialise Android project (v2 embedding)
+        run: |
+          flutter create \
+            --org com.farryon --project-name farryon \
+            --platforms=android /tmp/farryon_scaffold
+          rm -rf android
+          cp -r /tmp/farryon_scaffold/android ./android
+
+      - name: Apply runtime permissions to AndroidManifest
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          p = pathlib.Path("android/app/src/main/AndroidManifest.xml")
+          xml = p.read_text()
+          perms = (
+              '    <uses-permission android:name="android.permission.INTERNET"/>\n'
+              '    <uses-permission android:name="android.permission.CAMERA"/>\n'
+              '    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n'
+          )
+          if "android.permission.CAMERA" not in xml:
+              xml = re.sub(r"(<manifest[^>]*>\s*\n)", r"\1" + perms, xml, count=1)
+              p.write_text(xml)
+              print("Permissions injected:\n" + perms)
+          else:
+              print("Permissions already present.")
+          PY
 
       - name: Resolve dependencies
         run: flutter pub get

@@ -1,5 +1,3 @@
-import 'protocol.dart';
-
 /// Typed models for every JSON control/event message on `/ws/live`.
 ///
 /// These mirror `PROTOCOL.md` §3 (client → server) and §4 (server → client).
@@ -12,6 +10,8 @@ import 'protocol.dart';
 ///   * `toJson()` producing the exact wire shape, and
 ///   * (for server messages) a `fromJson` factory.
 library;
+
+import 'protocol.dart';
 
 // ---------------------------------------------------------------------------
 // Client → Server

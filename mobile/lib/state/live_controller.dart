@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
@@ -38,11 +37,12 @@ class LiveController {
     required PermissionsService permissions,
     required WebSocketLiveClient Function(AppConfig, DeviceInfo Function())
         clientFactory,
-    this.platform = defaultPlatform,
+    String? platform,
   })  : _config = config,
         _registry = registry,
         _player = player,
-        _permissions = permissions {
+        _permissions = permissions,
+        platform = platform ?? defaultPlatform {
     _client = clientFactory(_config, _activeDeviceInfo);
     _bindClient();
   }
