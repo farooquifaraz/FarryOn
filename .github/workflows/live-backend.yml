@@ -46,7 +46,7 @@ jobs:
         working-directory: backend
     env:
       AI_PROVIDER: ${{ github.event.inputs.provider || 'auto' }}
-      DURATION_MINUTES: ${{ github.event.inputs.duration_minutes || '60' }}
+      DURATION_MINUTES: ${{ github.event.inputs.duration_minutes || '180' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_REALTIME_MODEL: gpt-4o-realtime-preview
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
