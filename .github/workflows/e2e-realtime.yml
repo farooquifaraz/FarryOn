@@ -48,15 +48,22 @@ jobs:
           if [ -z "${GEMINI_API_KEY:-}" ]; then
             echo "SKIP[gemini] no GEMINI_API_KEY secret"; exit 0
           fi
+          pkill -f "uvicorn app.main:app" 2>/dev/null || true
+          sleep 2
           nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 \
             > /tmp/be_gemini.log 2>&1 &
+          SRV=$!
           for i in $(seq 1 30); do
             curl -sf http://127.0.0.1:8000/healthz >/dev/null && break || sleep 1
           done
+          if ! kill -0 "$SRV" 2>/dev/null; then
+            echo "FAIL: gemini backend did not start"; cat /tmp/be_gemini.log; exit 1
+          fi
           RC=0
           python scripts/e2e_smoke.py || RC=$?
           echo "──────── gemini backend log (tail) ────────"
           tail -n 60 /tmp/be_gemini.log || true
+          kill "$SRV" 2>/dev/null || true
           exit $RC
 
       - name: OpenAI E2E
@@ -70,13 +77,20 @@ jobs:
           if [ -z "${OPENAI_API_KEY:-}" ]; then
             echo "SKIP[openai] no OPENAI_API_KEY secret"; exit 0
           fi
+          pkill -f "uvicorn app.main:app" 2>/dev/null || true
+          sleep 2
           nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 \
             > /tmp/be_openai.log 2>&1 &
+          SRV=$!
           for i in $(seq 1 30); do
             curl -sf http://127.0.0.1:8000/healthz >/dev/null && break || sleep 1
           done
+          if ! kill -0 "$SRV" 2>/dev/null; then
+            echo "FAIL: openai backend did not start"; cat /tmp/be_openai.log; exit 1
+          fi
           RC=0
           python scripts/e2e_smoke.py || RC=$?
           echo "──────── openai backend log (tail) ────────"
           tail -n 60 /tmp/be_openai.log || true
+          kill "$SRV" 2>/dev/null || true
           exit $RC
