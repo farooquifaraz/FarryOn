@@ -14,7 +14,7 @@ name: Live test backend (tunnel)
 #
 # NOTE: ephemeral — the tunnel/backend live only for `duration_minutes` (then the
 # job ends and the URL dies). Re-run the workflow to get a fresh window. The
-# trycloudflare URL changes every run.
+# trycloudflare URL changes every run. (Re-triggered once secrets were added.)
 
 on:
   workflow_dispatch:
