@@ -39,7 +39,7 @@ class Settings(BaseSettings):
 
     # Gemini Live
     gemini_api_key: str | None = Field(default=None)
-    gemini_model: str = Field(default="gemini-2.0-flash-live-001")
+    gemini_model: str = Field(default="gemini-2.5-flash-native-audio-latest")
 
     # OpenAI Realtime
     openai_api_key: str | None = Field(default=None)

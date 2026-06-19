@@ -50,7 +50,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_REALTIME_MODEL: gpt-4o-realtime-preview
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      GEMINI_MODEL: gemini-2.0-flash-live-001
+      GEMINI_MODEL: gemini-2.5-flash-native-audio-latest
       # ALLOWED_ORIGINS intentionally NOT set: the app defaults to ["*"] (allow
       # all). Passing it as an env var trips a pydantic-settings quirk — list
       # fields are JSON-decoded from the environment, and a bare "*" isn't JSON.

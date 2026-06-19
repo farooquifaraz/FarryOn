@@ -110,47 +110,74 @@ class GeminiGateway(AIGateway):
 
         from google.genai import types  # type: ignore[import-not-found]
 
-        # The native Live API (bidiGenerateContent) is picky about the
-        # API-version/model pairing on the Gemini Developer API: live models
-        # are served on the v1alpha channel, and the SDK's default v1beta
-        # returns "... not supported for bidiGenerateContent". Try the most
-        # likely (version, model) pairs in order so one deploy can connect.
-        candidates: list[tuple[str, str]] = [
-            ("v1alpha", self.model),
-            ("v1beta", self.model),
-            ("v1alpha", "gemini-2.0-flash-exp"),
-        ]
         last_exc: Exception | None = None
-        for api_version, model in candidates:
+        tried: set[tuple[str, str]] = set()
+
+        async def _open(api_version: str, model: str) -> bool:
+            """Try one (api_version, model) pair; return True on success."""
+            nonlocal last_exc
             try:
                 client = genai.Client(
                     api_key=self._api_key,
                     http_options=types.HttpOptions(api_version=api_version),
                 )
-                self._session_cm = client.aio.live.connect(
+                cm = client.aio.live.connect(
                     model=model, config=self._build_config()
                 )
-                self._session = await self._session_cm.__aenter__()
-                self.model = model
-                logger.info(
-                    "gemini.connected", model=model, api_version=api_version
-                )
-                break
-            except Exception as exc:  # noqa: BLE001 - fall through to next pair
+                session = await cm.__aenter__()
+            except Exception as exc:  # noqa: BLE001 - try the next candidate
                 last_exc = exc
-                self._session_cm = None
                 logger.warning(
                     "gemini.connect_attempt_failed",
                     model=model,
                     api_version=api_version,
                     error=repr(exc),
                 )
-        else:
-            raise RuntimeError(
-                f"all Gemini Live connect attempts failed: {last_exc!r}"
+                return False
+            self._session_cm = cm
+            self._session = session
+            self.model = model
+            logger.info(
+                "gemini.connected", model=model, api_version=api_version
             )
+            return True
 
-        self._recv_task = asyncio.create_task(self._receive_loop())
+        # 1) The configured model, on both Live channels (v1beta is the
+        #    Developer API default; v1alpha covers preview models).
+        for version in ("v1beta", "v1alpha"):
+            tried.add((version, self.model))
+            if await _open(version, self.model):
+                self._recv_task = asyncio.create_task(self._receive_loop())
+                return
+
+        # 2) Self-heal: the set of Live (bidiGenerateContent) models varies by
+        #    key/project, so discover what THIS key actually exposes and try
+        #    each, rather than hard-coding a name that may not exist.
+        discovered: list[str] = []
+        try:
+            lister = genai.Client(api_key=self._api_key)
+            for m in lister.models.list():
+                actions = getattr(m, "supported_actions", None) or []
+                if "bidiGenerateContent" in actions:
+                    discovered.append(getattr(m, "name", "").split("/")[-1])
+        except Exception as exc:  # noqa: BLE001 - discovery is best-effort
+            logger.warning("gemini.model_discovery_failed", error=repr(exc))
+
+        for model in discovered:
+            for version in ("v1beta", "v1alpha"):
+                if (version, model) in tried:
+                    continue
+                tried.add((version, model))
+                if await _open(version, model):
+                    self._recv_task = asyncio.create_task(
+                        self._receive_loop()
+                    )
+                    return
+
+        raise RuntimeError(
+            "no usable Gemini Live model for this key "
+            f"(discovered={discovered or 'none'}); last error: {last_exc!r}"
+        )
 
     async def _receive_loop(self) -> None:
         """Translate the provider stream into gateway events."""

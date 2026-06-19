@@ -37,7 +37,7 @@ services:
       - key: GEMINI_API_KEY
         sync: false                         # set in the Render dashboard (secret)
       - key: GEMINI_MODEL
-        value: gemini-2.0-flash-live-001    # a LIVE model (not gemini-1.5-flash)
+        value: gemini-2.5-flash-native-audio-latest  # a LIVE model (not gemini-1.5-flash)
       - key: WEB_SEARCH_PROVIDER
         value: mock
       - key: ALLOWED_ORIGINS
