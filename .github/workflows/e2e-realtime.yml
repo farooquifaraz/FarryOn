@@ -3,7 +3,7 @@ name: E2E realtime smoke
 # Self-contained end-to-end check (no phone, no tunnel): starts the backend on
 # the runner and drives a real WebSocket turn against each provider whose key is
 # present. The job completes quickly, so its full logs are readable for a clear
-# PASS/FAIL verdict per provider.
+# PASS/FAIL verdict per provider. (Re-run after both API keys were updated.)
 
 on:
   workflow_dispatch:
