@@ -51,7 +51,9 @@ jobs:
       OPENAI_REALTIME_MODEL: gpt-4o-realtime-preview
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: gemini-2.0-flash-live-001
-      ALLOWED_ORIGINS: "*"
+      # ALLOWED_ORIGINS intentionally NOT set: the app defaults to ["*"] (allow
+      # all). Passing it as an env var trips a pydantic-settings quirk — list
+      # fields are JSON-decoded from the environment, and a bare "*" isn't JSON.
       WEB_SEARCH_PROVIDER: mock
       LOG_LEVEL: INFO
       # JWT_SECRET left unset → backend keeps its dev default → auth disabled,
