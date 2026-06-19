@@ -98,20 +98,53 @@ class OpenAIRealtimeGateway(AIGateway):
             raise RuntimeError("OPENAI_API_KEY is not set.")
 
         client = AsyncOpenAI(api_key=self._api_key)
-        self._conn_cm = client.beta.realtime.connect(model=self.model)
-        self._conn = await self._conn_cm.__aenter__()
-        await self._conn.session.update(
-            session={
-                "modalities": ["audio", "text"],
-                "instructions": self.system_prompt,
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
-                "tools": self._tool_definitions(),
-                "tool_choice": "auto",
-            }
-        )
-        self._recv_task = asyncio.create_task(self._receive_loop())
-        logger.info("openai.connected", model=self.model)
+        # OpenAI disabled the old beta Realtime "shape" (close 4000
+        # invalid_request_error.beta_api_shape_disabled). Use the GA Realtime
+        # API: prefer the GA namespace (client.realtime), fall back to beta on
+        # older SDKs, and send a GA-shaped session object.
+        realtime_ns = getattr(client, "realtime", None) or client.beta.realtime
+
+        ga_session = {
+            "type": "realtime",
+            "instructions": self.system_prompt,
+            "output_modalities": ["audio"],
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 16000},
+                    "turn_detection": {"type": "server_vad"},
+                },
+                "output": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "voice": "alloy",
+                },
+            },
+            "tools": self._tool_definitions(),
+            "tool_choice": "auto",
+        }
+
+        last_exc: Exception | None = None
+        # Configured model first, then the GA default; de-duplicated.
+        for model in dict.fromkeys([self.model, "gpt-realtime"]):
+            try:
+                cm = realtime_ns.connect(model=model)
+                conn = await cm.__aenter__()
+                await conn.session.update(session=ga_session)
+            except Exception as exc:  # noqa: BLE001 - try the next model
+                last_exc = exc
+                logger.warning(
+                    "openai.connect_attempt_failed",
+                    model=model,
+                    error=repr(exc),
+                )
+                continue
+            self._conn_cm = cm
+            self._conn = conn
+            self.model = model
+            self._recv_task = asyncio.create_task(self._receive_loop())
+            logger.info("openai.connected", model=model)
+            return
+
+        raise RuntimeError(f"OpenAI Realtime connect failed: {last_exc!r}")
 
     async def _receive_loop(self) -> None:
         """Translate the Realtime event stream into gateway events."""
@@ -132,7 +165,7 @@ class OpenAIRealtimeGateway(AIGateway):
         """Decode a single Realtime server event by its ``type``."""
         etype = getattr(event, "type", "")
 
-        if etype == "response.audio.delta":
+        if etype in ("response.output_audio.delta", "response.audio.delta"):
             if not self._audio_open:
                 self._audio_open = True
                 await self._queue.put(AudioStartEvent())
@@ -140,13 +173,15 @@ class OpenAIRealtimeGateway(AIGateway):
             if pcm:
                 await self._queue.put(AudioChunkEvent(pcm=pcm))
 
-        elif etype == "response.audio.done":
+        elif etype in ("response.output_audio.done", "response.audio.done"):
             if self._audio_open:
                 self._audio_open = False
                 await self._queue.put(AudioEndEvent())
 
         elif etype in (
+            "response.output_audio_transcript.delta",
             "response.audio_transcript.delta",
+            "response.output_text.delta",
             "response.text.delta",
         ):
             delta = getattr(event, "delta", "") or ""
