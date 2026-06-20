@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FarryOn — Logo Concepts</title>
+<style>
+  :root { --ink:#0b1020; --muted:#5b6172; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+         background:#eef0f5; color:var(--ink); -webkit-font-smoothing:antialiased; }
+  header { padding:40px 28px 8px; }
+  header h1 { margin:0; font-size:30px; letter-spacing:-.5px; }
+  header p { margin:6px 0 0; color:var(--muted); }
+  .wrap { max-width:1040px; margin:0 auto; padding:20px 28px 60px; }
+  .concept { background:#fff; border-radius:20px; padding:24px; margin:22px 0;
+             box-shadow:0 8px 30px rgba(20,20,50,.08); }
+  .concept h2 { margin:0 0 2px; font-size:20px; }
+  .concept .desc { margin:0 0 18px; color:var(--muted); font-size:14px; }
+  .tiles { display:flex; flex-wrap:wrap; gap:18px; align-items:center; }
+  .tile { border-radius:18px; padding:22px; display:flex; gap:18px; align-items:center;
+          justify-content:center; }
+  .tile.light { background:#f4f5f9; }
+  .tile.dark  { background:#0b0b12; }
+  .tile img.big   { width:140px; height:140px; }
+  .tile img.icon  { width:52px; height:52px; }
+  .label { font-size:12px; color:var(--muted); margin-top:8px; text-align:center; }
+  .col { display:flex; flex-direction:column; align-items:center; }
+  .wordmark .tile img { height:84px; width:auto; }
+  .wordmark .tile.dark { color:#fff; }
+  .wordmark .tile.light { color:#0b1020; }
+  footer { text-align:center; color:var(--muted); font-size:13px; padding:10px 0 40px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>FarryOn — Logo Concepts</h1>
+    <p>Vector (SVG) marks for a real-time, sees-and-hears AI assistant. Shown large + at app-icon size, on light &amp; dark.</p>
+  </header>
+
+  <div class="wrap">
+
+    <section class="concept">
+      <h2>1 · Aura <span style="color:#7C3AED">(recommended)</span></h2>
+      <p class="desc">A listening ring (it hears + “sees”) wrapped around a voice waveform. Premium, modern, unmistakably an assistant.</p>
+      <div class="tiles">
+        <div class="col"><div class="tile light"><img class="big"  src="farryon-aura.svg" alt=""></div><div class="label">light</div></div>
+        <div class="col"><div class="tile dark"><img class="big"   src="farryon-aura.svg" alt=""></div><div class="label">dark</div></div>
+        <div class="col"><div class="tile dark"><img class="icon"  src="farryon-aura.svg" alt=""></div><div class="label">app-icon size</div></div>
+      </div>
+    </section>
+
+    <section class="concept">
+      <h2>2 · F-Pulse</h2>
+      <p class="desc">A bold “F” monogram with a voice-pulse dot. Crisp and recognisable even at tiny sizes — great as a pure app icon.</p>
+      <div class="tiles">
+        <div class="col"><div class="tile light"><img class="big" src="farryon-fpulse.svg" alt=""></div><div class="label">light</div></div>
+        <div class="col"><div class="tile dark"><img class="big"  src="farryon-fpulse.svg" alt=""></div><div class="label">dark</div></div>
+        <div class="col"><div class="tile dark"><img class="icon" src="farryon-fpulse.svg" alt=""></div><div class="label">app-icon size</div></div>
+      </div>
+    </section>
+
+    <section class="concept">
+      <h2>3 · Iris</h2>
+      <p class="desc">A speech bubble (conversation) holding an eye (vision) — friendly and distinctive; leans into the camera/multimodal angle.</p>
+      <div class="tiles">
+        <div class="col"><div class="tile light"><img class="big" src="farryon-iris.svg" alt=""></div><div class="label">light</div></div>
+        <div class="col"><div class="tile dark"><img class="big"  src="farryon-iris.svg" alt=""></div><div class="label">dark</div></div>
+        <div class="col"><div class="tile dark"><img class="icon" src="farryon-iris.svg" alt=""></div><div class="label">app-icon size</div></div>
+      </div>
+    </section>
+
+    <section class="concept wordmark">
+      <h2>Wordmark lockup (Aura)</h2>
+      <p class="desc">Mark + “FarryOn” for headers, splash screen, and the website.</p>
+      <div class="tiles">
+        <div class="col"><div class="tile light"><img src="farryon-wordmark.svg" alt="FarryOn"></div><div class="label">light</div></div>
+        <div class="col"><div class="tile dark"><img src="farryon-wordmark.svg" alt="FarryOn"></div><div class="label">dark</div></div>
+      </div>
+    </section>
+
+  </div>
+  <footer>Palette: violet #7C3AED → indigo #6366F1 → blue #3B82F6, accent cyan #22D3EE. All marks are scalable SVG.</footer>
+</body>
+</html>
