@@ -62,10 +62,18 @@ All JSON messages have a `type` field.
     "capabilities": ["audio_in", "video_in", "audio_out"]
   },
   "session": { "resumeId": "optional-previous-session-id" },
-  "provider": "gemini|openai|grok|mock"   // optional; AI backend for this
+  "provider": "gemini|openai|grok|mock",  // optional; AI backend for this
                                           // session. Omit to use the server
                                           // default. Switching providers in the
                                           // app reconnects with a new hello.
+  "clientTime": "2026-06-21T22:30:00+05:30", // optional; device local time w/
+                                          // offset, so the model resolves
+                                          // relative reminder times correctly.
+  "webSearch": {                          // optional; per-session search keys.
+    "provider": "tavily", "apiKey": "…",
+    "fallbackProvider": "serper", "fallbackApiKey": "…" },
+  "email": {                              // optional; enables read_emails.
+    "address": "you@gmail.com", "appPassword": "…" }  // never persisted
 }
 
 // Declares the media formats the client will send/expects.

@@ -28,6 +28,8 @@ class ConfigStore {
       webSearchApiKey: p.getString('cfg.ws.key'),
       webSearchFallbackProvider: p.getString('cfg.ws.fbProvider'),
       webSearchFallbackApiKey: p.getString('cfg.ws.fbKey'),
+      emailAddress: p.getString('cfg.email.addr'),
+      emailAppPassword: p.getString('cfg.email.pw'),
     );
   }
 
@@ -42,5 +44,7 @@ class ConfigStore {
     await p.setString('cfg.ws.key', c.webSearchApiKey ?? '');
     await p.setString('cfg.ws.fbProvider', c.webSearchFallbackProvider);
     await p.setString('cfg.ws.fbKey', c.webSearchFallbackApiKey ?? '');
+    await p.setString('cfg.email.addr', c.emailAddress ?? '');
+    await p.setString('cfg.email.pw', c.emailAppPassword ?? '');
   }
 }

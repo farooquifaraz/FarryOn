@@ -203,6 +203,8 @@ class WebSocketLiveClient {
   void _sendHandshake() {
     final device = _deviceInfoProvider();
     final wsKey = _config.webSearchApiKey;
+    final emailAddr = _config.emailAddress;
+    final emailPw = _config.emailAppPassword;
     send(HelloMessage(
       platform: platform,
       appVersion: _config.appVersion,
@@ -219,6 +221,14 @@ class WebSocketLiveClient {
               'fallbackProvider': _config.webSearchFallbackProvider,
               'fallbackApiKey': _config.webSearchFallbackApiKey ?? '',
             }
+          : null,
+      // Only send email config when both fields are set, so the backend's
+      // read_emails tool stays disabled until the user opts in.
+      email: (emailAddr != null &&
+              emailAddr.isNotEmpty &&
+              emailPw != null &&
+              emailPw.isNotEmpty)
+          ? {'address': emailAddr, 'appPassword': emailPw}
           : null,
     ));
     send(const ConfigMessage());

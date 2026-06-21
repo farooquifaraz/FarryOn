@@ -12,6 +12,7 @@ from typing import Any
 
 from app.db import repo
 from app.tools.base import Tool, ToolContext
+from app.tools.tasks import resolve_due_date
 
 _NOT_FOUND = "no matching item found"
 
@@ -64,7 +65,17 @@ class UpdateTaskTool(Tool):
             "new_title": {"type": "string"},
             "due_date": {
                 "type": "string",
-                "description": "New reminder time as ISO-8601 date/time.",
+                "description": (
+                    "New absolute reminder time as ISO-8601 date/time."
+                ),
+            },
+            "remind_in_seconds": {
+                "type": "integer",
+                "description": (
+                    "New RELATIVE reminder time in seconds from now "
+                    "(e.g. 'in 10 minutes' -> 600). Prefer this for relative "
+                    "times."
+                ),
             },
         },
         "required": ["task"],
@@ -80,7 +91,9 @@ class UpdateTaskTool(Tool):
             ctx.session,
             task_id=task.id,
             title=kwargs.get("new_title"),
-            due_date=kwargs.get("due_date"),
+            due_date=resolve_due_date(
+                kwargs.get("due_date"), kwargs.get("remind_in_seconds")
+            ),
         )
         assert updated is not None
         return {

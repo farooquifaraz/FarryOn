@@ -46,6 +46,27 @@ async def test_list_notes_and_tasks_recall_tools(db_session) -> None:
     assert tasks["tasks"][0]["done"] is False
 
 
+async def test_device_control_tools_acknowledge(db_session) -> None:
+    from app.tools.device import (
+        EndSessionTool,
+        MuteMicTool,
+        RotateCameraTool,
+        SetCameraTool,
+    )
+
+    ctx = ToolContext(session=db_session)
+    assert await MuteMicTool().run(ctx, muted=True) == {
+        "applied": True,
+        "muted": True,
+    }
+    assert await SetCameraTool().run(ctx, on=False) == {
+        "applied": True,
+        "on": False,
+    }
+    assert await RotateCameraTool().run(ctx) == {"applied": True}
+    assert await EndSessionTool().run(ctx) == {"applied": True}
+
+
 async def test_task_management_tools_by_name(db_session) -> None:
     from app.tools.task_manage import (
         CompleteTaskTool,
@@ -203,6 +224,23 @@ async def test_create_task_without_due_date(db_session) -> None:
     result = await CreateTaskTool().run(ctx, title="No due date")
     await db_session.commit()
     assert result["due_date"] is None
+
+
+async def test_create_task_relative_remind_in_seconds(db_session) -> None:
+    """remind_in_seconds resolves to an absolute, future, near-now due date."""
+    from datetime import datetime, timezone
+
+    ctx = ToolContext(session=db_session)
+    before = datetime.now(timezone.utc)
+    result = await CreateTaskTool().run(
+        ctx, title="Drink water", remind_in_seconds=120
+    )
+    await db_session.commit()
+
+    due = datetime.fromisoformat(result["due_date"])
+    delta = (due - before).total_seconds()
+    # ~120s from now (allow a little slack for execution time).
+    assert 118 <= delta <= 125
 
 
 async def test_send_message_persists_queued(db_session) -> None:

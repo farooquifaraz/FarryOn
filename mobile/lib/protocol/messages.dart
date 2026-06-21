@@ -39,6 +39,7 @@ class HelloMessage extends ClientMessage {
     this.resumeId,
     this.provider,
     this.webSearch,
+    this.email,
     this.clientTime,
   });
 
@@ -59,6 +60,10 @@ class HelloMessage extends ClientMessage {
   /// fallbackApiKey}`); omitted when null so the backend uses its env settings.
   final Map<String, dynamic>? webSearch;
 
+  /// Per-session email (IMAP) config (`{address, appPassword}`); omitted when
+  /// not configured so the backend's `read_emails` tool stays disabled.
+  final Map<String, dynamic>? email;
+
   /// The device's current local date-time as ISO-8601 with offset (e.g.
   /// `2026-06-21T22:30:00+05:30`). Lets the model resolve relative reminder
   /// times ("tomorrow at 5pm") in the user's timezone.
@@ -76,6 +81,7 @@ class HelloMessage extends ClientMessage {
         'session': {'resumeId': resumeId},
         if (provider != null) 'provider': provider,
         if (webSearch != null) 'webSearch': webSearch,
+        if (email != null) 'email': email,
         if (clientTime != null) 'clientTime': clientTime,
       };
 }

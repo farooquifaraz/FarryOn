@@ -269,6 +269,30 @@ void main() {
     expect(controller.state.transcripts.single.isFinal, isTrue);
   });
 
+  test('transcript list is capped so long sessions stay fast', () async {
+    await controller.connect();
+    await tick();
+
+    // Push many final lines, alternating roles so each becomes its own entry.
+    for (var i = 0; i < 200; i++) {
+      fake.pushJson({
+        'type': 'transcript',
+        'role': i.isEven ? 'user' : 'assistant',
+        'text': 'line $i',
+        'final': true,
+      });
+    }
+    await tick();
+
+    expect(controller.state.transcripts.length, lessThanOrEqualTo(80));
+    // The newest line is retained; the oldest are dropped.
+    expect(controller.state.transcripts.last.text, 'line 199');
+    expect(
+      controller.state.transcripts.any((t) => t.text == 'line 0'),
+      isFalse,
+    );
+  });
+
   test('sendText optimistically appends a user line and sends text', () async {
     await controller.connect();
     await tick();

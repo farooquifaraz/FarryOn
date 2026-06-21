@@ -26,12 +26,16 @@ class ToolContext:
         web_search: Optional per-session web-search config supplied by the
             client (``{provider, apiKey, fallbackProvider, fallbackApiKey}``).
             When present it overrides the server's env settings for this session.
+        email: Optional per-session email (IMAP) config supplied by the client
+            (``{address, appPassword, host?}``). Used by the ``read_emails``
+            tool to read the user's recent mail. Never persisted server-side.
     """
 
     session: AsyncSession
     session_id: str | None = None
     user_id: int | None = None
     web_search: dict[str, Any] | None = None
+    email: dict[str, Any] | None = None
 
 
 class Tool(abc.ABC):

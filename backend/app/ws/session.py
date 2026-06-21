@@ -135,6 +135,7 @@ class Session:
             await self._send_state("listening")
 
             web_search = (self._hello or {}).get("webSearch")
+            email = (self._hello or {}).get("email")
             self._orchestrator = Orchestrator(
                 engine=self._engine,
                 gateway=self._gateway,
@@ -143,6 +144,7 @@ class Session:
                 session_id=self.session_id,
                 user_id=self._user_id,
                 web_search=web_search if isinstance(web_search, dict) else None,
+                email=email if isinstance(email, dict) else None,
             )
 
             read_task = asyncio.create_task(self._read_pump(), name="read_pump")

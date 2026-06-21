@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../capture/device_registry.dart';
 import '../../core/theme.dart';
+import '../../data/live_client.dart';
 import '../../protocol/protocol.dart';
 import '../../state/live_state.dart';
 import '../../state/permissions.dart';
@@ -204,6 +205,11 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
               ),
             ),
           ),
+          // 7. Reconnect overlay — shown after the session ends or drops.
+          if (state.connection == ConnectionStatus.disconnected)
+            Positioned.fill(
+              child: _ReconnectOverlay(onReconnect: notifier.connect),
+            ),
         ],
       ),
             ),
@@ -257,6 +263,10 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
         TextEditingController(text: current.webSearchApiKey ?? '');
     final wsFbKeyCtl =
         TextEditingController(text: current.webSearchFallbackApiKey ?? '');
+    final emailCtl =
+        TextEditingController(text: current.emailAddress ?? '');
+    final emailPwCtl =
+        TextEditingController(text: current.emailAppPassword ?? '');
     var secure = current.secure;
     var provider = current.provider;
     var wsProvider = current.webSearchProvider;
@@ -372,6 +382,35 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                 ),
               ),
               const SizedBox(height: 12),
+              Text('Email (read my inbox)',
+                  style: Theme.of(context).textTheme.labelLarge),
+              const SizedBox(height: 2),
+              Text(
+                'Gmail: use a 16-digit App Password, not your login password.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Aurora.textMuted,
+                    ),
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                controller: emailCtl,
+                keyboardType: TextInputType.emailAddress,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  labelText: 'Email address',
+                  hintText: 'you@gmail.com — leave blank to disable',
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: emailPwCtl,
+                obscureText: true,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  labelText: 'App password',
+                ),
+              ),
+              const SizedBox(height: 12),
               Align(
                 alignment: Alignment.centerRight,
                 child: FilledButton(
@@ -387,6 +426,8 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                       webSearchApiKey: wsKeyCtl.text.trim(),
                       webSearchFallbackProvider: wsFbProvider,
                       webSearchFallbackApiKey: wsFbKeyCtl.text.trim(),
+                      emailAddress: emailCtl.text.trim(),
+                      emailAppPassword: emailPwCtl.text.trim(),
                     );
                     Navigator.pop(context);
                   },
@@ -598,6 +639,43 @@ class _MicButton extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Full-screen overlay shown when the session has ended/dropped, with a button
+/// to start a new live session (voice can't restart it — the mic is off).
+class _ReconnectOverlay extends StatelessWidget {
+  const _ReconnectOverlay({required this.onReconnect});
+
+  final VoidCallback onReconnect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black.withValues(alpha: 0.72),
+      alignment: Alignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.power_settings_new,
+              size: 48, color: Aurora.textMuted),
+          const SizedBox(height: 12),
+          const Text('Session ended',
+              style: TextStyle(color: Aurora.textPrimary, fontSize: 18)),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            onPressed: onReconnect,
+            icon: const Icon(Icons.play_arrow),
+            label: const Text('Start session'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Aurora.teal,
+              foregroundColor: Aurora.tealInk,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+            ),
+          ),
+        ],
       ),
     );
   }

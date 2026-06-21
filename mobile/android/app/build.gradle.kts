@@ -37,6 +37,19 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // Reminders depend on flutter_local_notifications, which persists and
+            // restores scheduled notifications via Gson generic TypeTokens. R8
+            // obfuscation strips the generic `Signature` attribute, so the
+            // scheduled-notification receiver crashes on fire with
+            // "Missing type parameter" and the reminder never shows. Disabling
+            // shrinking/obfuscation keeps delivery rock-solid; the proguard
+            // rules are kept as a safety net if shrinking is ever re-enabled.
+            isMinifyEnabled = false
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

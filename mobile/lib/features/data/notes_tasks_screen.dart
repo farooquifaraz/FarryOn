@@ -145,59 +145,138 @@ class _TasksTabState extends State<_TasksTab> {
               label: 'No tasks yet.\nSay "remind me…" to add one.',
             );
           }
-          return ListView.separated(
-            padding: const EdgeInsets.all(12),
-            itemCount: tasks.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
-            itemBuilder: (context, i) {
-              final t = tasks[i];
-              return _Card(
-                child: Row(
+          final children = <Widget>[];
+          for (final g in _groupByDate(tasks)) {
+            children.add(_GroupHeader(label: g.label, count: g.items.length));
+            children.addAll(g.items.map(_tile));
+          }
+          return ListView(padding: const EdgeInsets.all(12), children: children);
+        },
+      ),
+    );
+  }
+
+  Widget _tile(TaskItem t) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: _Card(
+          child: Row(
+            children: [
+              Checkbox(
+                value: t.done,
+                activeColor: Aurora.teal,
+                onChanged: (v) async {
+                  await widget.api.setTaskDone(t.id, v ?? false);
+                  _reload();
+                },
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Checkbox(
-                      value: t.done,
-                      activeColor: Aurora.teal,
-                      onChanged: (v) async {
-                        await widget.api.setTaskDone(t.id, v ?? false);
-                        _reload();
-                      },
-                    ),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            t.title,
-                            style: TextStyle(
-                              color: Aurora.textPrimary,
-                              decoration: t.done
-                                  ? TextDecoration.lineThrough
-                                  : null,
-                            ),
-                          ),
-                          if (t.dueDate != null && t.dueDate!.isNotEmpty)
-                            Text(
-                              'due ${t.dueDate}',
-                              style: const TextStyle(
-                                  color: Aurora.textMuted, fontSize: 12),
-                            ),
-                        ],
+                    Text(
+                      t.title,
+                      style: TextStyle(
+                        color: Aurora.textPrimary,
+                        decoration:
+                            t.done ? TextDecoration.lineThrough : null,
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline,
-                          color: Aurora.textMuted),
-                      onPressed: () async {
-                        await widget.api.deleteTask(t.id);
-                        _reload();
-                      },
-                    ),
+                    if (_dueLabel(t.dueDate) != null)
+                      Text(
+                        _dueLabel(t.dueDate)!,
+                        style: const TextStyle(
+                            color: Aurora.textMuted, fontSize: 12),
+                      ),
                   ],
                 ),
-              );
-            },
-          );
-        },
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline, color: Aurora.textMuted),
+                onPressed: () async {
+                  await widget.api.deleteTask(t.id);
+                  _reload();
+                },
+              ),
+            ],
+          ),
+        ),
+      );
+}
+
+/// A short, friendly time label for a task's ISO due date.
+String? _dueLabel(String? iso) {
+  if (iso == null || iso.isEmpty) return null;
+  final d = DateTime.tryParse(iso)?.toLocal();
+  if (d == null) return iso;
+  final h = d.hour.toString().padLeft(2, '0');
+  final m = d.minute.toString().padLeft(2, '0');
+  return 'due ${d.day}/${d.month} $h:$m';
+}
+
+/// Bucket tasks by due date for grouped display.
+List<({String label, List<TaskItem> items})> _groupByDate(
+    List<TaskItem> tasks) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final tomorrow = today.add(const Duration(days: 1));
+  final weekEnd = today.add(const Duration(days: 7));
+  final order = ['Overdue', 'Today', 'Tomorrow', 'This week', 'Later',
+      'No date'];
+  final buckets = {for (final k in order) k: <TaskItem>[]};
+
+  for (final t in tasks) {
+    final due = (t.dueDate != null && t.dueDate!.isNotEmpty)
+        ? DateTime.tryParse(t.dueDate!)?.toLocal()
+        : null;
+    if (due == null) {
+      buckets['No date']!.add(t);
+      continue;
+    }
+    final day = DateTime(due.year, due.month, due.day);
+    if (!t.done && due.isBefore(now)) {
+      buckets['Overdue']!.add(t);
+    } else if (day == today) {
+      buckets['Today']!.add(t);
+    } else if (day == tomorrow) {
+      buckets['Tomorrow']!.add(t);
+    } else if (day.isAfter(today) && day.isBefore(weekEnd)) {
+      buckets['This week']!.add(t);
+    } else if (day.isBefore(today)) {
+      buckets['Overdue']!.add(t);
+    } else {
+      buckets['Later']!.add(t);
+    }
+  }
+  return [
+    for (final k in order)
+      if (buckets[k]!.isNotEmpty) (label: k, items: buckets[k]!),
+  ];
+}
+
+class _GroupHeader extends StatelessWidget {
+  const _GroupHeader({required this.label, required this.count});
+  final String label;
+  final int count;
+  @override
+  Widget build(BuildContext context) {
+    final danger = label == 'Overdue';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+      child: Row(
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              color: danger ? Aurora.danger : Aurora.mint,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.4,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text('$count',
+              style: const TextStyle(color: Aurora.textMuted, fontSize: 12)),
+        ],
       ),
     );
   }

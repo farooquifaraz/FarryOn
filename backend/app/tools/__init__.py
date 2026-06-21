@@ -8,6 +8,13 @@ from __future__ import annotations
 
 from app.tools.base import Tool
 from app.tools.camera import SetCameraZoomTool
+from app.tools.device import (
+    EndSessionTool,
+    MuteMicTool,
+    RotateCameraTool,
+    SetCameraTool,
+)
+from app.tools.email_read import ReadEmailsTool
 from app.tools.messaging import SendMessageTool
 from app.tools.notes import CreateNoteTool
 from app.tools.recall import ListNotesTool, ListTasksTool
@@ -26,9 +33,14 @@ __all__ = [
     "CreateTaskTool",
     "DeleteNoteTool",
     "DeleteTaskTool",
+    "EndSessionTool",
     "ListNotesTool",
     "ListTasksTool",
+    "MuteMicTool",
+    "ReadEmailsTool",
+    "RotateCameraTool",
     "SendMessageTool",
+    "SetCameraTool",
     "SetCameraZoomTool",
     "UpdateTaskTool",
     "WebSearchTool",
@@ -55,4 +67,9 @@ def build_default_tools() -> list[Tool]:
         UpdateTaskTool(),
         DeleteTaskTool(),
         DeleteNoteTool(),
+        MuteMicTool(),
+        SetCameraTool(),
+        RotateCameraTool(),
+        EndSessionTool(),
+        ReadEmailsTool(),
     ]

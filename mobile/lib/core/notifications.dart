@@ -1,4 +1,5 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
@@ -25,6 +26,9 @@ class Notifications {
       channelDescription: 'FarryOn task reminders',
       importance: Importance.max,
       priority: Priority.high,
+      // White silhouette of the app mark — Android tints the small icon, so a
+      // dedicated monochrome icon renders cleanly instead of a white square.
+      icon: 'ic_notification',
     ),
   );
 
@@ -34,7 +38,7 @@ class Notifications {
     if (_ready) return;
     try {
       tzdata.initializeTimeZones();
-      const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+      const android = AndroidInitializationSettings('ic_notification');
       await _plugin.initialize(
         const InitializationSettings(android: android),
       );
@@ -51,6 +55,17 @@ class Notifications {
       );
       await impl?.requestNotificationsPermission();
       await impl?.requestExactAlarmsPermission();
+      // Critical on aggressive OEMs (Samsung): without a battery-optimisation
+      // exemption the OS delays/blocks the exact alarm, so reminders never fire.
+      try {
+        await Permission.notification.request();
+        await Permission.scheduleExactAlarm.request();
+        if (await Permission.ignoreBatteryOptimizations.isDenied) {
+          await Permission.ignoreBatteryOptimizations.request();
+        }
+      } catch (e) {
+        _log.warn('battery/alarm permission request failed: $e');
+      }
       _ready = true;
     } catch (e) {
       _log.warn('notifications init failed: $e');
@@ -58,7 +73,11 @@ class Notifications {
   }
 
   /// Schedule (or replace) a reminder with [id] to fire at the absolute instant
-  /// [when]. No-op for past times or invalid input.
+  /// [when]. A reminder that lands slightly in the past — e.g. a relative
+  /// "in 2 minutes" resolved against a session clock that has since gone stale —
+  /// is fired a few seconds from now instead of being silently dropped, so the
+  /// user never loses a reminder. Only clearly-stale times (>6h old) are
+  /// skipped.
   static Future<void> schedule({
     required int id,
     required String body,
@@ -66,21 +85,33 @@ class Notifications {
   }) async {
     await init();
     if (!_ready) return;
-    if (when.isBefore(DateTime.now())) {
-      _log.debug('skip reminder $id — time is in the past');
-      return;
+    final now = DateTime.now();
+    var fireAt = when;
+    if (when.isBefore(now)) {
+      final lateBy = now.difference(when);
+      if (lateBy > const Duration(hours: 6)) {
+        _log.debug('skip reminder $id — ${lateBy.inMinutes}min in the past');
+        return;
+      }
+      fireAt = now.add(const Duration(seconds: 5));
+      _log.info('reminder $id was ${lateBy.inSeconds}s late; firing in 5s');
     }
     try {
       // `when` is an absolute instant; expressing it in UTC keeps the fire time
       // correct regardless of the device's configured timezone.
-      final at = tz.TZDateTime.from(when, tz.UTC);
+      final at = tz.TZDateTime.from(fireAt, tz.UTC);
       await _plugin.zonedSchedule(
         id,
         'Reminder',
         body,
         at,
         _details,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        // `alarmClock` schedules via Android's setAlarmClock() — the same
+        // privileged path alarm-clock apps use. Unlike exactAllowWhileIdle, it
+        // is NOT deferred by Doze or Battery Saver and ignores the
+        // allow-while-idle quota, so the reminder fires at the exact moment even
+        // when the phone is asleep, locked, or in power-saving mode.
+        androidScheduleMode: AndroidScheduleMode.alarmClock,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
       );
@@ -88,6 +119,20 @@ class Notifications {
     } catch (e) {
       _log.warn('schedule reminder $id failed: $e');
     }
+  }
+
+  /// Fire a self-test reminder [seconds] from now (default 20s). Used by the
+  /// "Test reminder" button so the user can verify delivery works on their
+  /// phone — even with the screen locked and Battery Saver on. Returns the
+  /// absolute time it will fire.
+  static Future<DateTime> testReminder({int seconds = 20}) async {
+    final when = DateTime.now().add(Duration(seconds: seconds));
+    await schedule(
+      id: 999000,
+      body: 'Test reminder — delivery works! ✅',
+      when: when,
+    );
+    return when;
   }
 
   static Future<void> cancel(int id) async {

@@ -25,6 +25,8 @@ class AppConfig {
     this.webSearchApiKey,
     this.webSearchFallbackProvider = 'serper',
     this.webSearchFallbackApiKey,
+    this.emailAddress,
+    this.emailAppPassword,
   });
 
   /// Backend host (IP or DNS name), without scheme or port.
@@ -53,6 +55,12 @@ class AppConfig {
   final String? webSearchApiKey;
   final String webSearchFallbackProvider;
   final String? webSearchFallbackApiKey;
+
+  /// Email (IMAP) so the assistant can read the user's recent mail. The
+  /// address + an app-specific password (e.g. a Gmail App Password). Sent
+  /// per-session in `hello.email`; the backend never persists it.
+  final String? emailAddress;
+  final String? emailAppPassword;
 
   /// Build the initial config from `--dart-define` values, falling back to
   /// localhost defaults suitable for an emulator talking to a host backend.
@@ -106,6 +114,8 @@ class AppConfig {
     String? webSearchApiKey,
     String? webSearchFallbackProvider,
     String? webSearchFallbackApiKey,
+    String? emailAddress,
+    String? emailAppPassword,
   }) =>
       AppConfig(
         host: host ?? this.host,
@@ -120,6 +130,8 @@ class AppConfig {
             webSearchFallbackProvider ?? this.webSearchFallbackProvider,
         webSearchFallbackApiKey:
             webSearchFallbackApiKey ?? this.webSearchFallbackApiKey,
+        emailAddress: emailAddress ?? this.emailAddress,
+        emailAppPassword: emailAppPassword ?? this.emailAppPassword,
       );
 
   @override

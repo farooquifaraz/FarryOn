@@ -47,6 +47,7 @@ class Orchestrator:
         session_id: str | None = None,
         user_id: int | None = None,
         web_search: dict[str, Any] | None = None,
+        email: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -66,6 +67,7 @@ class Orchestrator:
         self._session_id = session_id
         self._user_id = user_id
         self._web_search = web_search
+        self._email = email
 
     async def handle_tool_call(self, event: ToolCallEvent) -> ToolResult:
         """Execute one model-requested tool call end-to-end.
@@ -101,6 +103,7 @@ class Orchestrator:
                 session_id=self._session_id,
                 user_id=self._user_id,
                 web_search=self._web_search,
+                email=self._email,
             )
             result = await self._engine.dispatch(event.name, event.args, ctx)
             try:

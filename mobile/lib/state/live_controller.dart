@@ -218,6 +218,13 @@ class LiveController {
     }
   }
 
+  /// Cap on retained transcript lines. A long session would otherwise grow the
+  /// list without bound, and since every streaming fragment copies the whole
+  /// list, the per-fragment cost (and the UI work) would creep up quadratically
+  /// — the "listing gets slow in a long conversation" symptom. Old lines scroll
+  /// out of view anyway, so we keep only the most recent ones.
+  static const int _maxTranscripts = 80;
+
   void _applyTranscript(TranscriptMessage msg) {
     final list = List<TranscriptEntry>.of(_state.transcripts);
     // Merge consecutive non-final fragments for the same role into one growing
@@ -236,8 +243,14 @@ class LiveController {
         isFinal: msg.isFinal,
       ));
     }
+    if (list.length > _maxTranscripts) {
+      list.removeRange(0, list.length - _maxTranscripts);
+    }
     _emit(_state.copyWith(transcripts: list));
   }
+
+  /// Cap on retained tool-activity rows, for the same reason as transcripts.
+  static const int _maxTools = 40;
 
   void _applyToolCall(ToolCallMessage msg) {
     final list = List<ToolActivity>.of(_state.tools)
@@ -247,13 +260,30 @@ class LiveController {
         args: msg.args,
         needsPermission: msg.needsPermission,
       ));
+    if (list.length > _maxTools) {
+      list.removeRange(0, list.length - _maxTools);
+    }
     _emit(_state.copyWith(tools: list));
 
-    // `set_camera_zoom` is a client-executed tool: the model asks, the device
-    // acts. Apply the zoom locally so the next frame shows the closer view.
-    if (msg.name == 'set_camera_zoom') {
-      final level = (msg.args['level'] as num?)?.toDouble();
-      if (level != null) unawaited(setCameraZoom(level));
+    // Client-executed tools: the model asks, the device acts.
+    switch (msg.name) {
+      case 'set_camera_zoom':
+        final level = (msg.args['level'] as num?)?.toDouble();
+        if (level != null) unawaited(setCameraZoom(level));
+      case 'mute_mic':
+        final muted = msg.args['muted'] as bool? ?? false;
+        unawaited(muted ? stopListening() : startListening());
+      case 'set_camera':
+        final on = msg.args['on'] as bool? ?? true;
+        unawaited(setCameraEnabled(on));
+      case 'rotate_camera':
+        unawaited(setCameraPortrait(!_state.cameraPortrait));
+      case 'end_session':
+        // Let the spoken confirmation play out, then disconnect.
+        Future<void>.delayed(
+          const Duration(seconds: 3),
+          () => unawaited(disconnect()),
+        );
     }
   }
 
@@ -393,6 +423,10 @@ class LiveController {
     await _activeSource.startVideo();
     await _videoSub?.cancel();
     _videoSub = _activeSource.jpegFrames.listen((jpeg) {
+      // Don't feed frames while the assistant is speaking: they can't influence
+      // the in-flight reply and would only pile up in the realtime model's
+      // context, slowing later turns. Frames resume the moment TTS drains.
+      if (_ttsActive) return;
       _client.sendVideo(jpeg);
     });
     _emit(_state.copyWith(cameraOn: true));
