@@ -87,6 +87,13 @@ class AppConfig {
         token: authToken,
       );
 
+  /// Base `http(s)://host:port` for REST calls (Notes/Tasks).
+  Uri get httpBase => Uri(
+        scheme: secure ? 'https' : 'http',
+        host: host,
+        port: port,
+      );
+
   AppConfig copyWith({
     String? host,
     int? port,

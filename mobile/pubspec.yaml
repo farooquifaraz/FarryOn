@@ -33,6 +33,9 @@ dependencies:
   # Persist backend/provider settings across launches.
   shared_preferences: ^2.2.3
 
+  # REST calls for the Notes/Tasks view.
+  http: ^1.2.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

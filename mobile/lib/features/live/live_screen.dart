@@ -9,6 +9,7 @@ import '../../protocol/protocol.dart';
 import '../../state/live_state.dart';
 import '../../state/permissions.dart';
 import '../../state/providers.dart';
+import '../data/notes_tasks_screen.dart';
 import 'widgets/aurora_orb.dart';
 import 'widgets/camera_preview_view.dart';
 import 'widgets/status_indicator.dart';
@@ -152,6 +153,11 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                 onSettings: _showSettingsSheet,
                 onOrientation: () =>
                     notifier.setCameraPortrait(!state.cameraPortrait),
+                onNotes: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const NotesTasksScreen(),
+                  ),
+                ),
               ),
             ),
           ),
@@ -604,11 +610,13 @@ class _TopOverlay extends StatelessWidget {
     required this.state,
     required this.onSettings,
     required this.onOrientation,
+    required this.onNotes,
   });
 
   final LiveSessionState state;
   final VoidCallback onSettings;
   final VoidCallback onOrientation;
+  final VoidCallback onNotes;
 
   @override
   Widget build(BuildContext context) {
@@ -638,6 +646,11 @@ class _TopOverlay extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           _ZoomReadout(zoom: state.cameraZoom),
+          IconButton(
+            tooltip: 'Notes & tasks',
+            icon: const Icon(Icons.checklist, color: Colors.white),
+            onPressed: onNotes,
+          ),
           IconButton(
             tooltip: state.cameraPortrait
                 ? 'Switch to landscape'

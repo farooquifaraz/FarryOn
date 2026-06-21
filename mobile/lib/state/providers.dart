@@ -4,6 +4,7 @@ import '../capture/capture_source.dart';
 import '../capture/device_registry.dart';
 import '../core/config.dart';
 import '../core/config_store.dart';
+import '../data/data_api.dart';
 import '../data/live_client.dart';
 import '../playback/pcm_player.dart';
 import '../protocol/messages.dart';
@@ -34,6 +35,14 @@ final pcmPlayerProvider = Provider<PcmPlayer>((ref) {
 final permissionsProvider = Provider<PermissionsService>(
   (ref) => PermissionsService(),
 );
+
+/// REST client for the Notes/Tasks view; tracks the current backend config.
+final dataApiProvider = Provider<DataApi>((ref) {
+  final api = DataApi(ref.read(configProvider));
+  ref.listen<AppConfig>(configProvider, (_, next) => api.updateConfig(next));
+  ref.onDispose(api.dispose);
+  return api;
+});
 
 /// The orchestrating [LiveController].
 ///

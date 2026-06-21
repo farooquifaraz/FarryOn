@@ -239,6 +239,39 @@ def test_bad_first_message_is_rejected() -> None:
             assert msg["code"] == "expected_hello"
 
 
+async def test_notes_tasks_rest_endpoints(db_session) -> None:
+    """The REST endpoints surface and manage what the agent created."""
+    from app.tools.base import ToolContext
+    from app.tools.notes import CreateNoteTool
+    from app.tools.tasks import CreateTaskTool
+
+    note = await CreateNoteTool().run(
+        ToolContext(session=db_session), text="REST note"
+    )
+    task = await CreateTaskTool().run(
+        ToolContext(session=db_session), title="REST task"
+    )
+    await db_session.commit()
+
+    app = create_app()
+    with TestClient(app) as client:
+        notes = client.get("/notes").json()
+        assert any(n["text"] == "REST note" for n in notes)
+
+        tasks = client.get("/tasks").json()
+        assert any(t["title"] == "REST task" and not t["done"] for t in tasks)
+
+        # Mark the task done.
+        r = client.post(f"/tasks/{task['id']}/done", params={"done": True})
+        assert r.status_code == 200 and r.json()["done"] is True
+
+        # Delete the note.
+        r = client.delete(f"/notes/{note['id']}")
+        assert r.status_code == 200 and r.json()["deleted"] is True
+        notes2 = client.get("/notes").json()
+        assert all(n["id"] != note["id"] for n in notes2)
+
+
 def test_healthz_and_metrics_endpoints() -> None:
     app = create_app()
     with TestClient(app) as client:

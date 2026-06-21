@@ -53,6 +53,7 @@ for _key in (
     "OPENAI_API_KEY",
     "GROK_API_KEY",
     "WEB_SEARCH_API_KEY",
+    "WEB_SEARCH_FALLBACK_API_KEY",
 ):
     os.environ[_key] = ""
 

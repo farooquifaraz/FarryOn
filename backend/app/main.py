@@ -21,6 +21,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
 
 from app.config import Settings, get_settings
+from app.db import repo
 from app.db.base import dispose_db, get_sessionmaker, init_db
 from app.logging_conf import configure_logging, get_logger
 from app.ws.live import router as ws_router
@@ -130,6 +131,74 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "metrics": "/metrics",
             }
         )
+
+    # ---- Notes & tasks (read/manage what the agent created) ----------------
+
+    @app.get("/notes", tags=["data"])
+    async def list_notes_endpoint() -> JSONResponse:
+        """List saved notes (newest first) for the app's Notes view."""
+        async with get_sessionmaker()() as db:
+            notes = await repo.list_notes(db, limit=200)
+            return JSONResponse(
+                [
+                    {
+                        "id": n.id,
+                        "text": n.text,
+                        "createdAt": n.created_at.isoformat(),
+                    }
+                    for n in notes
+                ]
+            )
+
+    @app.get("/tasks", tags=["data"])
+    async def list_tasks_endpoint() -> JSONResponse:
+        """List tasks (open first, then newest) for the app's Tasks view."""
+        async with get_sessionmaker()() as db:
+            tasks = await repo.list_tasks(db, include_done=True, limit=200)
+            return JSONResponse(
+                [
+                    {
+                        "id": t.id,
+                        "title": t.title,
+                        "dueDate": t.due_date,
+                        "done": t.done,
+                        "createdAt": t.created_at.isoformat(),
+                    }
+                    for t in tasks
+                ]
+            )
+
+    @app.post("/tasks/{task_id}/done", tags=["data"])
+    async def set_task_done_endpoint(
+        task_id: int, done: bool = True
+    ) -> JSONResponse:
+        """Mark a task done/undone (``?done=true|false``)."""
+        async with get_sessionmaker()() as db:
+            task = await repo.set_task_done(db, task_id=task_id, done=done)
+            await db.commit()
+            if task is None:
+                return JSONResponse({"error": "not found"}, status_code=404)
+            return JSONResponse({"id": task.id, "done": task.done})
+
+    @app.delete("/notes/{note_id}", tags=["data"])
+    async def delete_note_endpoint(note_id: int) -> JSONResponse:
+        """Delete a note."""
+        async with get_sessionmaker()() as db:
+            ok = await repo.delete_note(db, note_id=note_id)
+            await db.commit()
+            return JSONResponse(
+                {"deleted": ok}, status_code=200 if ok else 404
+            )
+
+    @app.delete("/tasks/{task_id}", tags=["data"])
+    async def delete_task_endpoint(task_id: int) -> JSONResponse:
+        """Delete a task."""
+        async with get_sessionmaker()() as db:
+            ok = await repo.delete_task(db, task_id=task_id)
+            await db.commit()
+            return JSONResponse(
+                {"deleted": ok}, status_code=200 if ok else 404
+            )
 
     return app
 

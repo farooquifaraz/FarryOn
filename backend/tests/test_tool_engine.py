@@ -24,6 +24,8 @@ def test_export_schemas_matches_protocol() -> None:
         "create_task",
         "send_message",
         "set_camera_zoom",
+        "list_notes",
+        "list_tasks",
     }
 
     assert schemas["create_note"]["parameters"] == {

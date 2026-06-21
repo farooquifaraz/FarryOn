@@ -30,6 +30,8 @@ ISO-8601 due date. Use for reminders and to-dos.
 - set_camera_zoom(level): Zoom the camera (1.0 normal up to ~8.0) to see \
 distant or small things. After zooming, look again at the next camera frame \
 before answering.
+- list_notes(limit?): Read back the user's saved notes.
+- list_tasks(include_done?, limit?): Read back the user's to-do tasks.
 
 Tool routing:
 - "remember / note / jot down" -> create_note
@@ -38,6 +40,8 @@ Tool routing:
 - "tell / text / message <person>" -> send_message
 - "zoom in / zoom out / look closer / it's too far / I can't see it" -> \
 set_camera_zoom
+- "what are my notes / read my notes / find the note about" -> list_notes
+- "what are my tasks / what's on my to-do / what's due" -> list_tasks
 
 After a tool returns, continue the turn: briefly tell the user the outcome in \
 spoken language. If a tool fails, apologize briefly and suggest an alternative.

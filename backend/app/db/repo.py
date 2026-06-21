@@ -103,6 +103,65 @@ async def add_task(
     return task
 
 
+async def list_notes(
+    session: AsyncSession, *, user_id: int | None = None, limit: int = 50
+) -> list[Note]:
+    """Return notes (newest first), optionally scoped to a user."""
+    stmt = select(Note).order_by(Note.created_at.desc()).limit(limit)
+    if user_id is not None:
+        stmt = stmt.where(Note.user_id == user_id)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def list_tasks(
+    session: AsyncSession,
+    *,
+    user_id: int | None = None,
+    include_done: bool = True,
+    limit: int = 50,
+) -> list[Task]:
+    """Return tasks (open first, then newest), optionally scoped to a user."""
+    stmt = select(Task).order_by(Task.done.asc(), Task.created_at.desc()).limit(
+        limit
+    )
+    if user_id is not None:
+        stmt = stmt.where(Task.user_id == user_id)
+    if not include_done:
+        stmt = stmt.where(Task.done.is_(False))
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def set_task_done(
+    session: AsyncSession, *, task_id: int, done: bool
+) -> Task | None:
+    """Mark a task done/undone; returns the row or None if missing."""
+    task = await session.get(Task, task_id)
+    if task is not None:
+        task.done = done
+        await session.flush()
+    return task
+
+
+async def delete_note(session: AsyncSession, *, note_id: int) -> bool:
+    """Delete a note; returns True if a row was removed."""
+    note = await session.get(Note, note_id)
+    if note is None:
+        return False
+    await session.delete(note)
+    await session.flush()
+    return True
+
+
+async def delete_task(session: AsyncSession, *, task_id: int) -> bool:
+    """Delete a task; returns True if a row was removed."""
+    task = await session.get(Task, task_id)
+    if task is None:
+        return False
+    await session.delete(task)
+    await session.flush()
+    return True
+
+
 async def add_outbound_message(
     session: AsyncSession,
     *,

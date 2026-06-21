@@ -28,6 +28,24 @@ async def test_set_camera_zoom_clamps_and_acknowledges(db_session) -> None:
     assert (await tool.run(ctx, level="x"))["zoom"] == 1.0
 
 
+async def test_list_notes_and_tasks_recall_tools(db_session) -> None:
+    from app.tools.recall import ListNotesTool, ListTasksTool
+
+    ctx = ToolContext(session=db_session)
+    await CreateNoteTool().run(ctx, text="Buy milk")
+    await CreateTaskTool().run(ctx, title="Call dentist")
+    await db_session.commit()
+
+    notes = await ListNotesTool().run(ctx)
+    assert notes["count"] == 1
+    assert notes["notes"][0]["text"] == "Buy milk"
+
+    tasks = await ListTasksTool().run(ctx)
+    assert tasks["count"] == 1
+    assert tasks["tasks"][0]["title"] == "Call dentist"
+    assert tasks["tasks"][0]["done"] is False
+
+
 async def test_web_search_falls_back_when_primary_exhausted(monkeypatch) -> None:
     """When the primary provider 429s, the fallback provider is used."""
     from app.tools import web_search as ws_mod
