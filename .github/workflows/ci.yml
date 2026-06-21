@@ -42,8 +42,10 @@ jobs:
         # Non-fatal lint signal; tests are the gate. Remove `|| true` to enforce.
         run: ruff check . || true
 
-      - name: Run tests
-        run: pytest -q
+      - name: Run tests (with coverage floor)
+        # Fails the build if line coverage regresses below the current floor.
+        # Ratchet --cov-fail-under upward as coverage improves.
+        run: pytest -q --cov=app --cov-report=term-missing --cov-fail-under=82
 
   # ------------------------------------------------------------------- mobile
   mobile:

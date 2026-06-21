@@ -26,3 +26,4 @@ openai>=1.40             # OpenAI Realtime (AI_PROVIDER=openai)
 # --- Tests ---
 pytest>=8.0
 pytest-asyncio>=0.23
+pytest-cov>=5.0          # coverage measurement + CI floor (see ci.yml)
