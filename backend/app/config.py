@@ -9,12 +9,12 @@ and CI. See ``.env.example`` for operator-facing documentation of each variable.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-AIProvider = Literal["gemini", "openai", "mock"]
+AIProvider = Literal["gemini", "openai", "grok", "mock"]
 
 
 class Settings(BaseSettings):
@@ -45,6 +45,16 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None)
     openai_realtime_model: str = Field(default="gpt-4o-realtime-preview")
 
+    # Grok / xAI Realtime (OpenAI Realtime-compatible; only the endpoint differs)
+    grok_api_key: str | None = Field(default=None)
+    grok_realtime_model: str = Field(default="grok-realtime")
+
+    # Providers a client is allowed to request per-session via hello.provider.
+    allowed_providers: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["gemini", "openai", "grok", "mock"],
+        description="Comma-separated allow-list for hello.provider.",
+    )
+
     # -- Persistence -----------------------------------------------------------
     database_url: str = Field(
         default="sqlite+aiosqlite:///./farryon.db",
@@ -56,8 +66,14 @@ class Settings(BaseSettings):
     web_search_api_key: str | None = Field(default=None)
     web_search_provider: str = Field(
         default="mock",
-        description="Web search backend: mock | tavily | serpapi.",
+        description="Primary web search backend: mock | tavily | serper | "
+        "serpapi.",
     )
+    # Optional second provider: used automatically when the primary errors or
+    # runs out of free credits (HTTP 401/402/429). Lets you chain two free
+    # tiers — e.g. tavily then serper — to maximise free usage.
+    web_search_fallback_provider: str | None = Field(default=None)
+    web_search_fallback_api_key: str | None = Field(default=None)
 
     # -- Observability ---------------------------------------------------------
     log_level: str = Field(default="INFO")
@@ -68,7 +84,7 @@ class Settings(BaseSettings):
         description="HMAC secret for verifying the ?token= JWT on /ws/live. "
         "Auth is best-effort in dev and skipped when left at the default.",
     )
-    allowed_origins: list[str] = Field(
+    allowed_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["*"],
         description="CORS allow-list. Comma-separated in the environment.",
     )
@@ -79,10 +95,10 @@ class Settings(BaseSettings):
     # -- Tunables --------------------------------------------------------------
     tool_timeout_seconds: float = Field(default=20.0)
 
-    @field_validator("allowed_origins", mode="before")
+    @field_validator("allowed_origins", "allowed_providers", mode="before")
     @classmethod
-    def _split_origins(cls, value: object) -> object:
-        """Allow ``ALLOWED_ORIGINS`` to be a comma-separated string."""
+    def _split_csv(cls, value: object) -> object:
+        """Allow comma-separated env strings for list fields."""
         if isinstance(value, str):
             return [part.strip() for part in value.split(",") if part.strip()]
         return value

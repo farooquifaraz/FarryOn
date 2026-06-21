@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/theme.dart';
 import '../../../state/live_state.dart';
 
 /// Scrolling list of user + assistant transcript lines.
@@ -48,7 +49,7 @@ class _TranscriptViewState extends State<TranscriptView> {
         child: Text(
           'Say something or type below to start.',
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: Theme.of(context).colorScheme.outline,
+                color: Aurora.textMuted,
               ),
         ),
       );
@@ -72,12 +73,9 @@ class _Bubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isUser = entry.isUser;
-    final bg = isUser
-        ? theme.colorScheme.primaryContainer
-        : theme.colorScheme.surfaceContainerHighest;
-    final fg = isUser
-        ? theme.colorScheme.onPrimaryContainer
-        : theme.colorScheme.onSurface;
+    // Glass cards: a translucent white fill over the dark base. The user's
+    // label tints teal, the assistant's purple — the Aurora accent pair.
+    final labelColor = isUser ? Aurora.mint : Aurora.purpleSoft;
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -88,13 +86,14 @@ class _Bubble extends StatelessWidget {
           maxWidth: MediaQuery.of(context).size.width * 0.78,
         ),
         decoration: BoxDecoration(
-          color: bg,
+          color: isUser ? Aurora.glassStrong : Aurora.glass,
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(16),
             topRight: const Radius.circular(16),
             bottomLeft: Radius.circular(isUser ? 16 : 4),
             bottomRight: Radius.circular(isUser ? 4 : 16),
           ),
+          border: Border.all(color: Aurora.glassBorder),
         ),
         child: Column(
           crossAxisAlignment:
@@ -103,16 +102,17 @@ class _Bubble extends StatelessWidget {
             Text(
               isUser ? 'You' : 'FarryOn',
               style: theme.textTheme.labelSmall?.copyWith(
-                color: fg.withValues(alpha: 0.7),
-                fontWeight: FontWeight.bold,
+                color: labelColor,
+                fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: 2),
+            const SizedBox(height: 3),
             Opacity(
-              opacity: entry.isFinal ? 1.0 : 0.7,
+              opacity: entry.isFinal ? 1.0 : 0.6,
               child: Text(
                 entry.text.isEmpty ? '…' : entry.text,
-                style: theme.textTheme.bodyMedium?.copyWith(color: fg),
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: Aurora.textPrimary, height: 1.35),
               ),
             ),
           ],

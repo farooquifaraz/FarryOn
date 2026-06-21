@@ -7,10 +7,10 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('client → server serialization', () {
     test('hello matches PROTOCOL.md shape', () {
-      final hello = HelloMessage(
+      const hello = HelloMessage(
         platform: 'android',
         appVersion: '1.0.0',
-        device: const DeviceInfo(
+        device: DeviceInfo(
           kind: 'phone',
           id: 'phone-default',
           capabilities: ['audio_in', 'video_in', 'audio_out'],
@@ -34,14 +34,32 @@ void main() {
     });
 
     test('hello without resumeId carries an explicit null', () {
-      final hello = HelloMessage(
+      const hello = HelloMessage(
         platform: 'ios',
         appVersion: '2.0.0',
-        device: const DeviceInfo(kind: 'glasses', id: 'g1', capabilities: []),
+        device: DeviceInfo(kind: 'glasses', id: 'g1', capabilities: []),
       );
       final session = hello.toJson()['session'] as Map<String, dynamic>;
       expect(session.containsKey('resumeId'), isTrue);
       expect(session['resumeId'], isNull);
+    });
+
+    test('hello carries provider when set, omits it when null', () {
+      const device = DeviceInfo(kind: 'phone', id: 'p', capabilities: []);
+      final withProvider = const HelloMessage(
+        platform: 'android',
+        appVersion: '1.0.0',
+        device: device,
+        provider: 'grok',
+      ).toJson();
+      expect(withProvider['provider'], 'grok');
+
+      final withoutProvider = const HelloMessage(
+        platform: 'android',
+        appVersion: '1.0.0',
+        device: device,
+      ).toJson();
+      expect(withoutProvider.containsKey('provider'), isFalse);
     });
 
     test('config declares 16k in / 24k out per the contract', () {
@@ -49,7 +67,7 @@ void main() {
       expect(json['type'], 'config');
       expect(json['audioIn'],
           {'encoding': 'pcm16', 'sampleRate': 16000, 'channels': 1});
-      expect(json['videoIn'], {'format': 'jpeg', 'fps': 1, 'maxWidth': 1024});
+      expect(json['videoIn'], {'format': 'jpeg', 'fps': 1, 'maxWidth': 1280});
       expect(json['audioOut'],
           {'encoding': 'pcm16', 'sampleRate': 24000, 'channels': 1});
     });

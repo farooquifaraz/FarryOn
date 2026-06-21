@@ -23,11 +23,15 @@ class ToolContext:
         session: Active async DB session (committed by the caller's scope).
         session_id: Owning ``/ws/live`` session id, if any.
         user_id: Owning user id, if resolved.
+        web_search: Optional per-session web-search config supplied by the
+            client (``{provider, apiKey, fallbackProvider, fallbackApiKey}``).
+            When present it overrides the server's env settings for this session.
     """
 
     session: AsyncSession
     session_id: str | None = None
     user_id: int | None = None
+    web_search: dict[str, Any] | None = None
 
 
 class Tool(abc.ABC):

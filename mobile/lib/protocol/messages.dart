@@ -37,6 +37,8 @@ class HelloMessage extends ClientMessage {
     required this.device,
     this.protocolVersion = kProtocolVersion,
     this.resumeId,
+    this.provider,
+    this.webSearch,
   });
 
   /// `"android"` or `"ios"`.
@@ -48,6 +50,14 @@ class HelloMessage extends ClientMessage {
   /// Previous session id, used to resume context after a drop.
   final String? resumeId;
 
+  /// Requested AI provider for this session (`gemini`/`openai`/`grok`/`mock`).
+  /// Omitted when null so the backend uses its configured default.
+  final String? provider;
+
+  /// Per-session web-search config (`{provider, apiKey, fallbackProvider,
+  /// fallbackApiKey}`); omitted when null so the backend uses its env settings.
+  final Map<String, dynamic>? webSearch;
+
   @override
   String get type => MsgType.hello;
 
@@ -58,6 +68,8 @@ class HelloMessage extends ClientMessage {
         'client': {'platform': platform, 'appVersion': appVersion},
         'device': device.toJson(),
         'session': {'resumeId': resumeId},
+        if (provider != null) 'provider': provider,
+        if (webSearch != null) 'webSearch': webSearch,
       };
 }
 

@@ -61,7 +61,11 @@ All JSON messages have a `type` field.
     "id": "string",
     "capabilities": ["audio_in", "video_in", "audio_out"]
   },
-  "session": { "resumeId": "optional-previous-session-id" }
+  "session": { "resumeId": "optional-previous-session-id" },
+  "provider": "gemini|openai|grok|mock"   // optional; AI backend for this
+                                          // session. Omit to use the server
+                                          // default. Switching providers in the
+                                          // app reconnects with a new hello.
 }
 
 // Declares the media formats the client will send/expects.
@@ -141,7 +145,14 @@ register exactly these names/params; Flutter renders them by `name`.
       "properties": {
         "contact": { "type": "string" },
         "text": { "type": "string" } },
-      "required": ["contact", "text"] } }
+      "required": ["contact", "text"] } },
+
+  { "name": "set_camera_zoom",
+    "description": "Zoom the device camera (client-executed) to see distant or small objects.",
+    "parameters": { "type": "object",
+      "properties": {
+        "level": { "type": "number", "description": "Magnification 1.0–8.0" } },
+      "required": ["level"] } }
 ]
 ```
 

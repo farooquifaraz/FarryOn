@@ -70,6 +70,8 @@ class LiveSessionState {
     this.liveState = LiveState.idle,
     this.micOpen = false,
     this.cameraOn = false,
+    this.cameraPortrait = true,
+    this.cameraZoom = 1.0,
     this.transcripts = const [],
     this.tools = const [],
     this.deviceKind = 'phone',
@@ -88,6 +90,13 @@ class LiveSessionState {
 
   /// Whether the camera is currently streaming frames.
   final bool cameraOn;
+
+  /// Whether the camera preview is in portrait (`true`) or landscape.
+  final bool cameraPortrait;
+
+  /// Current camera zoom magnification (1.0 = normal). Driven by pinch, the
+  /// preset chips, or the model's `set_camera_zoom` tool.
+  final double cameraZoom;
 
   /// Ordered transcript lines (oldest first).
   final List<TranscriptEntry> transcripts;
@@ -111,6 +120,8 @@ class LiveSessionState {
     LiveState? liveState,
     bool? micOpen,
     bool? cameraOn,
+    bool? cameraPortrait,
+    double? cameraZoom,
     List<TranscriptEntry>? transcripts,
     List<ToolActivity>? tools,
     String? deviceKind,
@@ -123,6 +134,8 @@ class LiveSessionState {
         liveState: liveState ?? this.liveState,
         micOpen: micOpen ?? this.micOpen,
         cameraOn: cameraOn ?? this.cameraOn,
+        cameraPortrait: cameraPortrait ?? this.cameraPortrait,
+        cameraZoom: cameraZoom ?? this.cameraZoom,
         transcripts: transcripts ?? this.transcripts,
         tools: tools ?? this.tools,
         deviceKind: deviceKind ?? this.deviceKind,

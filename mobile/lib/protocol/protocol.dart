@@ -46,7 +46,9 @@ abstract final class AudioFormat {
 abstract final class VideoFormat {
   static const String format = 'jpeg';
   static const int fps = 1;
-  static const int maxWidth = 1024;
+  // Larger frames give the vision model more detail (helps with distant or
+  // zoomed-in subjects) at a modest bandwidth cost.
+  static const int maxWidth = 1280;
 }
 
 /// `type` discriminator values for JSON control/event messages.

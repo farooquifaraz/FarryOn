@@ -70,6 +70,18 @@ class LiveController {
   StreamSubscription<DecodedFrame>? _frameSub;
   StreamSubscription<ConnectionStatus>? _statusSub;
 
+  // Echo guard: the mic stays muted while the assistant's TTS is actually
+  // *playing* — not just while `speaking` state is set. The player keeps
+  // draining buffered audio after the server's audio_end, so we mute until that
+  // audio has finished (its byte-count tells us its duration) plus a margin.
+  bool _ttsActive = false;
+  int _ttsBytes = 0; // OUTPUT_AUDIO bytes fed since the turn's audio started
+  DateTime? _ttsStart;
+  Timer? _ttsClear;
+
+  // 24 kHz mono PCM16 → 48000 bytes per second of playback.
+  static const int _ttsBytesPerSec = 48000;
+
   // ---- Observable state --------------------------------------------------
 
   final _stateController =
@@ -107,10 +119,14 @@ class LiveController {
     await _player.initialize();
     await _activeSource.initialize();
     // Start the camera immediately so the preview is live and ~1 fps frames
-    // begin flowing; the mic is gated behind the push-to-talk control.
+    // begin flowing.
     await _startVideo();
 
     _client.start();
+    // Hands-free: open the mic right away so the user can just talk. The mic
+    // button is a mute toggle, and we never feed the mic while the assistant
+    // is speaking (half-duplex, see [_startAudio]).
+    await startListening();
     return outcome;
   }
 
@@ -136,12 +152,36 @@ class LiveController {
 
     _frameSub = _client.frames.listen((frame) {
       if (frame.tag == FrameTag.outputAudio) {
+        _ttsBytes += frame.payload.length; // track how much TTS we must play out
         // Fire-and-forget; PcmPlayer applies its own backpressure.
         unawaited(_player.feed(frame.payload));
       }
     });
 
     _eventSub = _client.events.listen(_onServerMessage);
+  }
+
+  /// Mute the mic for the duration of an assistant turn's audio.
+  void _beginTts() {
+    _ttsClear?.cancel();
+    _ttsActive = true;
+    _ttsBytes = 0;
+    _ttsStart = DateTime.now();
+    // Safety: never stay muted forever if audio_end is somehow lost.
+    _ttsClear = Timer(const Duration(seconds: 20), () => _ttsActive = false);
+  }
+
+  /// After audio_end, keep muted until the buffered audio has actually played
+  /// (its byte count gives its duration) plus a ring-down margin.
+  void _endTtsAfterPlayback() {
+    final start = _ttsStart;
+    final playMs = (_ttsBytes / _ttsBytesPerSec * 1000).round();
+    final elapsedMs =
+        start == null ? 0 : DateTime.now().difference(start).inMilliseconds;
+    final remainingMs = (playMs - elapsedMs).clamp(0, 60000) + 600;
+    _ttsClear?.cancel();
+    _ttsClear =
+        Timer(Duration(milliseconds: remainingMs), () => _ttsActive = false);
   }
 
   void _onServerMessage(ServerMessage msg) {
@@ -151,9 +191,13 @@ class LiveController {
       case TranscriptMessage():
         _applyTranscript(msg);
       case AudioStartEvent():
-        // Assistant begins speaking.
+        // Assistant begins speaking — mute the mic until playback drains.
+        _beginTts();
         _emit(_state.copyWith(liveState: LiveState.speaking));
       case AudioEndEvent():
+        // Server finished sending audio, but the player is still draining its
+        // buffer — keep the mic muted for that remaining playback + a margin.
+        _endTtsAfterPlayback();
         if (_state.liveState == LiveState.speaking) {
           _emit(_state.copyWith(liveState: LiveState.idle));
         }
@@ -203,6 +247,13 @@ class LiveController {
         needsPermission: msg.needsPermission,
       ));
     _emit(_state.copyWith(tools: list));
+
+    // `set_camera_zoom` is a client-executed tool: the model asks, the device
+    // acts. Apply the zoom locally so the next frame shows the closer view.
+    if (msg.name == 'set_camera_zoom') {
+      final level = (msg.args['level'] as num?)?.toDouble();
+      if (level != null) unawaited(setCameraZoom(level));
+    }
   }
 
   void _applyToolResult(ToolResultMessage msg) {
@@ -240,8 +291,10 @@ class LiveController {
       await interrupt();
     }
 
-    await _startAudio();
+    // Open the activity window BEFORE audio flows so the backend's manual VAD
+    // counts the very first words (audio sent before audio_start is dropped).
     _client.send(const AudioStartMessage());
+    await _startAudio();
     _emit(_state.copyWith(micOpen: true, liveState: LiveState.listening));
   }
 
@@ -263,6 +316,9 @@ class LiveController {
 
   /// Barge-in: stop assistant playback now and notify the server.
   Future<void> interrupt() async {
+    // Re-open the mic immediately — playback is being cut short.
+    _ttsClear?.cancel();
+    _ttsActive = false;
     _client.send(const InterruptMessage());
     await _player.flush();
     if (_state.liveState == LiveState.speaking) {
@@ -292,6 +348,10 @@ class LiveController {
     await _activeSource.startAudio();
     await _audioSub?.cancel();
     _audioSub = _activeSource.audio16k.listen((pcm) {
+      // Half-duplex: never feed the mic while the assistant's TTS is still
+      // playing out (covers the player's buffer drain after audio_end), so
+      // automatic VAD can't re-trigger on its own voice.
+      if (_ttsActive) return;
       _client.sendAudio(pcm);
     });
   }
@@ -326,6 +386,21 @@ class LiveController {
     } else {
       await _stopVideo();
     }
+  }
+
+  /// Switch the camera preview/capture between portrait and landscape.
+  Future<void> setCameraPortrait(bool portrait) async {
+    if (portrait == _state.cameraPortrait) return;
+    await _activeSource.setPortrait(portrait);
+    _emit(_state.copyWith(cameraPortrait: portrait));
+  }
+
+  /// Zoom the camera and reflect the applied level in state (drives the UI
+  /// read-out and presets). Used by pinch, the preset chips, and the model's
+  /// `set_camera_zoom` tool.
+  Future<void> setCameraZoom(double level) async {
+    final applied = await _activeSource.setZoom(level);
+    _emit(_state.copyWith(cameraZoom: applied));
   }
 
   // ---- Device switching (universal adapter) -----------------------------
@@ -365,6 +440,7 @@ class LiveController {
   // ---- Disposal ----------------------------------------------------------
 
   Future<void> dispose() async {
+    _ttsClear?.cancel();
     await _audioSub?.cancel();
     await _videoSub?.cancel();
     await _eventSub?.cancel();

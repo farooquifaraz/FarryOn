@@ -20,6 +20,11 @@ class AppConfig {
     required this.secure,
     this.authToken,
     this.appVersion = '1.0.0',
+    this.provider = 'gemini',
+    this.webSearchProvider = 'tavily',
+    this.webSearchApiKey,
+    this.webSearchFallbackProvider = 'serper',
+    this.webSearchFallbackApiKey,
   });
 
   /// Backend host (IP or DNS name), without scheme or port.
@@ -37,6 +42,18 @@ class AppConfig {
   /// Reported in the `hello` message.
   final String appVersion;
 
+  /// AI provider the backend should use for this session: `gemini` | `openai`
+  /// | `grok` | `mock`. Sent in `hello.provider`; changing it reconnects.
+  final String provider;
+
+  /// Web search: primary provider (`tavily` | `serper` | `serpapi` | `mock`)
+  /// and its key, plus an optional fallback used when the primary runs out of
+  /// free credits. Sent per-session in `hello.webSearch`.
+  final String webSearchProvider;
+  final String? webSearchApiKey;
+  final String webSearchFallbackProvider;
+  final String? webSearchFallbackApiKey;
+
   /// Build the initial config from `--dart-define` values, falling back to
   /// localhost defaults suitable for an emulator talking to a host backend.
   ///
@@ -50,11 +67,14 @@ class AppConfig {
     const port = int.fromEnvironment('FARRYON_PORT', defaultValue: 8000);
     const secure = bool.fromEnvironment('FARRYON_SECURE', defaultValue: false);
     const token = String.fromEnvironment('FARRYON_TOKEN', defaultValue: '');
+    const provider =
+        String.fromEnvironment('FARRYON_PROVIDER', defaultValue: 'gemini');
     return AppConfig(
       host: host,
       port: port,
       secure: secure,
       authToken: token.isEmpty ? null : token,
+      provider: provider,
     );
   }
 
@@ -74,6 +94,11 @@ class AppConfig {
     String? authToken,
     bool clearToken = false,
     String? appVersion,
+    String? provider,
+    String? webSearchProvider,
+    String? webSearchApiKey,
+    String? webSearchFallbackProvider,
+    String? webSearchFallbackApiKey,
   }) =>
       AppConfig(
         host: host ?? this.host,
@@ -81,6 +106,13 @@ class AppConfig {
         secure: secure ?? this.secure,
         authToken: clearToken ? null : (authToken ?? this.authToken),
         appVersion: appVersion ?? this.appVersion,
+        provider: provider ?? this.provider,
+        webSearchProvider: webSearchProvider ?? this.webSearchProvider,
+        webSearchApiKey: webSearchApiKey ?? this.webSearchApiKey,
+        webSearchFallbackProvider:
+            webSearchFallbackProvider ?? this.webSearchFallbackProvider,
+        webSearchFallbackApiKey:
+            webSearchFallbackApiKey ?? this.webSearchFallbackApiKey,
       );
 
   @override

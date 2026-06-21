@@ -125,6 +125,20 @@ class AIGateway(abc.ABC):
     def events(self) -> AsyncIterator[GatewayEvent]:
         """Yield :class:`GatewayEvent` objects until the session closes."""
 
+    async def send_activity_start(self) -> None:
+        """Signal that the user began speaking (manual activity detection).
+
+        Gateways using server-side automatic VAD ignore this; manual-VAD
+        adapters (e.g. Gemini push-to-talk) open a turn window here. No-op by
+        default so existing adapters need no changes.
+        """
+
+    async def send_activity_end(self) -> None:
+        """Signal that the user stopped speaking (manual activity detection).
+
+        Closes the turn window so the model replies. No-op by default.
+        """
+
     @abc.abstractmethod
     async def interrupt(self) -> None:
         """Barge-in: cancel in-flight generation / TTS playback."""

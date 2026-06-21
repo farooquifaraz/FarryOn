@@ -29,17 +29,28 @@ services:
     autoDeploy: true
     envVars:
       - key: AI_PROVIDER
-        value: openai                       # or "gemini"
-      - key: OPENAI_API_KEY
-        sync: false                         # set in the Render dashboard (secret)
-      - key: OPENAI_REALTIME_MODEL
-        value: gpt-4o-realtime-preview      # a REALTIME model (not gpt-4.1)
+        value: gemini                       # server default; the app can switch
       - key: GEMINI_API_KEY
         sync: false                         # set in the Render dashboard (secret)
       - key: GEMINI_MODEL
         value: gemini-2.5-flash-native-audio-latest  # a LIVE model (not gemini-1.5-flash)
+      - key: OPENAI_API_KEY
+        sync: false                         # optional — only if you use OpenAI
+      - key: OPENAI_REALTIME_MODEL
+        value: gpt-4o-realtime-preview      # a REALTIME model (not gpt-4.1)
+      - key: GROK_API_KEY
+        sync: false                         # optional — only if you use Grok
+      - key: GROK_REALTIME_MODEL
+        value: grok-realtime
+      # Web search (Tavily primary → Serper fallback). Keys are secrets.
       - key: WEB_SEARCH_PROVIDER
-        value: mock
+        value: tavily
+      - key: WEB_SEARCH_API_KEY
+        sync: false
+      - key: WEB_SEARCH_FALLBACK_PROVIDER
+        value: serper
+      - key: WEB_SEARCH_FALLBACK_API_KEY
+        sync: false
       - key: ALLOWED_ORIGINS
         value: "*"
       - key: LOG_LEVEL

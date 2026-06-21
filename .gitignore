@@ -38,6 +38,12 @@ mobile/android/key.properties
 *.lock
 !pubspec.lock
 
+# Built APKs (large binaries; rebuild from mobile/). Keep the folder's README.
+apk/*.apk
+
+# Local design mockups (dev artifacts).
+mockups/
+
 # ---------- IDE / OS ----------
 .idea/
 .vscode/

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../../capture/capture_source.dart';
 import '../../../capture/phone_capture_source.dart';
+import '../../../core/theme.dart';
 
 /// Live camera preview for the active [CaptureSource].
 ///
@@ -15,20 +16,22 @@ class CameraPreviewView extends StatelessWidget {
     super.key,
     required this.source,
     required this.enabled,
+    this.portrait = true,
   });
 
   final CaptureSource source;
   final bool enabled;
 
+  /// Whether to lay the preview out as portrait (fills a tall hero) or
+  /// landscape. Must match the orientation locked on the [CaptureSource].
+  final bool portrait;
+
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     if (!enabled) {
-      return _Placeholder(
+      return const _Placeholder(
         icon: Icons.videocam_off,
         label: 'Camera off',
-        color: theme.colorScheme.surfaceContainerHighest,
       );
     }
 
@@ -36,15 +39,28 @@ class CameraPreviewView extends StatelessWidget {
     if (src is PhoneCaptureSource) {
       final controller = src.cameraController;
       if (controller != null && controller.value.isInitialized) {
+        // Cover-fill the hero. The sensor preview is landscape, so for a
+        // portrait layout we swap width/height before the BoxFit.cover.
+        final preview = controller.value.previewSize;
+        final w = preview?.width ?? 16;
+        final h = preview?.height ?? 9;
         return ClipRRect(
-          borderRadius: BorderRadius.circular(16),
-          child: CameraPreview(controller),
+          borderRadius: BorderRadius.circular(18),
+          child: SizedBox.expand(
+            child: FittedBox(
+              fit: BoxFit.cover,
+              child: SizedBox(
+                width: portrait ? h : w,
+                height: portrait ? w : h,
+                child: CameraPreview(controller),
+              ),
+            ),
+          ),
         );
       }
-      return _Placeholder(
+      return const _Placeholder(
         icon: Icons.photo_camera,
         label: 'Starting camera…',
-        color: theme.colorScheme.surfaceContainerHighest,
       );
     }
 
@@ -52,36 +68,34 @@ class CameraPreviewView extends StatelessWidget {
     return _Placeholder(
       icon: Icons.visibility,
       label: 'Streaming from ${src.info.kind}',
-      color: theme.colorScheme.surfaceContainerHighest,
     );
   }
 }
 
 class _Placeholder extends StatelessWidget {
-  const _Placeholder({
-    required this.icon,
-    required this.label,
-    required this.color,
-  });
+  const _Placeholder({required this.icon, required this.label});
 
   final IconData icon;
   final String label;
-  final Color color;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(16),
+        color: Aurora.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Aurora.glassBorder),
       ),
       child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 40, color: Theme.of(context).colorScheme.outline),
+            Icon(icon, size: 40, color: Aurora.textMuted),
             const SizedBox(height: 8),
-            Text(label, style: Theme.of(context).textTheme.bodyMedium),
+            Text(
+              label,
+              style: const TextStyle(color: Aurora.textMuted, fontSize: 14),
+            ),
           ],
         ),
       ),

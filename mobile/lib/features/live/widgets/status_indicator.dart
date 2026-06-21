@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/theme.dart';
 import '../../../data/live_client.dart';
 import '../../../protocol/protocol.dart';
 
-/// Compact pill showing connection status and the assistant's conversational
-/// state (idle / listening / thinking / speaking).
+/// Soft, translucent status pills (Midnight Aurora): connection, the
+/// assistant's conversational state, and the active capture device.
 class StatusIndicator extends StatelessWidget {
   const StatusIndicator({
     super.key,
@@ -19,14 +20,13 @@ class StatusIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final (label, color, icon) = _stateVisual(theme);
+    final (label, color, icon) = _stateVisual();
 
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         _Pill(
-          color: _connectionColor(theme),
+          color: _connectionColor(),
           icon: _connectionIcon(),
           label: _connectionLabel(),
         ),
@@ -34,33 +34,32 @@ class StatusIndicator extends StatelessWidget {
         _Pill(color: color, icon: icon, label: label),
         const SizedBox(width: 8),
         _Pill(
-          color: theme.colorScheme.surfaceContainerHighest,
+          color: Aurora.textMuted,
           icon: deviceKind == 'glasses' ? Icons.visibility : Icons.smartphone,
           label: deviceKind,
-          foreground: theme.colorScheme.onSurface,
         ),
       ],
     );
   }
 
-  (String, Color, IconData) _stateVisual(ThemeData theme) {
+  (String, Color, IconData) _stateVisual() {
     switch (liveState) {
       case LiveState.listening:
-        return ('Listening', Colors.green, Icons.mic);
+        return ('Listening', Aurora.mint, Icons.mic);
       case LiveState.thinking:
-        return ('Thinking', Colors.amber.shade700, Icons.psychology);
+        return ('Thinking', Aurora.amber, Icons.auto_awesome);
       case LiveState.speaking:
-        return ('Speaking', theme.colorScheme.primary, Icons.graphic_eq);
+        return ('Speaking', Aurora.teal, Icons.graphic_eq);
       case LiveState.idle:
-        return ('Idle', theme.colorScheme.outline, Icons.circle_outlined);
+        return ('Idle', Aurora.textMuted, Icons.circle_outlined);
     }
   }
 
-  Color _connectionColor(ThemeData theme) => switch (connection) {
-        ConnectionStatus.connected => Colors.green,
-        ConnectionStatus.connecting => Colors.amber.shade700,
-        ConnectionStatus.reconnecting => Colors.orange,
-        ConnectionStatus.disconnected => theme.colorScheme.error,
+  Color _connectionColor() => switch (connection) {
+        ConnectionStatus.connected => Aurora.teal,
+        ConnectionStatus.connecting => Aurora.amber,
+        ConnectionStatus.reconnecting => Aurora.amber,
+        ConnectionStatus.disconnected => Aurora.danger,
       };
 
   IconData _connectionIcon() => switch (connection) {
@@ -79,35 +78,30 @@ class StatusIndicator extends StatelessWidget {
 }
 
 class _Pill extends StatelessWidget {
-  const _Pill({
-    required this.color,
-    required this.icon,
-    required this.label,
-    this.foreground = Colors.white,
-  });
+  const _Pill({required this.color, required this.icon, required this.label});
 
   final Color color;
   final IconData icon;
   final String label;
-  final Color foreground;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
       decoration: BoxDecoration(
-        color: color,
+        color: Aurora.tint(color, 0.14),
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Aurora.tint(color, 0.25)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: foreground),
-          const SizedBox(width: 5),
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 6),
           Text(
             label,
             style: TextStyle(
-              color: foreground,
+              color: color,
               fontSize: 12,
               fontWeight: FontWeight.w600,
             ),

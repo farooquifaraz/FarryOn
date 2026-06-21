@@ -51,6 +51,15 @@ abstract class CaptureSource {
   /// Stop streaming camera frames.
   Future<void> stopVideo();
 
+  /// Lock the camera/preview orientation: `true` → portrait, `false` →
+  /// landscape. No-op for sources without a controllable camera.
+  Future<void> setPortrait(bool portrait);
+
+  /// Set the camera zoom magnification (`1.0` = normal). Implementations clamp
+  /// to the device's supported range and return the level actually applied
+  /// (so the UI can show an accurate read-out). A no-op source returns `1.0`.
+  Future<double> setZoom(double level);
+
   /// Release all device resources. The source may be re-[initialize]d later.
   Future<void> dispose();
 }

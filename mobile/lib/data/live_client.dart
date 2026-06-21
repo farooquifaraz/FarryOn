@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../core/config.dart';
 import '../core/logger.dart';
@@ -202,11 +202,23 @@ class WebSocketLiveClient {
 
   void _sendHandshake() {
     final device = _deviceInfoProvider();
+    final wsKey = _config.webSearchApiKey;
     send(HelloMessage(
       platform: platform,
       appVersion: _config.appVersion,
       device: device,
       resumeId: _resumeId,
+      provider: _config.provider,
+      // Only send web-search config when the user supplied a primary key,
+      // otherwise let the backend use its own env settings.
+      webSearch: (wsKey != null && wsKey.isNotEmpty)
+          ? {
+              'provider': _config.webSearchProvider,
+              'apiKey': wsKey,
+              'fallbackProvider': _config.webSearchFallbackProvider,
+              'fallbackApiKey': _config.webSearchFallbackApiKey ?? '',
+            }
+          : null,
     ));
     send(const ConfigMessage());
   }

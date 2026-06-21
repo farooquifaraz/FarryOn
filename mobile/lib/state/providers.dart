@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../capture/capture_source.dart';
 import '../capture/device_registry.dart';
 import '../core/config.dart';
+import '../core/config_store.dart';
 import '../data/live_client.dart';
 import '../playback/pcm_player.dart';
 import '../protocol/messages.dart';
@@ -10,11 +11,10 @@ import 'live_controller.dart';
 import 'live_state.dart';
 import 'permissions.dart';
 
-/// App configuration. Seeded from `--dart-define`s; overridable at runtime via
-/// the settings sheet (replace the whole [AppConfig]).
-final configProvider = StateProvider<AppConfig>(
-  (ref) => AppConfig.fromEnvironment(),
-);
+/// App configuration. Seeded from persisted storage (falling back to
+/// `--dart-define`s / localhost); overridable at runtime via the settings
+/// sheet. Changes are saved by the [LiveNotifier] so they survive restarts.
+final configProvider = StateProvider<AppConfig>((ref) => ConfigStore.load());
 
 /// The capture-device registry (phone ⇄ glasses switchboard).
 final deviceRegistryProvider = Provider<DeviceRegistry>((ref) {
@@ -79,9 +79,13 @@ class LiveNotifier extends Notifier<LiveSessionState> {
     final sub = _controller.stateStream.listen((s) => state = s);
     ref.onDispose(sub.cancel);
 
-    // React to config changes (settings sheet) by re-pointing the client.
+    // React to config changes (settings sheet): persist them and re-point the
+    // client so the new host/provider/keys take effect on reconnect.
     ref.listen<AppConfig>(configProvider, (prev, next) {
-      if (prev != next) _controller.updateConfig(next);
+      if (prev != next) {
+        ConfigStore.save(next);
+        _controller.updateConfig(next);
+      }
     });
 
     return _controller.state;
@@ -97,6 +101,10 @@ class LiveNotifier extends Notifier<LiveSessionState> {
   Future<void> interrupt() => _controller.interrupt();
   void sendText(String text) => _controller.sendText(text);
   Future<void> setCameraEnabled(bool on) => _controller.setCameraEnabled(on);
+  Future<void> setCameraPortrait(bool portrait) =>
+      _controller.setCameraPortrait(portrait);
+  Future<void> setCameraZoom(double level) =>
+      _controller.setCameraZoom(level);
   Future<void> switchDevice(CaptureDeviceKind kind) =>
       _controller.switchDevice(kind);
   void respondToolPermission(String id, bool granted) =>

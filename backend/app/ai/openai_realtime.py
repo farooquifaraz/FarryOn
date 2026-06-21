@@ -48,6 +48,8 @@ class OpenAIRealtimeGateway(AIGateway):
         system_prompt: str,
         tools: list[ToolSpec],
         model: str | None = None,
+        api_key: str | None = None,
+        websocket_base_url: str | None = None,
     ) -> None:
         settings = get_settings()
         super().__init__(
@@ -55,13 +57,21 @@ class OpenAIRealtimeGateway(AIGateway):
             tools=tools,
             model=model or settings.openai_realtime_model,
         )
-        self._api_key = settings.openai_api_key
+        # ``api_key``/``websocket_base_url`` let OpenAI-compatible realtime
+        # backends (e.g. Grok/xAI) reuse this adapter by only changing the
+        # endpoint; default to the OpenAI settings.
+        self._api_key = api_key if api_key is not None else settings.openai_api_key
+        self._ws_base_url = websocket_base_url
         self._queue: asyncio.Queue[GatewayEvent | None] = asyncio.Queue()
         self._conn: Any = None
         self._conn_cm: Any = None
         self._recv_task: asyncio.Task[None] | None = None
         self._audio_open = False
         self._closed = False
+        # Cumulative assistant transcript for the current turn. The Realtime API
+        # streams *deltas*; we accumulate so the client always receives the full
+        # line (the UI replaces the live line with each cumulative emit).
+        self._assistant_buf = ""
 
     def _tool_definitions(self) -> list[dict[str, Any]]:
         """Render tools in the Realtime ``session.tools`` format."""
@@ -97,7 +107,12 @@ class OpenAIRealtimeGateway(AIGateway):
         if not self._api_key:
             raise RuntimeError("OPENAI_API_KEY is not set.")
 
-        client = AsyncOpenAI(api_key=self._api_key)
+        client_kwargs: dict[str, Any] = {"api_key": self._api_key}
+        if self._ws_base_url:
+            # Point the realtime websocket at an OpenAI-compatible endpoint
+            # (e.g. wss://api.x.ai/v1 for Grok).
+            client_kwargs["websocket_base_url"] = self._ws_base_url
+        client = AsyncOpenAI(**client_kwargs)
         # OpenAI disabled the old beta Realtime "shape" (close 4000
         # invalid_request_error.beta_api_shape_disabled). Use the GA Realtime
         # API: prefer the GA namespace (client.realtime), fall back to beta on
@@ -123,8 +138,12 @@ class OpenAIRealtimeGateway(AIGateway):
         }
 
         last_exc: Exception | None = None
-        # Configured model first, then the GA default; de-duplicated.
-        for model in dict.fromkeys([self.model, "gpt-realtime"]):
+        # Configured model first, then the GA default (OpenAI only) — Grok and
+        # other compatible endpoints have their own model names.
+        candidates = [self.model]
+        if self.provider == "openai":
+            candidates.append("gpt-realtime")
+        for model in dict.fromkeys(candidates):
             try:
                 cm = realtime_ns.connect(model=model)
                 conn = await cm.__aenter__()
@@ -186,8 +205,13 @@ class OpenAIRealtimeGateway(AIGateway):
         ):
             delta = getattr(event, "delta", "") or ""
             if delta:
+                self._assistant_buf += delta
                 await self._queue.put(
-                    TranscriptEvent(role="assistant", text=delta)
+                    TranscriptEvent(
+                        role="assistant",
+                        text=self._assistant_buf,
+                        final=False,
+                    )
                 )
 
         elif etype == (
@@ -214,6 +238,15 @@ class OpenAIRealtimeGateway(AIGateway):
             )
 
         elif etype == "response.done":
+            if self._assistant_buf:
+                await self._queue.put(
+                    TranscriptEvent(
+                        role="assistant",
+                        text=self._assistant_buf,
+                        final=True,
+                    )
+                )
+                self._assistant_buf = ""
             await self._queue.put(TurnCompleteEvent())
 
         elif etype == "error":
@@ -280,6 +313,7 @@ class OpenAIRealtimeGateway(AIGateway):
         """Cancel the in-flight response (barge-in)."""
         if self._conn is None:
             return
+        self._assistant_buf = ""
         if self._audio_open:
             self._audio_open = False
             await self._queue.put(AudioEndEvent())

@@ -23,6 +23,7 @@ def test_export_schemas_matches_protocol() -> None:
         "web_search",
         "create_task",
         "send_message",
+        "set_camera_zoom",
     }
 
     assert schemas["create_note"]["parameters"] == {

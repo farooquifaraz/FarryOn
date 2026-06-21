@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:image/image.dart' as img;
 
@@ -29,7 +29,7 @@ class PhoneCaptureSource implements CaptureSource {
   PhoneCaptureSource({
     this.deviceId = 'phone-default',
     this.preferredCamera = CameraLensDirection.back,
-    this.jpegQuality = 80,
+    this.jpegQuality = 88,
   });
 
   static final _log = Logger('PhoneCapture');
@@ -107,6 +107,10 @@ class PhoneCaptureSource implements CaptureSource {
       codec: Codec.pcm16,
       numChannels: AudioFormat.channels,
       sampleRate: AudioFormat.micSampleRate, // 16 kHz
+      // OS-level voice processing (acoustic echo cancellation + noise
+      // suppression) so the mic doesn't pick up the assistant's own TTS —
+      // essential for the hands-free, always-listening experience.
+      enableVoiceProcessing: true,
     );
     _audioRunning = true;
     _log.info('audio capture started @ ${AudioFormat.micSampleRate}Hz');
@@ -143,13 +147,21 @@ class PhoneCaptureSource implements CaptureSource {
     );
     final controller = CameraController(
       selected,
-      // Medium is plenty: we downscale to ≤1024px and 1 fps anyway, and lower
-      // resolution keeps takePicture() fast.
-      ResolutionPreset.medium,
+      // High resolution so frames (and zoomed-in crops) stay sharp enough for
+      // the vision model to read distant/small subjects accurately. We still
+      // throttle to ~1 fps and downscale, so the cost stays modest.
+      ResolutionPreset.high,
       enableAudio: false, // audio comes from flutter_sound, not the camera
       imageFormatGroup: ImageFormatGroup.jpeg,
     );
     await controller.initialize();
+    // Default to an upright portrait preview/capture (phones are held this way);
+    // the user can switch to landscape via [setPortrait].
+    try {
+      await controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
+    } catch (e) {
+      _log.warn('lockCaptureOrientation failed: $e');
+    }
     _camera = controller;
     _log.debug('camera initialized: ${selected.name}');
   }
@@ -172,6 +184,39 @@ class PhoneCaptureSource implements CaptureSource {
     _frameTimer?.cancel();
     _frameTimer = null;
     _log.info('video capture stopped');
+  }
+
+  @override
+  Future<void> setPortrait(bool portrait) async {
+    final camera = _camera;
+    if (camera == null || !camera.value.isInitialized) return;
+    try {
+      await camera.lockCaptureOrientation(
+        portrait
+            ? DeviceOrientation.portraitUp
+            : DeviceOrientation.landscapeLeft,
+      );
+      _log.info('orientation → ${portrait ? "portrait" : "landscape"}');
+    } catch (e) {
+      _log.warn('setPortrait failed: $e');
+    }
+  }
+
+  @override
+  Future<double> setZoom(double level) async {
+    final camera = _camera;
+    if (camera == null || !camera.value.isInitialized) return 1.0;
+    try {
+      final maxZoom = await camera.getMaxZoomLevel();
+      final minZoom = await camera.getMinZoomLevel();
+      final clamped = level.clamp(minZoom, maxZoom);
+      await camera.setZoomLevel(clamped);
+      _log.info('zoom → ${clamped.toStringAsFixed(1)}x (max $maxZoom)');
+      return clamped;
+    } catch (e) {
+      _log.warn('setZoom failed: $e');
+      return 1.0;
+    }
   }
 
   Future<void> _captureFrame() async {

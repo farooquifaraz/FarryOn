@@ -106,6 +106,17 @@ class GlassesCaptureSource implements CaptureSource {
     _videoRunning = false;
   }
 
+  @override
+  Future<void> setPortrait(bool portrait) async {
+    // Orientation is fixed by the headset; nothing to do for the stub.
+  }
+
+  @override
+  Future<double> setZoom(double level) async {
+    // TODO(transport): forward a zoom command to the glasses if supported.
+    return level < 1.0 ? 1.0 : level;
+  }
+
   /// Whether the (future) transport is currently streaming. Exposed for UI/debug.
   bool get isAudioRunning => _audioRunning;
   bool get isVideoRunning => _videoRunning;

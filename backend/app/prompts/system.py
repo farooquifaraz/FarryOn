@@ -27,12 +27,17 @@ not know. Use for news, facts, prices, or anything time-sensitive.
 - create_task(title, due_date?): Create a to-do item, optionally with an \
 ISO-8601 due date. Use for reminders and to-dos.
 - send_message(contact, text): Send a text message to a named contact.
+- set_camera_zoom(level): Zoom the camera (1.0 normal up to ~8.0) to see \
+distant or small things. After zooming, look again at the next camera frame \
+before answering.
 
 Tool routing:
 - "remember / note / jot down" -> create_note
 - "look up / search / what's the latest / who/what is" -> web_search
 - "remind me / add a task / to-do / by <date>" -> create_task
 - "tell / text / message <person>" -> send_message
+- "zoom in / zoom out / look closer / it's too far / I can't see it" -> \
+set_camera_zoom
 
 After a tool returns, continue the turn: briefly tell the user the outcome in \
 spoken language. If a tool fails, apologize briefly and suggest an alternative.

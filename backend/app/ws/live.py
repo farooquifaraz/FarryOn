@@ -84,9 +84,17 @@ async def ws_live(websocket: WebSocket) -> None:
     engine = ToolEngine.from_tools(
         build_default_tools(), timeout_seconds=settings.tool_timeout_seconds
     )
-    gateway = build_gateway(engine.export_schemas(), settings)
+    schemas = engine.export_schemas()
+
+    def gateway_factory(provider: str | None):
+        """Build a gateway for the provider the client requested in hello."""
+        return build_gateway(schemas, settings, provider=provider)
+
     session = Session(
-        websocket, gateway=gateway, engine=engine, settings=settings
+        websocket,
+        gateway_factory=gateway_factory,
+        engine=engine,
+        settings=settings,
     )
     try:
         await session.run()

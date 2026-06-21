@@ -63,6 +63,10 @@ class GeminiGateway(AIGateway):
         self._recv_task: asyncio.Task[None] | None = None
         self._audio_open = False
         self._closed = False
+        # Cumulative per-turn transcripts (deltas are appended; the client
+        # replaces the live line with each cumulative emit, then finalizes).
+        self._assistant_buf = ""
+        self._user_buf = ""
 
     def _build_config(self) -> Any:
         """Construct the ``LiveConnectConfig`` with tools + system prompt."""
@@ -76,13 +80,43 @@ class GeminiGateway(AIGateway):
             )
             for t in self.tools
         ]
-        return types.LiveConnectConfig(
+        config_kwargs: dict[str, Any] = dict(
             response_modalities=["AUDIO"],
             system_instruction=types.Content(
                 parts=[types.Part(text=self.system_prompt)]
             ),
             tools=[types.Tool(function_declarations=function_declarations)],
+            # Ask the provider for word-level transcripts of BOTH sides. On a
+            # native-audio model the spoken words arrive here — NOT as
+            # ``model_turn.parts[].text`` (which is the model's private
+            # reasoning). Without this we have no clean transcript to show.
+            input_audio_transcription=types.AudioTranscriptionConfig(),
+            output_audio_transcription=types.AudioTranscriptionConfig(),
         )
+        # Keep the model's chain-of-thought OUT of the response stream so it can
+        # never leak into the on-screen transcript. Guarded: a model/SDK that
+        # rejects ``thinking_config`` still connects (we just skip thoughts in
+        # the receive loop instead).
+        try:
+            config_kwargs["thinking_config"] = types.ThinkingConfig(
+                include_thoughts=False
+            )
+        except Exception:  # noqa: BLE001 - field optional across SDK versions
+            pass
+        # Hands-free: use the model's AUTOMATIC voice activity detection so the
+        # user never has to press a button — they just talk. Echo (the model
+        # hearing its own spoken reply) is prevented on the client, which stops
+        # streaming mic audio while the assistant is speaking (half-duplex), so
+        # automatic VAD never re-triggers on the TTS.
+        try:
+            config_kwargs["realtime_input_config"] = types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    disabled=False,
+                ),
+            )
+        except Exception:  # noqa: BLE001 - field optional across SDK versions
+            pass
+        return types.LiveConnectConfig(**config_kwargs)
 
     async def connect(self) -> None:
         """Open the Gemini Live session and start the receive loop.
@@ -180,10 +214,26 @@ class GeminiGateway(AIGateway):
         )
 
     async def _receive_loop(self) -> None:
-        """Translate the provider stream into gateway events."""
+        """Translate the provider stream into gateway events.
+
+        ``session.receive()`` yields the messages for a SINGLE model turn and
+        then completes — the SDK breaks the iterator after ``turn_complete``.
+        To keep a multi-turn conversation alive we must call it again for every
+        subsequent turn, so the inner ``async for`` is wrapped in an outer loop
+        that runs until the gateway is closed or the upstream errors. Without
+        this the session ends after the first reply and later turns get no
+        response.
+        """
         try:
-            async for message in self._session.receive():
-                await self._handle_message(message)
+            while not self._closed:
+                saw_message = False
+                async for message in self._session.receive():
+                    saw_message = True
+                    await self._handle_message(message)
+                if not saw_message:
+                    # An exhausted/empty turn means the upstream session ended;
+                    # stop instead of spinning on a dead receive().
+                    break
         except asyncio.CancelledError:  # pragma: no cover - cancellation path
             raise
         except Exception as exc:  # pragma: no cover - network/runtime
@@ -207,16 +257,39 @@ class GeminiGateway(AIGateway):
                             self._audio_open = True
                             await self._queue.put(AudioStartEvent())
                         await self._queue.put(AudioChunkEvent(pcm=inline.data))
-                    text = getattr(part, "text", None)
-                    if text:
-                        await self._queue.put(
-                            TranscriptEvent(role="assistant", text=text)
-                        )
-            if getattr(server_content, "turn_complete", False):
-                if self._audio_open:
-                    self._audio_open = False
-                    await self._queue.put(AudioEndEvent())
-                await self._queue.put(TurnCompleteEvent())
+                    # ``part.text`` here is the model's private reasoning, not
+                    # the words it speaks. We deliberately do NOT surface it —
+                    # the spoken transcript comes from ``output_transcription``.
+
+            # User speech → assistant speech transcripts (cumulative deltas).
+            in_tx = getattr(server_content, "input_transcription", None)
+            in_text = getattr(in_tx, "text", None) if in_tx else None
+            if in_text:
+                self._user_buf += in_text
+                await self._queue.put(
+                    TranscriptEvent(
+                        role="user", text=self._user_buf, final=False
+                    )
+                )
+
+            out_tx = getattr(server_content, "output_transcription", None)
+            out_text = getattr(out_tx, "text", None) if out_tx else None
+            if out_text:
+                self._assistant_buf += out_text
+                await self._queue.put(
+                    TranscriptEvent(
+                        role="assistant",
+                        text=self._assistant_buf,
+                        final=False,
+                    )
+                )
+
+            if getattr(server_content, "interrupted", False):
+                # Server-side barge-in: stop stale audio and finalize the
+                # partial lines, but let the model start its next turn fresh.
+                await self._finalize_turn(turn_complete=False)
+            elif getattr(server_content, "turn_complete", False):
+                await self._finalize_turn(turn_complete=True)
 
         tool_call = getattr(message, "tool_call", None)
         if tool_call is not None:
@@ -228,6 +301,33 @@ class GeminiGateway(AIGateway):
                         args=dict(getattr(fc, "args", {}) or {}),
                     )
                 )
+
+    async def _finalize_turn(self, *, turn_complete: bool) -> None:
+        """Close out the current turn: end audio, finalize transcripts.
+
+        Args:
+            turn_complete: ``True`` for a normal end-of-turn (emits
+                ``TurnComplete`` so the client returns to *listening*);
+                ``False`` for a server-side interruption, where the model
+                immediately begins a fresh turn.
+        """
+        if self._audio_open:
+            self._audio_open = False
+            await self._queue.put(AudioEndEvent())
+        if self._user_buf:
+            await self._queue.put(
+                TranscriptEvent(role="user", text=self._user_buf, final=True)
+            )
+            self._user_buf = ""
+        if self._assistant_buf:
+            await self._queue.put(
+                TranscriptEvent(
+                    role="assistant", text=self._assistant_buf, final=True
+                )
+            )
+            self._assistant_buf = ""
+        if turn_complete:
+            await self._queue.put(TurnCompleteEvent())
 
     async def send_audio(self, pcm: bytes, ts_ms: int | None = None) -> None:
         """Stream input audio to the live session."""
@@ -247,6 +347,26 @@ class GeminiGateway(AIGateway):
 
         await self._session.send_realtime_input(
             video=types.Blob(data=jpeg, mime_type=_VIDEO_MIME)
+        )
+
+    async def send_activity_start(self) -> None:
+        """Open a manual activity window — the user started speaking."""
+        if self._session is None:
+            return
+        from google.genai import types  # type: ignore[import-not-found]
+
+        await self._session.send_realtime_input(
+            activity_start=types.ActivityStart()
+        )
+
+    async def send_activity_end(self) -> None:
+        """Close the manual activity window — the user stopped; reply now."""
+        if self._session is None:
+            return
+        from google.genai import types  # type: ignore[import-not-found]
+
+        await self._session.send_realtime_input(
+            activity_end=types.ActivityEnd()
         )
 
     async def send_text(self, text: str) -> None:
@@ -286,11 +406,20 @@ class GeminiGateway(AIGateway):
 
         Gemini Live performs server-side VAD interruption when new input audio
         arrives; there is no explicit cancel call, so we drop locally buffered
-        output to stop forwarding stale audio immediately.
+        output to stop forwarding stale audio immediately and reset the partial
+        transcript so the next turn starts clean.
         """
+        self._user_buf = ""
         if self._audio_open:
             self._audio_open = False
             await self._queue.put(AudioEndEvent())
+        if self._assistant_buf:
+            await self._queue.put(
+                TranscriptEvent(
+                    role="assistant", text=self._assistant_buf, final=True
+                )
+            )
+            self._assistant_buf = ""
 
     async def close(self) -> None:
         """Tear down the receive task and live session (idempotent)."""

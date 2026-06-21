@@ -49,10 +49,17 @@ class FakeCaptureSource implements CaptureSource {
   @override
   Future<void> stopVideo() async => videoStarted = false;
   @override
+  Future<void> setPortrait(bool portrait) async => this.portrait = portrait;
+  @override
+  Future<double> setZoom(double level) async => zoom = level;
+  @override
   Future<void> dispose() async {
     await audioCtl.close();
     await videoCtl.close();
   }
+
+  bool portrait = true;
+  double zoom = 1.0;
 }
 
 /// PcmPlayer test double that records feed/flush without touching audio HW.
@@ -184,7 +191,7 @@ void main() {
     expect(player.fed.single, equals(Uint8List.fromList([1, 1, 1])));
   });
 
-  test('mic tap while speaking triggers barge-in (interrupt + flush)',
+  test('interrupt while speaking flushes playback + sends interrupt',
       () async {
     await controller.connect();
     await tick();
@@ -194,7 +201,8 @@ void main() {
     await tick();
     expect(controller.state.liveState, LiveState.speaking);
 
-    await controller.startListening();
+    // Hands-free: barge-in is the stop control, which calls interrupt().
+    await controller.interrupt();
     await tick();
 
     expect(player.flushCount, greaterThanOrEqualTo(1));
@@ -202,6 +210,12 @@ void main() {
         .whereType<String>()
         .any((s) => s.contains('"type":"interrupt"'));
     expect(hasInterrupt, isTrue);
+  });
+
+  test('mic auto-opens on connect (hands-free)', () async {
+    await controller.connect();
+    await tick();
+    expect(controller.state.micOpen, isTrue);
   });
 
   test('tool_call then tool_result update tool activity', () async {

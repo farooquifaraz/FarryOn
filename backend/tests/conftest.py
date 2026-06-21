@@ -22,16 +22,39 @@ import pytest_asyncio
 # and data. Combined with NullPool in app.db.base this avoids cross-loop pooled
 # connection teardown hangs while keeping the suite fully offline.
 _TMP_DB = Path(tempfile.gettempdir()) / "farryon_pytest.db"
-_TMP_DB.unlink(missing_ok=True)
+
+
+def _safe_unlink(path: Path) -> None:
+    """Delete ``path`` if possible, tolerating a Windows file lock.
+
+    aiosqlite's worker thread may still hold the handle for a moment after the
+    threaded TestClient loop closes; on Windows that makes ``unlink`` raise
+    :class:`PermissionError`. The stale file is harmless and is recreated on the
+    next run, so a failed delete must never fail the suite.
+    """
+    try:
+        path.unlink(missing_ok=True)
+    except (PermissionError, OSError):
+        pass
+
+
+_safe_unlink(_TMP_DB)
 
 # Set environment *before* importing application modules that read settings.
 os.environ.setdefault("AI_PROVIDER", "mock")
 os.environ.setdefault("WEB_SEARCH_PROVIDER", "mock")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_TMP_DB}")
-os.environ.pop("GEMINI_API_KEY", None)
-os.environ.pop("OPENAI_API_KEY", None)
-os.environ.pop("WEB_SEARCH_API_KEY", None)
+# Force every provider key empty. We *set* (not pop) them so that an operator's
+# real keys in a local ``.env`` file cannot leak in — an os.environ value
+# overrides the dotenv file, keeping the suite fully offline and deterministic.
+for _key in (
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "GROK_API_KEY",
+    "WEB_SEARCH_API_KEY",
+):
+    os.environ[_key] = ""
 
 from app.config import get_settings  # noqa: E402
 from app.db import base as db_base  # noqa: E402
@@ -43,7 +66,7 @@ def _settings_cache_reset() -> AsyncIterator[None]:
     """Ensure cached settings reflect the test env; clean up the DB file."""
     get_settings.cache_clear()
     yield
-    _TMP_DB.unlink(missing_ok=True)
+    _safe_unlink(_TMP_DB)
 
 
 @pytest_asyncio.fixture(autouse=True)

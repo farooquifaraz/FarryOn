@@ -30,6 +30,9 @@ dependencies:
   # Permissions for mic + camera.
   permission_handler: ^11.3.1
 
+  # Persist backend/provider settings across launches.
+  shared_preferences: ^2.2.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

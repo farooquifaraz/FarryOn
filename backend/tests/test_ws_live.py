@@ -187,6 +187,47 @@ def test_interrupt_resets_state() -> None:
             assert any(s["value"] == "listening" for s in states)
 
 
+def _hello(provider: str | None = None) -> dict:
+    msg = {
+        "type": "hello",
+        "protocolVersion": 1,
+        "client": {"platform": "android", "appVersion": "1.0.0"},
+        "device": {"kind": "phone", "id": "d", "capabilities": []},
+        "session": {},
+    }
+    if provider is not None:
+        msg["provider"] = provider
+    return msg
+
+
+def test_provider_selection_builds_requested_gateway() -> None:
+    """hello.provider actually picks the gateway.
+
+    Requesting ``gemini`` with no API key configured makes that gateway fail to
+    connect — proving the *requested* provider was built, not the mock default
+    (which would have succeeded).
+    """
+    app = create_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/live") as ws:
+            ws.send_json(_hello(provider="gemini"))
+            msg = ws.receive_json()
+            assert msg["type"] == "error"
+            assert msg["code"] == "provider_unavailable"
+            assert msg["fatal"] is True
+
+
+def test_invalid_provider_falls_back_to_default() -> None:
+    """An unknown provider falls back to the server default (mock) and works."""
+    app = create_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/live") as ws:
+            ws.send_json(_hello(provider="bogus-xyz"))
+            ready = ws.receive_json()
+            assert ready["type"] == "ready"
+            assert ready["model"]
+
+
 def test_bad_first_message_is_rejected() -> None:
     """A non-hello first message yields an error and closes the session."""
     app = create_app()

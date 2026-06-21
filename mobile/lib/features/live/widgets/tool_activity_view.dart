@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/theme.dart';
 import '../../../protocol/protocol.dart';
 import '../../../state/live_state.dart';
 
@@ -51,11 +52,11 @@ class _ToolCard extends StatelessWidget {
 
     return Container(
       width: 230,
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.all(11),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
+        color: Aurora.glass,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Aurora.glassBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -63,7 +64,7 @@ class _ToolCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(spec.icon, size: 16, color: theme.colorScheme.primary),
+              Icon(spec.icon, size: 16, color: Aurora.mint),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -101,13 +102,13 @@ class _ToolCard extends StatelessWidget {
 
   (Color, IconData, String) _status(ThemeData theme) {
     if (activity.isPending) {
-      return (theme.colorScheme.outline, Icons.hourglass_top, 'Running…');
+      return (Aurora.amber, Icons.hourglass_top, 'Running…');
     }
     if (activity.ok == true) {
-      return (Colors.green, Icons.check_circle, 'Done');
+      return (Aurora.mint, Icons.check_circle, 'Done');
     }
     return (
-      theme.colorScheme.error,
+      Aurora.danger,
       Icons.error,
       activity.error ?? 'Failed',
     );
@@ -138,6 +139,12 @@ class _ToolCard extends StatelessWidget {
           'Message',
           Icons.send,
           (a) => 'To ${a['contact'] ?? '?'}: ${a['text'] ?? ''}',
+        );
+      case 'set_camera_zoom':
+        return _ToolSpec(
+          'Zoom',
+          Icons.zoom_in,
+          (a) => 'Zoom to ${a['level'] ?? '?'}x',
         );
       default:
         return _ToolSpec(name, Icons.build, (a) => a.toString());

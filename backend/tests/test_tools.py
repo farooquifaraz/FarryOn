@@ -2,14 +2,114 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import httpx
 from sqlalchemy import select
 
 from app.db.models import Note, OutboundMessage, Task
 from app.tools.base import ToolContext
+from app.tools.camera import SetCameraZoomTool
 from app.tools.messaging import SendMessageTool
 from app.tools.notes import CreateNoteTool
 from app.tools.tasks import CreateTaskTool
 from app.tools.web_search import WebSearchTool
+
+
+async def test_set_camera_zoom_clamps_and_acknowledges(db_session) -> None:
+    ctx = ToolContext(session=db_session)
+    tool = SetCameraZoomTool()
+
+    assert (await tool.run(ctx, level=2.5)) == {"applied": True, "zoom": 2.5}
+    # Clamps below 1.0 and above the 8.0 ceiling.
+    assert (await tool.run(ctx, level=0.2))["zoom"] == 1.0
+    assert (await tool.run(ctx, level=99))["zoom"] == 8.0
+    # Tolerates a non-numeric argument rather than raising.
+    assert (await tool.run(ctx, level="x"))["zoom"] == 1.0
+
+
+async def test_web_search_falls_back_when_primary_exhausted(monkeypatch) -> None:
+    """When the primary provider 429s, the fallback provider is used."""
+    from app.tools import web_search as ws_mod
+
+    monkeypatch.setattr(
+        ws_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            web_search_provider="tavily",
+            web_search_api_key="primary",
+            web_search_fallback_provider="serper",
+            web_search_fallback_api_key="fallback",
+        ),
+    )
+
+    tool = WebSearchTool()
+
+    async def _exhausted(query: str, key: str):
+        raise httpx.HTTPStatusError(
+            "429 Too Many Requests",
+            request=httpx.Request("POST", "https://api.tavily.com/search"),
+            response=httpx.Response(429),
+        )
+
+    async def _ok(query: str, key: str):
+        return [{"title": "Fallback hit", "url": "u", "snippet": "s"}]
+
+    monkeypatch.setattr(tool, "_tavily", _exhausted)
+    monkeypatch.setattr(tool, "_serper", _ok)
+
+    out = await tool.run(ToolContext(session=None), query="weather")
+    assert out["provider"] == "serper"
+    assert out["results"][0]["title"] == "Fallback hit"
+
+
+async def test_web_search_mock_when_no_keys(monkeypatch) -> None:
+    """With no keys configured, deterministic mock results are returned."""
+    from app.tools import web_search as ws_mod
+
+    monkeypatch.setattr(
+        ws_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            web_search_provider="tavily",
+            web_search_api_key=None,
+            web_search_fallback_provider=None,
+            web_search_fallback_api_key=None,
+        ),
+    )
+    out = await WebSearchTool().run(ToolContext(session=None), query="x")
+    assert out["provider"] == "mock"
+    assert out["results"]
+
+
+async def test_web_search_per_session_override(monkeypatch) -> None:
+    """A per-session web-search config (from the client) overrides env."""
+    from app.tools import web_search as ws_mod
+
+    # Server env is mock/no-key, but the client supplies a Tavily key.
+    monkeypatch.setattr(
+        ws_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            web_search_provider="mock",
+            web_search_api_key=None,
+            web_search_fallback_provider=None,
+            web_search_fallback_api_key=None,
+        ),
+    )
+    tool = WebSearchTool()
+
+    async def _ok(query: str, key: str):
+        return [{"title": "session-result", "url": "u", "snippet": "s"}]
+
+    monkeypatch.setattr(tool, "_tavily", _ok)
+
+    ctx = ToolContext(
+        session=None, web_search={"provider": "tavily", "apiKey": "k"}
+    )
+    out = await tool.run(ctx, query="weather")
+    assert out["provider"] == "tavily"
+    assert out["results"][0]["title"] == "session-result"
 
 
 async def test_create_note_persists(db_session) -> None:

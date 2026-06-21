@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import json
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -62,12 +63,15 @@ class Session:
         self,
         websocket: WebSocket,
         *,
-        gateway: AIGateway,
+        gateway_factory: Callable[[str | None], AIGateway],
         engine: ToolEngine,
         settings: Settings,
     ) -> None:
         self._ws = websocket
-        self._gateway = gateway
+        # The gateway is built AFTER the handshake, once we know which provider
+        # the client asked for (hello.provider) — see :meth:`_resolve_provider`.
+        self._gateway_factory = gateway_factory
+        self._gateway: AIGateway | None = None
         self._engine = engine
         self._settings = settings
 
@@ -91,6 +95,10 @@ class Session:
             if not await self._handshake():
                 reason = "handshake_failed"
                 return
+
+            # Now that hello has arrived, build the gateway for the requested
+            # provider (or the server default) and connect it.
+            self._gateway = self._gateway_factory(self._resolve_provider())
 
             try:
                 await self._gateway.connect()
@@ -118,6 +126,7 @@ class Session:
             )
             await self._send_state("listening")
 
+            web_search = (self._hello or {}).get("webSearch")
             self._orchestrator = Orchestrator(
                 engine=self._engine,
                 gateway=self._gateway,
@@ -125,6 +134,7 @@ class Session:
                 notify_client=self._send_json,
                 session_id=self.session_id,
                 user_id=self._user_id,
+                web_search=web_search if isinstance(web_search, dict) else None,
             )
 
             read_task = asyncio.create_task(self._read_pump(), name="read_pump")
@@ -157,6 +167,32 @@ class Session:
             )
         finally:
             await self._cleanup(reason)
+
+    # -- Provider selection ---------------------------------------------------
+
+    def _resolve_provider(self) -> str | None:
+        """Pick the provider from ``hello.provider`` if allowed, else default.
+
+        Returns ``None`` to let the factory fall back to ``settings.ai_provider``
+        (the server default) when the client did not request a valid provider.
+        """
+        requested = (self._hello or {}).get("provider")
+        if isinstance(requested, str):
+            requested = requested.strip().lower()
+            if requested in self._settings.allowed_providers:
+                logger.info(
+                    "provider.selected",
+                    session_id=self.session_id,
+                    provider=requested,
+                )
+                return requested
+            if requested:
+                logger.warning(
+                    "provider.not_allowed",
+                    session_id=self.session_id,
+                    requested=requested,
+                )
+        return None
 
     # -- Handshake ------------------------------------------------------------
 
@@ -265,9 +301,10 @@ class Session:
                 await self._gateway.send_text(text)
                 await repo_safe_transcript(self.session_id, "user", text)
         elif mtype == "audio_start":
+            # Mic (un)muted — automatic VAD on the provider handles turn-taking.
             await self._send_state("listening")
         elif mtype == "audio_stop":
-            await self._send_state("thinking")
+            await self._send_state("idle")
         elif mtype == "interrupt":
             await self._handle_interrupt()
         elif mtype == "ping":
@@ -437,8 +474,9 @@ class Session:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
 
-        with contextlib.suppress(Exception):
-            await self._gateway.close()
+        if self._gateway is not None:
+            with contextlib.suppress(Exception):
+                await self._gateway.close()
 
         sessionmaker = get_sessionmaker()
         async with sessionmaker() as db:

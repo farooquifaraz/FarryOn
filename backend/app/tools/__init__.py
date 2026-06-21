@@ -7,6 +7,7 @@ the assistant can call. The names here MUST match ``PROTOCOL.md`` exactly.
 from __future__ import annotations
 
 from app.tools.base import Tool
+from app.tools.camera import SetCameraZoomTool
 from app.tools.messaging import SendMessageTool
 from app.tools.notes import CreateNoteTool
 from app.tools.tasks import CreateTaskTool
@@ -16,6 +17,7 @@ __all__ = [
     "CreateNoteTool",
     "CreateTaskTool",
     "SendMessageTool",
+    "SetCameraZoomTool",
     "WebSearchTool",
     "build_default_tools",
 ]
@@ -33,4 +35,5 @@ def build_default_tools() -> list[Tool]:
         WebSearchTool(),
         CreateTaskTool(),
         SendMessageTool(),
+        SetCameraZoomTool(),
     ]

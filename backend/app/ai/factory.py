@@ -28,25 +28,29 @@ def build_gateway(
     tool_schemas: list[dict],
     settings: Settings | None = None,
     *,
+    provider: str | None = None,
     system_prompt: str = SYSTEM_PROMPT,
 ) -> AIGateway:
-    """Construct the configured gateway.
+    """Construct a gateway for the given (or configured) provider.
 
     Args:
         tool_schemas: Tool schemas (from ``ToolEngine.export_schemas``) to
             expose to the model for function calling.
         settings: Settings to use (defaults to the cached global settings).
+        provider: Provider to build (``gemini`` | ``openai`` | ``grok`` |
+            ``mock``). When ``None`` falls back to ``settings.ai_provider`` —
+            this is how a client picks its provider per-session.
         system_prompt: System instruction for the assistant.
 
     Returns:
         An unconnected :class:`AIGateway`. Call ``await gateway.connect()``.
 
     Raises:
-        ValueError: If ``AI_PROVIDER`` is not a recognized value.
+        ValueError: If the provider is not a recognized value.
     """
     settings = settings or get_settings()
     tools = _to_tool_specs(tool_schemas)
-    provider = settings.ai_provider
+    provider = (provider or settings.ai_provider).lower()
 
     if provider == "mock":
         from app.ai.mock import MockGateway
@@ -63,4 +67,9 @@ def build_gateway(
 
         return OpenAIRealtimeGateway(system_prompt=system_prompt, tools=tools)
 
-    raise ValueError(f"unknown AI_PROVIDER: {provider!r}")
+    if provider == "grok":
+        from app.ai.grok import GrokRealtimeGateway
+
+        return GrokRealtimeGateway(system_prompt=system_prompt, tools=tools)
+
+    raise ValueError(f"unknown AI provider: {provider!r}")
