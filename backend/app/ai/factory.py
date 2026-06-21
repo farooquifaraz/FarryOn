@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from app.ai.base import AIGateway, ToolSpec
 from app.config import Settings, get_settings
-from app.prompts.system import SYSTEM_PROMPT
+from app.prompts.system import build_system_prompt
 
 
 def _to_tool_specs(schemas: list[dict]) -> list[ToolSpec]:
@@ -29,7 +29,7 @@ def build_gateway(
     settings: Settings | None = None,
     *,
     provider: str | None = None,
-    system_prompt: str = SYSTEM_PROMPT,
+    system_prompt: str | None = None,
 ) -> AIGateway:
     """Construct a gateway for the given (or configured) provider.
 
@@ -51,6 +51,8 @@ def build_gateway(
     settings = settings or get_settings()
     tools = _to_tool_specs(tool_schemas)
     provider = (provider or settings.ai_provider).lower()
+    if system_prompt is None:
+        system_prompt = build_system_prompt()
 
     if provider == "mock":
         from app.ai.mock import MockGateway

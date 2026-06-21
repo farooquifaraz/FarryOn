@@ -209,6 +209,7 @@ class WebSocketLiveClient {
       device: device,
       resumeId: _resumeId,
       provider: _config.provider,
+      clientTime: _localTimeIso(),
       // Only send web-search config when the user supplied a primary key,
       // otherwise let the backend use its own env settings.
       webSearch: (wsKey != null && wsKey.isNotEmpty)
@@ -221,6 +222,19 @@ class WebSocketLiveClient {
           : null,
     ));
     send(const ConfigMessage());
+  }
+
+  /// Local date-time as ISO-8601 with the device's UTC offset, e.g.
+  /// `2026-06-21T22:30:00+05:30` — so the backend can resolve reminder times.
+  static String _localTimeIso() {
+    final now = DateTime.now();
+    final off = now.timeZoneOffset;
+    final sign = off.isNegative ? '-' : '+';
+    final hh = off.inHours.abs().toString().padLeft(2, '0');
+    final mm = (off.inMinutes.abs() % 60).toString().padLeft(2, '0');
+    final base = now.toIso8601String();
+    final noMillis = base.contains('.') ? base.split('.').first : base;
+    return '$noMillis$sign$hh:$mm';
   }
 
   void _onSocketData(dynamic data) {

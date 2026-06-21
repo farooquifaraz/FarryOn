@@ -86,9 +86,11 @@ async def ws_live(websocket: WebSocket) -> None:
     )
     schemas = engine.export_schemas()
 
-    def gateway_factory(provider: str | None):
-        """Build a gateway for the provider the client requested in hello."""
-        return build_gateway(schemas, settings, provider=provider)
+    def gateway_factory(provider: str | None, system_prompt: str | None):
+        """Build a gateway for the provider/prompt resolved from hello."""
+        return build_gateway(
+            schemas, settings, provider=provider, system_prompt=system_prompt
+        )
 
     session = Session(
         websocket,

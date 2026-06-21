@@ -6,6 +6,7 @@ import '../capture/capture_source.dart';
 import '../capture/device_registry.dart';
 import '../core/config.dart';
 import '../core/logger.dart';
+import '../core/notifications.dart';
 import '../data/live_client.dart';
 import '../playback/pcm_player.dart';
 import '../protocol/frames.dart';
@@ -277,6 +278,32 @@ class LiveController {
       ));
     }
     _emit(_state.copyWith(tools: list));
+    _applyReminder(msg);
+  }
+
+  /// Schedule, reschedule, or cancel the phone reminder for a task whose
+  /// create/update/complete/delete tool just ran. The notification id is the
+  /// backend task id so it stays in sync.
+  void _applyReminder(ToolResultMessage msg) {
+    if (!msg.ok) return;
+    final res = msg.result;
+    final id = (res?['id'] as num?)?.toInt();
+    if (id == null) return;
+    switch (msg.name) {
+      case 'create_task':
+      case 'update_task':
+        final due = res?['due_date'] as String?;
+        final title = (res?['title'] as String?) ?? 'Reminder';
+        if (due != null && due.isNotEmpty) {
+          final when = DateTime.tryParse(due);
+          if (when != null) {
+            unawaited(Notifications.schedule(id: id, body: title, when: when));
+          }
+        }
+      case 'complete_task':
+      case 'delete_task':
+        unawaited(Notifications.cancel(id));
+    }
   }
 
   // ---- Mic (push-to-talk / toggle) --------------------------------------

@@ -11,16 +11,26 @@ from app.tools.camera import SetCameraZoomTool
 from app.tools.messaging import SendMessageTool
 from app.tools.notes import CreateNoteTool
 from app.tools.recall import ListNotesTool, ListTasksTool
+from app.tools.task_manage import (
+    CompleteTaskTool,
+    DeleteNoteTool,
+    DeleteTaskTool,
+    UpdateTaskTool,
+)
 from app.tools.tasks import CreateTaskTool
 from app.tools.web_search import WebSearchTool
 
 __all__ = [
+    "CompleteTaskTool",
     "CreateNoteTool",
     "CreateTaskTool",
+    "DeleteNoteTool",
+    "DeleteTaskTool",
     "ListNotesTool",
     "ListTasksTool",
     "SendMessageTool",
     "SetCameraZoomTool",
+    "UpdateTaskTool",
     "WebSearchTool",
     "build_default_tools",
 ]
@@ -41,4 +51,8 @@ def build_default_tools() -> list[Tool]:
         SetCameraZoomTool(),
         ListNotesTool(),
         ListTasksTool(),
+        CompleteTaskTool(),
+        UpdateTaskTool(),
+        DeleteTaskTool(),
+        DeleteNoteTool(),
     ]

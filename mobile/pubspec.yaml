@@ -36,6 +36,10 @@ dependencies:
   # REST calls for the Notes/Tasks view.
   http: ^1.2.0
 
+  # Local notifications for reminders (fire at a task's due time).
+  flutter_local_notifications: ^18.0.1
+  timezone: ^0.9.4
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

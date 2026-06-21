@@ -45,6 +45,7 @@ from app.ai.events import (
 )
 from app.config import Settings
 from app.db import repo
+from app.prompts.system import build_system_prompt
 from app.db.base import get_sessionmaker
 from app.logging_conf import get_logger
 from app.observability import metrics
@@ -63,7 +64,7 @@ class Session:
         self,
         websocket: WebSocket,
         *,
-        gateway_factory: Callable[[str | None], AIGateway],
+        gateway_factory: Callable[[str | None, str | None], AIGateway],
         engine: ToolEngine,
         settings: Settings,
     ) -> None:
@@ -97,8 +98,15 @@ class Session:
                 return
 
             # Now that hello has arrived, build the gateway for the requested
-            # provider (or the server default) and connect it.
-            self._gateway = self._gateway_factory(self._resolve_provider())
+            # provider (or the server default), giving the model the user's
+            # local time so reminders resolve in their timezone.
+            client_time = (self._hello or {}).get("clientTime")
+            prompt = build_system_prompt(
+                client_time if isinstance(client_time, str) else None
+            )
+            self._gateway = self._gateway_factory(
+                self._resolve_provider(), prompt
+            )
 
             try:
                 await self._gateway.connect()

@@ -15,6 +15,18 @@ def _engine() -> ToolEngine:
     return ToolEngine.from_tools(build_default_tools())
 
 
+def test_build_system_prompt_carries_time_context() -> None:
+    """The prompt gives the model 'now' so it can resolve reminder times."""
+    from app.prompts.system import build_system_prompt
+
+    local = build_system_prompt("2026-06-21T22:30:00+05:30")
+    assert "2026-06-21T22:30:00+05:30" in local
+    assert "LOCAL" in local  # instructs it to use the user's timezone
+
+    utc = build_system_prompt(None)
+    assert "UTC" in utc
+
+
 def test_export_schemas_matches_protocol() -> None:
     """Exported schemas must match the canonical PROTOCOL.md definitions."""
     schemas = {s["name"]: s for s in _engine().export_schemas()}
@@ -26,6 +38,10 @@ def test_export_schemas_matches_protocol() -> None:
         "set_camera_zoom",
         "list_notes",
         "list_tasks",
+        "complete_task",
+        "update_task",
+        "delete_task",
+        "delete_note",
     }
 
     assert schemas["create_note"]["parameters"] == {

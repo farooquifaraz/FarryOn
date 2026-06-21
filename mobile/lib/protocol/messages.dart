@@ -39,6 +39,7 @@ class HelloMessage extends ClientMessage {
     this.resumeId,
     this.provider,
     this.webSearch,
+    this.clientTime,
   });
 
   /// `"android"` or `"ios"`.
@@ -58,6 +59,11 @@ class HelloMessage extends ClientMessage {
   /// fallbackApiKey}`); omitted when null so the backend uses its env settings.
   final Map<String, dynamic>? webSearch;
 
+  /// The device's current local date-time as ISO-8601 with offset (e.g.
+  /// `2026-06-21T22:30:00+05:30`). Lets the model resolve relative reminder
+  /// times ("tomorrow at 5pm") in the user's timezone.
+  final String? clientTime;
+
   @override
   String get type => MsgType.hello;
 
@@ -70,6 +76,7 @@ class HelloMessage extends ClientMessage {
         'session': {'resumeId': resumeId},
         if (provider != null) 'provider': provider,
         if (webSearch != null) 'webSearch': webSearch,
+        if (clientTime != null) 'clientTime': clientTime,
       };
 }
 

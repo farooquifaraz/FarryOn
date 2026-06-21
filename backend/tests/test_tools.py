@@ -46,6 +46,45 @@ async def test_list_notes_and_tasks_recall_tools(db_session) -> None:
     assert tasks["tasks"][0]["done"] is False
 
 
+async def test_task_management_tools_by_name(db_session) -> None:
+    from app.tools.task_manage import (
+        CompleteTaskTool,
+        DeleteNoteTool,
+        DeleteTaskTool,
+        UpdateTaskTool,
+    )
+
+    ctx = ToolContext(session=db_session)
+    created = await CreateTaskTool().run(
+        ctx, title="Call the dentist", due_date="2026-07-01T09:00:00"
+    )
+    await db_session.commit()
+
+    # Complete by a word from the title.
+    r = await CompleteTaskTool().run(ctx, task="dentist")
+    assert r["ok"] is True and r["id"] == created["id"] and r["done"] is True
+
+    # Edit the reminder time.
+    r = await UpdateTaskTool().run(
+        ctx, task="dentist", due_date="2026-07-02T10:00:00"
+    )
+    assert r["ok"] is True and r["due_date"] == "2026-07-02T10:00:00"
+
+    # Unknown item → graceful not-found.
+    r = await CompleteTaskTool().run(ctx, task="does-not-exist-xyz")
+    assert r["ok"] is False
+
+    # Delete the task.
+    r = await DeleteTaskTool().run(ctx, task="dentist")
+    assert r["ok"] is True and r["deleted"] is True
+
+    # Delete a note by its text.
+    await CreateNoteTool().run(ctx, text="grocery list: milk and eggs")
+    await db_session.commit()
+    r = await DeleteNoteTool().run(ctx, text="grocery")
+    assert r["ok"] is True and r["deleted"] is True
+
+
 async def test_web_search_falls_back_when_primary_exhausted(monkeypatch) -> None:
     """When the primary provider 429s, the fallback provider is used."""
     from app.tools import web_search as ws_mod

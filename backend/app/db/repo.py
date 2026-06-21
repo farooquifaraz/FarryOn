@@ -131,6 +131,56 @@ async def list_tasks(
     return list((await session.execute(stmt)).scalars().all())
 
 
+async def find_task(
+    session: AsyncSession, *, query: str, user_id: int | None = None
+) -> Task | None:
+    """Find the best task matching ``query`` by title (open ones first).
+
+    Case-insensitive substring match — lets the model act on a task by name
+    ("the dentist task") without knowing its id.
+    """
+    stmt = (
+        select(Task)
+        .where(Task.title.ilike(f"%{query.strip()}%"))
+        .order_by(Task.done.asc(), Task.created_at.desc())
+    )
+    if user_id is not None:
+        stmt = stmt.where(Task.user_id == user_id)
+    return (await session.execute(stmt)).scalars().first()
+
+
+async def find_note(
+    session: AsyncSession, *, query: str, user_id: int | None = None
+) -> Note | None:
+    """Find the most recent note whose text matches ``query``."""
+    stmt = (
+        select(Note)
+        .where(Note.text.ilike(f"%{query.strip()}%"))
+        .order_by(Note.created_at.desc())
+    )
+    if user_id is not None:
+        stmt = stmt.where(Note.user_id == user_id)
+    return (await session.execute(stmt)).scalars().first()
+
+
+async def update_task(
+    session: AsyncSession,
+    *,
+    task_id: int,
+    title: str | None = None,
+    due_date: str | None = None,
+) -> Task | None:
+    """Update a task's title and/or due date; returns the row or None."""
+    task = await session.get(Task, task_id)
+    if task is not None:
+        if title is not None:
+            task.title = title
+        if due_date is not None:
+            task.due_date = due_date
+        await session.flush()
+    return task
+
+
 async def set_task_done(
     session: AsyncSession, *, task_id: int, done: bool
 ) -> Task | None:
