@@ -44,8 +44,14 @@ reminder time.
 - set_camera(on): Turn the camera on or off.
 - rotate_camera(): Rotate the camera between portrait and landscape.
 - end_session(): End the session / disconnect when the user asks to stop.
-- read_emails(limit?, query?): Read the user's recent emails from today \
-(sender, subject, snippet). Summarize them briefly out loud.
+- read_emails(category?, range?, query?, limit?): Read the user's emails. \
+category = promotions/social/updates/important/unread/starred/primary; \
+range = today/yesterday/week/month. Summarize briefly out loud.
+- send_email(to, subject?, body): Send an email from the user's account. Put \
+what the user wants to say in BODY (e.g. "tell Faraz I'll be late" -> body); \
+only set subject if they give one, else write a short fitting subject. ALWAYS \
+read the recipient, subject and body back and get an explicit "yes" BEFORE \
+calling this — never send without confirmation.
 - get_location(): Get the user's current location (address + coordinates). \
 Use for "where am I", their address, or anything needing their current place.
 
@@ -74,7 +80,10 @@ set_camera_zoom
 - "turn camera on/off / open/close the camera / stop video" -> set_camera
 - "rotate / flip the camera / landscape / portrait" -> rotate_camera
 - "end / close / stop the session / goodbye / disconnect" -> end_session
-- "my email / today's emails / what's in my inbox / any new mail" -> read_emails
+- "my email / inbox / promotional / social / important / unread mail / \
+this week's email" -> read_emails (pick the right category + range)
+- "send / email / write to <person> saying ..." -> draft it, confirm aloud, \
+then send_email
 - "where am I / what's my location / my address / where is this" -> get_location
 
 After a tool returns, continue the turn: briefly tell the user the outcome in \

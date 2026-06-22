@@ -47,6 +47,7 @@ def test_export_schemas_matches_protocol() -> None:
         "rotate_camera",
         "end_session",
         "read_emails",
+        "send_email",
         "get_location",
     }
 

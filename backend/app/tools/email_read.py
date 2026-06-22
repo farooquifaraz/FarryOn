@@ -1,10 +1,15 @@
-"""``read_emails`` tool: read the user's recent mail over IMAP.
+"""``read_emails`` tool: read the user's mail over IMAP, with smart filters.
 
 The user supplies their email address + an app-specific password (e.g. a Gmail
 App Password) in the app settings; the client sends it in the ``hello`` so it
 lives only for the session and is never persisted server-side. IMAP is
-read-only here — we only fetch headers and a short snippet so the assistant can
-answer "what emails did I get today?".
+read-only here — we only fetch headers and a short snippet.
+
+Smart filtering is done **server-side** for performance: on Gmail we use the
+``X-GM-RAW`` search extension (the same query language as the Gmail search box)
+so categories / unread / important / date-ranges are resolved by Gmail and we
+only fetch the matched messages. On non-Gmail IMAP we fall back to standard
+``SINCE`` / ``UNSEEN`` search.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import email as emaillib
 import imaplib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -26,19 +31,36 @@ _DEFAULT_HOST = "imap.gmail.com"
 _MAX_LIMIT = 25
 _SNIPPET_CHARS = 200
 
+# Gmail X-GM-RAW fragments for each category / filter the user can ask for.
+_CATEGORY_GMAIL = {
+    "promotions": "category:promotions",
+    "social": "category:social",
+    "updates": "category:updates",
+    "forums": "category:forums",
+    "primary": "category:primary",
+    "important": "is:important",
+    "unread": "is:unread",
+    "starred": "is:starred",
+}
+_RANGE_GMAIL = {
+    "today": "newer_than:1d",
+    "yesterday": "newer_than:2d older_than:1d",
+    "week": "newer_than:7d",
+    "month": "newer_than:30d",
+}
+_RANGE_DAYS = {"today": 1, "yesterday": 2, "week": 7, "month": 30}
+
 
 def _decode(value: str | None) -> str:
-    """Decode an RFC 2047 encoded header into plain text."""
     if not value:
         return ""
     try:
         return str(make_header(decode_header(value))).strip()
-    except Exception:  # noqa: BLE001 - never fail a read over a bad header
+    except Exception:  # noqa: BLE001
         return value.strip()
 
 
 def _snippet(msg: emaillib.message.Message) -> str:
-    """Best-effort short text snippet from a message body."""
     try:
         if msg.is_multipart():
             for part in msg.walk():
@@ -56,30 +78,78 @@ def _snippet(msg: emaillib.message.Message) -> str:
         return ""
 
 
+def _gmail_query(category: str | None, range_: str | None, text: str | None) -> str:
+    """Build a Gmail search string from category + range + free text."""
+    parts: list[str] = []
+    if category and category in _CATEGORY_GMAIL:
+        parts.append(_CATEGORY_GMAIL[category])
+    if range_ and range_ in _RANGE_GMAIL:
+        parts.append(_RANGE_GMAIL[range_])
+    elif not range_:
+        # Default window: a week when a category is set (so there's something to
+        # show), otherwise just today.
+        parts.append("newer_than:7d" if category else "newer_than:1d")
+    if text:
+        parts.append(text.strip())
+    return " ".join(parts) or "newer_than:1d"
+
+
+def _imap_search_args(category: str | None, range_: str | None,
+                      text: str | None) -> list[str]:
+    """Standard-IMAP fallback search (non-Gmail) for category/range/text."""
+    days = _RANGE_DAYS.get(range_ or "today", 1)
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
+        "%d-%b-%Y"
+    )
+    args: list[str] = ["SINCE", since]
+    if category == "unread":
+        args.insert(0, "UNSEEN")
+    elif category == "starred" or category == "important":
+        args.insert(0, "FLAGGED")
+    if text:
+        args += ["TEXT", text]
+    return args
+
+
 def _fetch_emails(
-    host: str, address: str, password: str, limit: int, query: str | None
+    host: str,
+    address: str,
+    password: str,
+    limit: int,
+    query: str | None,
+    category: str | None,
+    range_: str | None,
 ) -> list[dict[str, Any]]:
-    """Blocking IMAP read of today's most-recent messages (run in a thread)."""
+    """Blocking IMAP read of the matching messages (run in a thread)."""
+    is_gmail = "gmail" in host or "google" in host
     imap = imaplib.IMAP4_SSL(host)
     try:
         imap.login(address, password)
         imap.select("INBOX", readonly=True)
-        # Today, in the IMAP date format (e.g. 01-Jul-2026).
-        since = datetime.now(timezone.utc).strftime("%d-%b-%Y")
-        criteria: list[str] = ["SINCE", since]
-        if query:
-            criteria += ["TEXT", query]
-        typ, data = imap.search(None, *criteria)
-        if typ != "OK" or not data or not data[0]:
+
+        ids: list[bytes] = []
+        if is_gmail:
+            gq = _gmail_query(category, range_, query)
+            typ, data = imap.search(None, "X-GM-RAW", gq)
+            if typ == "OK" and data and data[0]:
+                ids = data[0].split()
+        if not ids:
+            # Fallback (non-Gmail, or X-GM-RAW unsupported/empty).
+            typ, data = imap.search(
+                None, *_imap_search_args(category, range_, query)
+            )
+            if typ == "OK" and data and data[0]:
+                ids = data[0].split()
+        if not ids:
             return []
-        ids = data[0].split()[-limit:]  # most recent N
+
+        ids = ids[-limit:]
         out: list[dict[str, Any]] = []
         for mid in reversed(ids):  # newest first
             typ, msg_data = imap.fetch(mid, "(RFC822)")
             if typ != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
                 continue
             msg = emaillib.message_from_bytes(msg_data[0][1])
-            when = None
             try:
                 dt = parsedate_to_datetime(msg.get("Date"))
                 when = dt.isoformat() if dt else None
@@ -102,30 +172,43 @@ def _fetch_emails(
 
 
 class ReadEmailsTool(Tool):
-    """Read the user's recent (today's) emails over IMAP."""
+    """Read the user's emails over IMAP with optional category/date filters."""
 
     name = "read_emails"
     description = (
-        "Read the user's most recent emails from today (subject, sender, and a "
-        "short snippet). Use when the user asks about their email / inbox / "
-        "messages they received."
+        "Read the user's emails (sender, subject, snippet). Filter by category "
+        "(promotions, social, updates, important, unread, starred, primary) "
+        "and/or a time range (today, yesterday, week, month). Use for any "
+        "question about their inbox / mail."
     )
     parameters: dict[str, Any] = {
         "type": "object",
         "properties": {
-            "limit": {
-                "type": "integer",
-                "description": "How many recent emails to read (default 10).",
+            "category": {
+                "type": "string",
+                "enum": [
+                    "promotions", "social", "updates", "forums", "primary",
+                    "important", "unread", "starred",
+                ],
+                "description": "Which kind of emails to read.",
+            },
+            "range": {
+                "type": "string",
+                "enum": ["today", "yesterday", "week", "month"],
+                "description": "Time window (default today).",
             },
             "query": {
                 "type": "string",
-                "description": "Optional text to filter emails by.",
+                "description": "Optional sender or keyword to filter by.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "How many emails to read (default 10).",
             },
         },
     }
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
-        """Read today's emails using the session's IMAP credentials."""
         cfg = ctx.email or {}
         address = (cfg.get("address") or "").strip()
         password = (cfg.get("appPassword") or "").strip()
@@ -138,15 +221,17 @@ class ReadEmailsTool(Tool):
                     "address and app password in Settings."
                 ),
             }
-        limit = kwargs.get("limit") or 10
         try:
-            limit = max(1, min(int(limit), _MAX_LIMIT))
+            limit = max(1, min(int(kwargs.get("limit") or 10), _MAX_LIMIT))
         except (TypeError, ValueError):
             limit = 10
-        query = kwargs.get("query") or None
+        category = (kwargs.get("category") or None)
+        range_ = (kwargs.get("range") or None)
+        query = (kwargs.get("query") or None)
         try:
             emails = await asyncio.to_thread(
-                _fetch_emails, host, address, password, limit, query
+                _fetch_emails, host, address, password, limit, query,
+                category, range_,
             )
         except imaplib.IMAP4.error as exc:
             logger.warning("read_emails.auth_failed", error=str(exc))
@@ -157,7 +242,13 @@ class ReadEmailsTool(Tool):
                     "password in Settings."
                 ),
             }
-        except Exception as exc:  # noqa: BLE001 - network/parse must not crash turn
+        except Exception as exc:  # noqa: BLE001
             logger.warning("read_emails.failed", error=str(exc))
             return {"ok": False, "message": "Couldn't read email right now."}
-        return {"ok": True, "count": len(emails), "emails": emails}
+        return {
+            "ok": True,
+            "count": len(emails),
+            "category": category,
+            "range": range_ or "today",
+            "emails": emails,
+        }
