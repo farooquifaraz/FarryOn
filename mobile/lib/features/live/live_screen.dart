@@ -1051,13 +1051,23 @@ class _TranscriptOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     if (entries.isEmpty) return const SizedBox.shrink();
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      margin: const EdgeInsets.fromLTRB(10, 0, 10, 8),
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.28,
+        maxHeight: MediaQuery.of(context).size.height * 0.34,
       ),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.38),
-        borderRadius: BorderRadius.circular(16),
+        // A dark vertical gradient (no live blur — keeps it cheap) gives the
+        // text a readable backdrop over the bright camera feed.
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.black.withValues(alpha: 0.26),
+            Colors.black.withValues(alpha: 0.58),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
       child: TranscriptView(entries: entries),
     );

@@ -73,51 +73,98 @@ class _Bubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isUser = entry.isUser;
-    // Glass cards: a translucent white fill over the dark base. The user's
-    // label tints teal, the assistant's purple — the Aurora accent pair.
-    final labelColor = isUser ? Aurora.mint : Aurora.purpleSoft;
+    final streaming = !entry.isFinal;
 
-    return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.78,
+    final bubble = Container(
+      padding: const EdgeInsets.fromLTRB(14, 9, 14, 10),
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.of(context).size.width * 0.74,
+      ),
+      decoration: BoxDecoration(
+        // User bubbles get a teal-tinted fill; FarryOn a neutral glass — so the
+        // two voices read apart at a glance.
+        color: isUser
+            ? Aurora.teal.withValues(alpha: 0.22)
+            : Colors.white.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(18),
+          topRight: const Radius.circular(18),
+          bottomLeft: Radius.circular(isUser ? 18 : 6),
+          bottomRight: Radius.circular(isUser ? 6 : 18),
         ),
-        decoration: BoxDecoration(
-          color: isUser ? Aurora.glassStrong : Aurora.glass,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isUser ? 16 : 4),
-            bottomRight: Radius.circular(isUser ? 4 : 16),
-          ),
-          border: Border.all(color: Aurora.glassBorder),
+        border: Border.all(
+          color: isUser
+              ? Aurora.teal.withValues(alpha: 0.45)
+              : Colors.white.withValues(alpha: 0.12),
         ),
-        child: Column(
-          crossAxisAlignment:
-              isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-          children: [
-            Text(
-              isUser ? 'You' : 'FarryOn',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: labelColor,
-                fontWeight: FontWeight.w600,
-              ),
+      ),
+      child: Column(
+        crossAxisAlignment:
+            isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            isUser ? 'You' : 'FarryOn',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: isUser ? Aurora.mint : Aurora.tealInk,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.2,
             ),
-            const SizedBox(height: 3),
-            Opacity(
-              opacity: entry.isFinal ? 1.0 : 0.6,
-              child: Text(
-                entry.text.isEmpty ? '…' : entry.text,
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: Aurora.textPrimary, height: 1.35),
-              ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            entry.text.isEmpty ? '…' : entry.text,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: streaming ? Aurora.textMuted : Aurora.textPrimary,
+              height: 1.36,
+              fontStyle: streaming ? FontStyle.italic : FontStyle.normal,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    // FarryOn lines get a small glowing avatar dot on the left.
+    final row = Row(
+      mainAxisAlignment:
+          isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        if (!isUser) ...[
+          const _AvatarDot(),
+          const SizedBox(width: 7),
+        ],
+        Flexible(child: bubble),
+      ],
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: row,
+    );
+  }
+}
+
+/// Tiny glowing teal dot that marks FarryOn's lines.
+class _AvatarDot extends StatelessWidget {
+  const _AvatarDot();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 22,
+        height: 22,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: const RadialGradient(
+            colors: [Aurora.mint, Aurora.teal],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Aurora.teal.withValues(alpha: 0.5),
+              blurRadius: 8,
             ),
           ],
         ),
-      ),
-    );
-  }
+        child: const Icon(Icons.auto_awesome, size: 12, color: Colors.white),
+      );
 }

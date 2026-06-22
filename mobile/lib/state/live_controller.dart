@@ -84,6 +84,13 @@ class LiveController {
   // 24 kHz mono PCM16 → 48000 bytes per second of playback.
   static const int _ttsBytesPerSec = 48000;
 
+  // How long to keep the mic muted *after* the TTS audio should have finished
+  // playing. Covers the OS audio buffer drain, the speaker's physical decay,
+  // and room reverb — without this tail margin the mic re-opens while the last
+  // word is still audible and the assistant's own voice echoes back in as a
+  // bogus "user" turn (the garbled chat the user saw).
+  static const int _ttsTailMarginMs = 1200;
+
   // ---- Observable state --------------------------------------------------
 
   final _stateController =
@@ -194,7 +201,8 @@ class LiveController {
     final playMs = (_ttsBytes / _ttsBytesPerSec * 1000).round();
     final elapsedMs =
         start == null ? 0 : DateTime.now().difference(start).inMilliseconds;
-    final remainingMs = (playMs - elapsedMs).clamp(0, 60000) + 600;
+    final remainingMs =
+        (playMs - elapsedMs).clamp(0, 60000) + _ttsTailMarginMs;
     _ttsClear?.cancel();
     _ttsClear =
         Timer(Duration(milliseconds: remainingMs), () => _ttsActive = false);
@@ -241,6 +249,12 @@ class LiveController {
   static const int _maxTranscripts = 80;
 
   void _applyTranscript(TranscriptMessage msg) {
+    // Echo suppression: while the assistant's TTS is playing (and its tail
+    // margin) the mic is muted, so any "user" transcript in that window can
+    // only be the assistant's own voice leaking back in. Drop it so it never
+    // pollutes the chat or gets treated as a real turn.
+    if (msg.role == 'user' && _ttsActive) return;
+
     final list = List<TranscriptEntry>.of(_state.transcripts);
     // Merge consecutive non-final fragments for the same role into one growing
     // line; otherwise append.
