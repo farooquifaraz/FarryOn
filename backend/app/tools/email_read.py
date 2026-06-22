@@ -128,13 +128,23 @@ def _fetch_emails(
         imap.select("INBOX", readonly=True)
 
         ids: list[bytes] = []
+        gmail_ok = False
         if is_gmail:
             gq = _gmail_query(category, range_, query)
-            typ, data = imap.search(None, "X-GM-RAW", gq)
-            if typ == "OK" and data and data[0]:
-                ids = data[0].split()
-        if not ids:
-            # Fallback (non-Gmail, or X-GM-RAW unsupported/empty).
+            # The X-GM-RAW query must be sent as a single QUOTED string —
+            # imaplib does not quote it, so a multi-word query like
+            # "category:promotions newer_than:7d" would otherwise be split into
+            # extra tokens and Gmail rejects it (the bogus "couldn't sign in").
+            try:
+                typ, data = imap.search(None, "X-GM-RAW", f'"{gq}"')
+                if typ == "OK":
+                    gmail_ok = True
+                    if data and data[0]:
+                        ids = data[0].split()
+            except imaplib.IMAP4.error as exc:
+                logger.warning("read_emails.xgmraw_failed", q=gq, error=str(exc))
+        if not gmail_ok and not ids:
+            # Fallback (non-Gmail, or X-GM-RAW errored).
             typ, data = imap.search(
                 None, *_imap_search_args(category, range_, query)
             )
