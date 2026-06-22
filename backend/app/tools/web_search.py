@@ -19,6 +19,7 @@ results are returned rather than failing the turn.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -62,8 +63,10 @@ class WebSearchTool(Tool):
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
         """Run the search and return ``{query, provider, results[]}``.
 
-        Tries the primary provider, then the optional fallback, then mock —
-        moving on whenever a provider errors or runs out of free credits.
+        Queries every configured provider (e.g. Tavily AND Google/Serper) at
+        once and MERGES their results so the model can cross-check facts across
+        engines — far more accurate than a single source. Falls back to mock
+        only if every provider fails.
         """
         query: str = kwargs["query"]
 
@@ -88,33 +91,58 @@ class WebSearchTool(Tool):
                 ),
             ]
 
+        usable = [
+            (p, k) for p, k in chain if p and p != "mock" and k
+        ]
+        if not usable:
+            return {
+                "query": query,
+                "provider": "mock",
+                "results": _mock_results(query),
+            }
+
+        settled = await asyncio.gather(
+            *(self._search(p, query, k) for p, k in usable),
+            return_exceptions=True,
+        )
+
+        merged: list[dict[str, str]] = []
+        seen: set[str] = set()
+        used: list[str] = []
         last_error: str | None = None
-        for provider, api_key in chain:
-            if not provider or provider == "mock" or not api_key:
-                continue
-            try:
-                results = await self._search(provider, query, api_key)
-            except httpx.HTTPError as exc:
-                # Quota exhaustion (401/402/429) or any transport error: log and
-                # let the loop try the next provider in the chain.
-                last_error = f"{provider}: {exc}"
+        for (provider, _), res in zip(usable, settled):
+            if isinstance(res, Exception):
+                last_error = f"{provider}: {res}"
                 logger.warning(
-                    "web_search.provider_failed",
-                    provider=provider,
-                    error=str(exc),
+                    "web_search.provider_failed", provider=provider,
+                    error=str(res),
                 )
                 continue
-            return {"query": query, "provider": provider, "results": results}
+            used.append(provider)
+            for r in res:
+                key = (r.get("url") or "").strip() or (
+                    r.get("snippet") or ""
+                )[:80]
+                if key in seen:
+                    continue
+                seen.add(key)
+                r["source"] = provider
+                merged.append(r)
 
-        # No usable provider (none configured, or all exhausted) → mock.
-        out: dict[str, Any] = {
+        if not merged:
+            out: dict[str, Any] = {
+                "query": query,
+                "provider": "mock",
+                "results": _mock_results(query),
+            }
+            if last_error:
+                out["error"] = f"all providers failed; last: {last_error}"
+            return out
+        return {
             "query": query,
-            "provider": "mock",
-            "results": _mock_results(query),
+            "provider": "+".join(used),
+            "results": merged[: _MAX_RESULTS * 2],
         }
-        if last_error:
-            out["error"] = f"all providers failed; last: {last_error}"
-        return out
 
     async def _search(
         self, provider: str, query: str, api_key: str
@@ -194,7 +222,10 @@ class WebSearchTool(Tool):
         answer = (box.get("answer") or box.get("snippet")
                   or box.get("description") or "").strip()
         if answer:
-            results.insert(0, {"title": "Answer", "url": "", "snippet": answer})
+            # Google's own answer box / knowledge graph — high trust.
+            results.insert(
+                0, {"title": "Google answer", "url": "", "snippet": answer}
+            )
         return results
 
     async def _serpapi(self, query: str, api_key: str) -> list[dict[str, str]]:
