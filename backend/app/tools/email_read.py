@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import email as emaillib
+import html
 import imaplib
+import re
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
@@ -30,6 +32,7 @@ logger = get_logger(__name__)
 _DEFAULT_HOST = "imap.gmail.com"
 _MAX_LIMIT = 25
 _SNIPPET_CHARS = 200
+_BODY_CHARS = 4000  # cap the full body so a turn stays manageable
 
 # Gmail X-GM-RAW fragments for each category / filter the user can ask for.
 _CATEGORY_GMAIL = {
@@ -78,6 +81,47 @@ def _snippet(msg: emaillib.message.Message) -> str:
         return ""
 
 
+def _html_to_text(s: str) -> str:
+    """Crude HTML → readable text for emails that only ship an HTML body."""
+    s = re.sub(r"(?is)<(script|style).*?</\1>", " ", s)
+    s = re.sub(r"(?is)<br\s*/?>", "\n", s)
+    s = re.sub(r"(?is)</p\s*>", "\n", s)
+    s = re.sub(r"(?s)<[^>]+>", " ", s)
+    return html.unescape(s)
+
+
+def _decode_payload(part: emaillib.message.Message) -> str:
+    payload = part.get_payload(decode=True) or b""
+    return payload.decode(part.get_content_charset() or "utf-8", "replace")
+
+
+def _full_body(msg: emaillib.message.Message) -> str:
+    """Best-effort full plain-text body (prefers text/plain, else strips HTML)."""
+    text: str | None = None
+    html_body: str | None = None
+    try:
+        if msg.is_multipart():
+            for part in msg.walk():
+                ct = part.get_content_type()
+                if part.get_content_disposition() == "attachment":
+                    continue
+                if ct == "text/plain" and text is None:
+                    text = _decode_payload(part)
+                elif ct == "text/html" and html_body is None:
+                    html_body = _decode_payload(part)
+        elif msg.get_content_type() == "text/html":
+            html_body = _decode_payload(msg)
+        else:
+            text = _decode_payload(msg)
+    except Exception:  # noqa: BLE001
+        return ""
+    body = text if text else (_html_to_text(html_body) if html_body else "")
+    # Collapse blank-line runs, trim each line.
+    lines = [ln.strip() for ln in body.splitlines()]
+    body = "\n".join(ln for ln in lines if ln)
+    return body[:_BODY_CHARS]
+
+
 def _gmail_query(category: str | None, range_: str | None, text: str | None) -> str:
     """Build a Gmail search string from category + range + free text."""
     parts: list[str] = []
@@ -119,6 +163,7 @@ def _fetch_emails(
     query: str | None,
     category: str | None,
     range_: str | None,
+    full_body: bool = False,
 ) -> list[dict[str, Any]]:
     """Blocking IMAP read of the matching messages (run in a thread)."""
     is_gmail = "gmail" in host or "google" in host
@@ -169,16 +214,17 @@ def _fetch_emails(
             # Split "Name <addr@x.com>" so the model has the EXACT address to
             # reply to — never guessing/hallucinating a recipient.
             from_name, from_email = parseaddr(raw_from)
-            out.append(
-                {
-                    "from": raw_from,
-                    "from_name": from_name or from_email,
-                    "from_email": from_email,
-                    "subject": _decode(msg.get("Subject")),
-                    "date": when,
-                    "snippet": _snippet(msg),
-                }
-            )
+            item = {
+                "from": raw_from,
+                "from_name": from_name or from_email,
+                "from_email": from_email,
+                "subject": _decode(msg.get("Subject")),
+                "date": when,
+                "snippet": _snippet(msg),
+            }
+            if full_body:
+                item["body"] = _full_body(msg)
+            out.append(item)
         return out
     finally:
         try:
@@ -268,3 +314,65 @@ class ReadEmailsTool(Tool):
             "range": range_ or "today",
             "emails": emails,
         }
+
+
+class ReadEmailTool(Tool):
+    """Read ONE full email — the complete message body."""
+
+    name = "read_email"
+    description = (
+        "Read the FULL body of a single email, found by sender or subject "
+        "keyword. Use when the user wants to hear the whole email, or asks you "
+        "to summarise or draft a reply to a specific email."
+    )
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Sender name/address or subject keyword to "
+                "identify the email (e.g. 'the one from GitHub').",
+            },
+            "range": {
+                "type": "string",
+                "enum": ["today", "yesterday", "week", "month"],
+                "description": "Time window to search (default week).",
+            },
+        },
+    }
+
+    async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+        cfg = ctx.email or {}
+        address = (cfg.get("address") or "").strip()
+        password = (cfg.get("appPassword") or "").strip()
+        host = (cfg.get("host") or _DEFAULT_HOST).strip() or _DEFAULT_HOST
+        if not address or not password:
+            return {
+                "ok": False,
+                "message": (
+                    "No email is configured. Ask the user to add their email "
+                    "address and app password in Settings."
+                ),
+            }
+        query = (kwargs.get("query") or None)
+        range_ = (kwargs.get("range") or "week")
+        try:
+            emails = await asyncio.to_thread(
+                _fetch_emails, host, address, password, 1, query, None,
+                range_, True,
+            )
+        except imaplib.IMAP4.error as exc:
+            logger.warning("read_email.auth_failed", error=str(exc))
+            return {
+                "ok": False,
+                "message": (
+                    "Couldn't sign in to email. Check the address and app "
+                    "password in Settings."
+                ),
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("read_email.failed", error=str(exc))
+            return {"ok": False, "message": "Couldn't read the email."}
+        if not emails:
+            return {"ok": False, "message": "No matching email found."}
+        return {"ok": True, **emails[0]}

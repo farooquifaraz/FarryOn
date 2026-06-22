@@ -14,7 +14,7 @@ from app.tools.device import (
     RotateCameraTool,
     SetCameraTool,
 )
-from app.tools.email_read import ReadEmailsTool
+from app.tools.email_read import ReadEmailsTool, ReadEmailTool
 from app.tools.email_send import SendEmailTool
 from app.tools.location import GetLocationTool
 from app.tools.messaging import SendMessageTool
@@ -40,6 +40,7 @@ __all__ = [
     "ListTasksTool",
     "GetLocationTool",
     "MuteMicTool",
+    "ReadEmailTool",
     "ReadEmailsTool",
     "RotateCameraTool",
     "SendEmailTool",
@@ -76,6 +77,7 @@ def build_default_tools() -> list[Tool]:
         RotateCameraTool(),
         EndSessionTool(),
         ReadEmailsTool(),
+        ReadEmailTool(),
         SendEmailTool(),
         GetLocationTool(),
     ]
