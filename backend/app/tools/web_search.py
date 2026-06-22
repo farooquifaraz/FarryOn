@@ -30,7 +30,7 @@ from app.tools.base import Tool, ToolContext
 logger = get_logger(__name__)
 
 _HTTP_TIMEOUT = 10.0
-_MAX_RESULTS = 5
+_MAX_RESULTS = 6
 
 
 def _mock_results(query: str) -> list[dict[str, str]]:
@@ -143,23 +143,32 @@ class WebSearchTool(Tool):
                 json={
                     "query": query,
                     "max_results": _MAX_RESULTS,
-                    "search_depth": "basic",
+                    "search_depth": "advanced",
                     "include_answer": True,
                 },
             )
             resp.raise_for_status()
             data = resp.json()
+        # Real source snippets first (with publish date when present, so the
+        # model can judge recency) — these are the ground truth.
         results = [
             {
                 "title": item.get("title", ""),
                 "url": item.get("url", ""),
                 "snippet": item.get("content", ""),
+                "published": item.get("published_date", ""),
             }
             for item in data.get("results", [])[:_MAX_RESULTS]
         ]
+        # Tavily's synthesized answer is an AI guess — useful as a hint but it
+        # can be wrong/stale for live data, so label it as a non-authoritative
+        # summary and put it AFTER the real sources.
         answer = (data.get("answer") or "").strip()
         if answer:
-            results.insert(0, {"title": "Answer", "url": "", "snippet": answer})
+            results.append(
+                {"title": "AI summary (verify with sources)", "url": "",
+                 "snippet": answer}
+            )
         return results
 
     async def _serper(self, query: str, api_key: str) -> list[dict[str, str]]:

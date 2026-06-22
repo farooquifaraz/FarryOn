@@ -19,7 +19,7 @@ import email as emaillib
 import imaplib
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
-from email.utils import parsedate_to_datetime
+from email.utils import parseaddr, parsedate_to_datetime
 from typing import Any
 
 from app.logging_conf import get_logger
@@ -165,9 +165,15 @@ def _fetch_emails(
                 when = dt.isoformat() if dt else None
             except Exception:  # noqa: BLE001
                 when = None
+            raw_from = _decode(msg.get("From"))
+            # Split "Name <addr@x.com>" so the model has the EXACT address to
+            # reply to — never guessing/hallucinating a recipient.
+            from_name, from_email = parseaddr(raw_from)
             out.append(
                 {
-                    "from": _decode(msg.get("From")),
+                    "from": raw_from,
+                    "from_name": from_name or from_email,
+                    "from_email": from_email,
                     "subject": _decode(msg.get("Subject")),
                     "date": when,
                     "snippet": _snippet(msg),
