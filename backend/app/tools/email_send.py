@@ -39,11 +39,11 @@ def _send(host: str, port: int, address: str, password: str, to: str,
     msg.set_content(body)
     context = ssl.create_default_context()
     if port == 465:
-        with smtplib.SMTP_SSL(host, port, timeout=25, context=context) as s:
+        with smtplib.SMTP_SSL(host, port, timeout=15, context=context) as s:
             s.login(address, password)
             s.send_message(msg)
     else:
-        with smtplib.SMTP(host, port, timeout=25) as s:
+        with smtplib.SMTP(host, port, timeout=15) as s:
             s.starttls(context=context)
             s.login(address, password)
             s.send_message(msg)

@@ -21,18 +21,23 @@ class ToolActivityView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (tools.isEmpty) return const SizedBox.shrink();
-    // Most-recent first.
-    final ordered = tools.reversed.toList(growable: false);
+    // Only show tools that are still running (or awaiting permission) — once a
+    // task is done its card disappears instead of cluttering the screen.
+    final active = tools
+        .where((t) => t.isPending)
+        .toList(growable: false)
+        .reversed
+        .toList(growable: false);
+    if (active.isEmpty) return const SizedBox.shrink();
     return SizedBox(
-      height: 92,
+      height: 76,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
-        itemCount: ordered.length,
+        itemCount: active.length,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, i) =>
-            _ToolCard(activity: ordered[i], onPermission: onPermission),
+            _ToolCard(activity: active[i], onPermission: onPermission),
       ),
     );
   }

@@ -1134,7 +1134,7 @@ class _TranscriptOverlay extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.fromLTRB(10, 0, 10, 8),
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.34,
+        maxHeight: MediaQuery.of(context).size.height * 0.5,
       ),
       decoration: BoxDecoration(
         // A dark vertical gradient (no live blur — keeps it cheap) gives the
