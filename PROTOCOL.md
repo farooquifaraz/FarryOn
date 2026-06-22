@@ -73,8 +73,14 @@ All JSON messages have a `type` field.
     "provider": "tavily", "apiKey": "…",
     "fallbackProvider": "serper", "fallbackApiKey": "…" },
   "email": {                              // optional; enables read_emails.
-    "address": "you@gmail.com", "appPassword": "…" }  // never persisted
+    "address": "you@gmail.com", "appPassword": "…" },  // never persisted
+  "location": { "lat": 25.2, "lng": 55.27, "address": "…" }  // optional initial
 }
+
+// Pushes a fresh device GPS fix (+ reverse-geocoded address) any time after
+// hello; the backend caches it for the get_location tool ("where am I?").
+{ "type": "location_update",
+  "location": { "lat": 25.2048, "lng": 55.2708, "address": "Dubai, UAE" } }
 
 // Declares the media formats the client will send/expects.
 { "type": "config",

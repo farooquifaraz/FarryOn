@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../capture/device_registry.dart';
+import '../../core/config.dart';
 import '../../core/theme.dart';
 import '../../data/live_client.dart';
 import '../../protocol/protocol.dart';
@@ -256,188 +257,23 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
   }
 
   void _showSettingsSheet() {
-    final current = ref.read(configProvider);
-    final hostCtl = TextEditingController(text: current.host);
-    final portCtl = TextEditingController(text: current.port.toString());
-    final wsKeyCtl =
-        TextEditingController(text: current.webSearchApiKey ?? '');
-    final wsFbKeyCtl =
-        TextEditingController(text: current.webSearchFallbackApiKey ?? '');
-    final emailCtl =
-        TextEditingController(text: current.emailAddress ?? '');
-    final emailPwCtl =
-        TextEditingController(text: current.emailAppPassword ?? '');
-    var secure = current.secure;
-    var provider = current.provider;
-    var wsProvider = current.webSearchProvider;
-    final wsFbProvider = current.webSearchFallbackProvider;
-
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-          left: 16,
-          right: 16,
-          top: 16,
-        ),
-        child: StatefulBuilder(
-          builder: (context, setSheet) => Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Backend', style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 12),
-              TextField(
-                controller: hostCtl,
-                decoration: const InputDecoration(
-                  labelText: 'Host',
-                  hintText: 'e.g. 10.0.2.2 or example.com',
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: portCtl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Port'),
-              ),
-              SwitchListTile(
-                value: secure,
-                title: const Text('Use TLS (wss://)'),
-                onChanged: (v) => setSheet(() => secure = v),
-                contentPadding: EdgeInsets.zero,
-              ),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.devices_other),
-                title: const Text('Capture device'),
-                subtitle: Text(
-                  current.provider == 'glasses'
-                      ? 'Smart glasses'
-                      : 'Phone (camera + mic)',
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showDeviceSheet(
-                    ref.read(liveProvider.notifier),
-                    ref.read(liveProvider),
-                  );
-                },
-              ),
-              const SizedBox(height: 8),
-              Text('AI provider',
-                  style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                children: [
-                  for (final p in const [
-                    ('Gemini', 'gemini'),
-                    ('OpenAI', 'openai'),
-                    ('Grok', 'grok'),
-                    ('Mock', 'mock'),
-                  ])
-                    ChoiceChip(
-                      label: Text(p.$1),
-                      selected: provider == p.$2,
-                      onSelected: (_) => setSheet(() => provider = p.$2),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Text('Web search',
-                  style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                children: [
-                  for (final p in const [
-                    ('Tavily', 'tavily'),
-                    ('Serper', 'serper'),
-                    ('SerpAPI', 'serpapi'),
-                  ])
-                    ChoiceChip(
-                      label: Text(p.$1),
-                      selected: wsProvider == p.$2,
-                      onSelected: (_) => setSheet(() => wsProvider = p.$2),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: wsKeyCtl,
-                obscureText: true,
-                decoration: InputDecoration(
-                  labelText: '$wsProvider API key',
-                  hintText: 'leave blank to use server default',
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: wsFbKeyCtl,
-                obscureText: true,
-                decoration: InputDecoration(
-                  labelText: 'Fallback ($wsFbProvider) key — optional',
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text('Email (read my inbox)',
-                  style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(height: 2),
-              Text(
-                'Gmail: use a 16-digit App Password, not your login password.',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Aurora.textMuted,
-                    ),
-              ),
-              const SizedBox(height: 6),
-              TextField(
-                controller: emailCtl,
-                keyboardType: TextInputType.emailAddress,
-                autocorrect: false,
-                decoration: const InputDecoration(
-                  labelText: 'Email address',
-                  hintText: 'you@gmail.com — leave blank to disable',
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: emailPwCtl,
-                obscureText: true,
-                autocorrect: false,
-                decoration: const InputDecoration(
-                  labelText: 'App password',
-                ),
-              ),
-              const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerRight,
-                child: FilledButton(
-                  onPressed: () {
-                    final port =
-                        int.tryParse(portCtl.text.trim()) ?? current.port;
-                    ref.read(configProvider.notifier).state = current.copyWith(
-                      host: hostCtl.text.trim(),
-                      port: port,
-                      secure: secure,
-                      provider: provider,
-                      webSearchProvider: wsProvider,
-                      webSearchApiKey: wsKeyCtl.text.trim(),
-                      webSearchFallbackProvider: wsFbProvider,
-                      webSearchFallbackApiKey: wsFbKeyCtl.text.trim(),
-                      emailAddress: emailCtl.text.trim(),
-                      emailAppPassword: emailPwCtl.text.trim(),
-                    );
-                    Navigator.pop(context);
-                  },
-                  child: const Text('Save & reconnect'),
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
-          ),
-        ),
+      backgroundColor: Aurora.base,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => _SettingsSheet(
+        current: ref.read(configProvider),
+        onSave: (cfg) => ref.read(configProvider.notifier).state = cfg,
+        onOpenDevices: () {
+          Navigator.pop(sheetContext);
+          _showDeviceSheet(
+            ref.read(liveProvider.notifier),
+            ref.read(liveProvider),
+          );
+        },
       ),
     );
   }
@@ -449,6 +285,365 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
         CaptureDeviceKind.phone => 'Phone (camera + mic)',
         CaptureDeviceKind.glasses => 'Smart glasses',
       };
+}
+
+/// The live, cloud-hosted FarryOn backend (Render). One tap fills these in so
+/// the user never has to know the host/port.
+const String _kCloudHost = 'farryon-backend.onrender.com';
+const int _kCloudPort = 443;
+
+/// A scrollable, keyboard-safe settings sheet with a pinned Save bar. Replaces
+/// the old fixed Column that pushed the Save button (and the lower fields) off
+/// screen once the keyboard opened.
+class _SettingsSheet extends StatefulWidget {
+  const _SettingsSheet({
+    required this.current,
+    required this.onSave,
+    required this.onOpenDevices,
+  });
+
+  final AppConfig current;
+  final ValueChanged<AppConfig> onSave;
+  final VoidCallback onOpenDevices;
+
+  @override
+  State<_SettingsSheet> createState() => _SettingsSheetState();
+}
+
+class _SettingsSheetState extends State<_SettingsSheet> {
+  late final _hostCtl = TextEditingController(text: widget.current.host);
+  late final _portCtl =
+      TextEditingController(text: widget.current.port.toString());
+  late final _wsKeyCtl =
+      TextEditingController(text: widget.current.webSearchApiKey ?? '');
+  late final _wsFbKeyCtl =
+      TextEditingController(text: widget.current.webSearchFallbackApiKey ?? '');
+  late final _emailCtl =
+      TextEditingController(text: widget.current.emailAddress ?? '');
+  late final _emailPwCtl =
+      TextEditingController(text: widget.current.emailAppPassword ?? '');
+
+  late bool _secure = widget.current.secure;
+  late String _provider = widget.current.provider;
+  late String _wsProvider = widget.current.webSearchProvider;
+  bool _showEmailPw = false;
+
+  @override
+  void dispose() {
+    _hostCtl.dispose();
+    _portCtl.dispose();
+    _wsKeyCtl.dispose();
+    _wsFbKeyCtl.dispose();
+    _emailCtl.dispose();
+    _emailPwCtl.dispose();
+    super.dispose();
+  }
+
+  bool get _isCloud =>
+      _hostCtl.text.trim() == _kCloudHost && _secure && _portCtl.text == '443';
+
+  void _useCloud() {
+    setState(() {
+      _hostCtl.text = _kCloudHost;
+      _portCtl.text = '$_kCloudPort';
+      _secure = true;
+    });
+  }
+
+  void _save() {
+    final port = int.tryParse(_portCtl.text.trim()) ?? widget.current.port;
+    widget.onSave(widget.current.copyWith(
+      host: _hostCtl.text.trim(),
+      port: port,
+      secure: _secure,
+      provider: _provider,
+      webSearchProvider: _wsProvider,
+      webSearchApiKey: _wsKeyCtl.text.trim(),
+      webSearchFallbackApiKey: _wsFbKeyCtl.text.trim(),
+      emailAddress: _emailCtl.text.trim(),
+      emailAppPassword: _emailPwCtl.text.trim(),
+    ));
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final maxH = MediaQuery.of(context).size.height * 0.9;
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxH),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle.
+            Container(
+              margin: const EdgeInsets.only(top: 10, bottom: 4),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Aurora.glassBorder,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 12, 4),
+              child: Row(
+                children: [
+                  Text('Settings', style: theme.textTheme.titleLarge),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Aurora.textMuted),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _label('Connection'),
+                    const SizedBox(height: 8),
+                    _cloudButton(),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _hostCtl,
+                      autocorrect: false,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Host',
+                        hintText: 'farryon-backend.onrender.com',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        SizedBox(
+                          width: 110,
+                          child: TextField(
+                            controller: _portCtl,
+                            keyboardType: TextInputType.number,
+                            onChanged: (_) => setState(() {}),
+                            decoration: const InputDecoration(
+                              labelText: 'Port',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: SwitchListTile(
+                            value: _secure,
+                            title: const Text('Secure (TLS)'),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            onChanged: (v) => setState(() => _secure = v),
+                          ),
+                        ),
+                      ],
+                    ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.devices_other,
+                          color: Aurora.textMuted),
+                      title: const Text('Capture device'),
+                      subtitle: Text(
+                        widget.current.provider == 'glasses'
+                            ? 'Smart glasses'
+                            : 'Phone (camera + mic)',
+                        style: const TextStyle(color: Aurora.textMuted),
+                      ),
+                      trailing: const Icon(Icons.chevron_right,
+                          color: Aurora.textMuted),
+                      onTap: widget.onOpenDevices,
+                    ),
+                    const Divider(height: 28, color: Aurora.glassBorder),
+                    _label('AI provider'),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        for (final p in const [
+                          ('Gemini', 'gemini'),
+                          ('OpenAI', 'openai'),
+                          ('Grok', 'grok'),
+                          ('Mock', 'mock'),
+                        ])
+                          ChoiceChip(
+                            label: Text(p.$1),
+                            selected: _provider == p.$2,
+                            onSelected: (_) =>
+                                setState(() => _provider = p.$2),
+                          ),
+                      ],
+                    ),
+                    const Divider(height: 28, color: Aurora.glassBorder),
+                    _label('Email — read my inbox (optional)'),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Gmail needs a 16-digit App Password (not your login '
+                      'password). Create one at myaccount.google.com/apppasswords '
+                      'after turning on 2-Step Verification.',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: Aurora.textMuted),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _emailCtl,
+                      keyboardType: TextInputType.emailAddress,
+                      autocorrect: false,
+                      decoration: const InputDecoration(
+                        labelText: 'Email address',
+                        hintText: 'you@gmail.com — blank to disable',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _emailPwCtl,
+                      obscureText: !_showEmailPw,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      decoration: InputDecoration(
+                        labelText: 'App password',
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            _showEmailPw
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                            color: Aurora.textMuted,
+                          ),
+                          onPressed: () =>
+                              setState(() => _showEmailPw = !_showEmailPw),
+                        ),
+                      ),
+                    ),
+                    const Divider(height: 28, color: Aurora.glassBorder),
+                    _label('Web search (optional)'),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        for (final p in const [
+                          ('Tavily', 'tavily'),
+                          ('Serper', 'serper'),
+                          ('SerpAPI', 'serpapi'),
+                        ])
+                          ChoiceChip(
+                            label: Text(p.$1),
+                            selected: _wsProvider == p.$2,
+                            onSelected: (_) =>
+                                setState(() => _wsProvider = p.$2),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _wsKeyCtl,
+                      obscureText: true,
+                      decoration: InputDecoration(
+                        labelText: '$_wsProvider API key',
+                        hintText: 'blank = use server default',
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // Pinned Save bar — always reachable, even with the keyboard open.
+            Container(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                10,
+                20,
+                10 + MediaQuery.of(context).padding.bottom,
+              ),
+              decoration: const BoxDecoration(
+                color: Aurora.surface,
+                border: Border(top: BorderSide(color: Aurora.glassBorder)),
+              ),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _save,
+                  icon: const Icon(Icons.check),
+                  label: const Text('Save & reconnect'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Aurora.teal,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _label(String text) => Text(
+        text.toUpperCase(),
+        style: const TextStyle(
+          color: Aurora.mint,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
+        ),
+      );
+
+  Widget _cloudButton() {
+    final on = _isCloud;
+    return InkWell(
+      onTap: _useCloud,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: on ? Aurora.teal.withValues(alpha: 0.18) : Aurora.glass,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: on ? Aurora.teal : Aurora.glassBorder,
+            width: on ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.cloud_done_outlined,
+                color: on ? Aurora.teal : Aurora.textMuted),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Use FarryOn Cloud',
+                      style: TextStyle(
+                          color: Aurora.textPrimary,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(
+                    on
+                        ? 'Connected to the cloud — nothing else needed.'
+                        : 'One tap — no PC needed, always online.',
+                    style: const TextStyle(
+                        color: Aurora.textMuted, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            if (on)
+              const Icon(Icons.check_circle, color: Aurora.teal, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// Bottom control bar: camera toggle, push-to-talk mic, interrupt, and a text

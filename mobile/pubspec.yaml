@@ -40,6 +40,10 @@ dependencies:
   flutter_local_notifications: ^18.0.1
   timezone: ^0.9.4
 
+  # Location ("where am I") — GPS fix + reverse-geocoded address.
+  geolocator: ^12.0.0
+  geocoding: ^3.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

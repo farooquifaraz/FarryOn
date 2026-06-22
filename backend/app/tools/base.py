@@ -29,6 +29,9 @@ class ToolContext:
         email: Optional per-session email (IMAP) config supplied by the client
             (``{address, appPassword, host?}``). Used by the ``read_emails``
             tool to read the user's recent mail. Never persisted server-side.
+        location: Optional last-known device location supplied by the client
+            (``{lat, lng, address?}``). Updated via ``location_update`` and read
+            by the ``get_location`` tool to answer "where am I?".
     """
 
     session: AsyncSession
@@ -36,6 +39,7 @@ class ToolContext:
     user_id: int | None = None
     web_search: dict[str, Any] | None = None
     email: dict[str, Any] | None = None
+    location: dict[str, Any] | None = None
 
 
 class Tool(abc.ABC):

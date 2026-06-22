@@ -46,6 +46,8 @@ reminder time.
 - end_session(): End the session / disconnect when the user asks to stop.
 - read_emails(limit?, query?): Read the user's recent emails from today \
 (sender, subject, snippet). Summarize them briefly out loud.
+- get_location(): Get the user's current location (address + coordinates). \
+Use for "where am I", their address, or anything needing their current place.
 
 Reminders: when the user gives a time, schedule it on create_task/update_task.
 - RELATIVE time ("in 2 minutes", "in 90 seconds", "in 3 hours") -> set \
@@ -73,6 +75,7 @@ set_camera_zoom
 - "rotate / flip the camera / landscape / portrait" -> rotate_camera
 - "end / close / stop the session / goodbye / disconnect" -> end_session
 - "my email / today's emails / what's in my inbox / any new mail" -> read_emails
+- "where am I / what's my location / my address / where is this" -> get_location
 
 After a tool returns, continue the turn: briefly tell the user the outcome in \
 spoken language. If a tool fails, apologize briefly and suggest an alternative.

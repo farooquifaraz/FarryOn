@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../capture/capture_source.dart';
 import '../capture/device_registry.dart';
 import '../core/config.dart';
+import '../core/location.dart';
 import '../core/logger.dart';
 import '../core/notifications.dart';
 import '../data/live_client.dart';
@@ -128,7 +129,21 @@ class LiveController {
     // button is a mute toggle, and we never feed the mic while the assistant
     // is speaking (half-duplex, see [_startAudio]).
     await startListening();
+    // Fetch the device location in the background and push it to the backend so
+    // "where am I?" works. Non-blocking — GPS can take a few seconds and must
+    // not delay the session.
+    unawaited(_pushLocation());
     return outcome;
+  }
+
+  /// Resolve the current location and send it to the backend (best-effort).
+  Future<void> _pushLocation() async {
+    try {
+      final fix = await LocationService.current();
+      if (fix != null) _client.send(LocationUpdateMessage(fix.toJson()));
+    } catch (e) {
+      _log.warn('push location failed: $e');
+    }
   }
 
   /// Tear down capture, playback, and the socket (keeps objects reusable).

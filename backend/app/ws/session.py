@@ -136,6 +136,7 @@ class Session:
 
             web_search = (self._hello or {}).get("webSearch")
             email = (self._hello or {}).get("email")
+            location = (self._hello or {}).get("location")
             self._orchestrator = Orchestrator(
                 engine=self._engine,
                 gateway=self._gateway,
@@ -145,6 +146,7 @@ class Session:
                 user_id=self._user_id,
                 web_search=web_search if isinstance(web_search, dict) else None,
                 email=email if isinstance(email, dict) else None,
+                location=location if isinstance(location, dict) else None,
             )
 
             read_task = asyncio.create_task(self._read_pump(), name="read_pump")
@@ -322,6 +324,13 @@ class Session:
         elif mtype == "config":
             # Wire formats are fixed; nothing to negotiate. Acknowledge silently.
             logger.info("config.received", session_id=self.session_id)
+        elif mtype == "location_update":
+            # The device pushed a fresh GPS fix (+ reverse-geocoded address);
+            # cache it on the orchestrator so get_location can read it.
+            loc = message.get("location")
+            if isinstance(loc, dict) and self._orchestrator is not None:
+                self._orchestrator.location = loc
+                logger.info("location.updated", session_id=self.session_id)
         elif mtype == "tool_permission":
             # Permission gating is optional; tools are not gated by default.
             logger.info(

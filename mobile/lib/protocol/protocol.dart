@@ -64,6 +64,7 @@ abstract final class MsgType {
   static const String text = 'text';
   static const String interrupt = 'interrupt';
   static const String toolPermission = 'tool_permission';
+  static const String locationUpdate = 'location_update';
   static const String ping = 'ping';
 
   // server → client

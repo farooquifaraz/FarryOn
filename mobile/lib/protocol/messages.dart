@@ -175,6 +175,17 @@ class TextMessage extends ClientMessage {
   Map<String, dynamic> toJson() => {'type': type, 'text': text};
 }
 
+/// Pushes a fresh device location (`{lat, lng, address?}`) so the backend's
+/// `get_location` tool can answer "where am I?".
+class LocationUpdateMessage extends ClientMessage {
+  const LocationUpdateMessage(this.location);
+  final Map<String, dynamic> location;
+  @override
+  String get type => MsgType.locationUpdate;
+  @override
+  Map<String, dynamic> toJson() => {'type': type, 'location': location};
+}
+
 /// Barge-in: stop the current TTS playback.
 class InterruptMessage extends ClientMessage {
   const InterruptMessage();

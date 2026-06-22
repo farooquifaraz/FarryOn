@@ -47,6 +47,7 @@ def test_export_schemas_matches_protocol() -> None:
         "rotate_camera",
         "end_session",
         "read_emails",
+        "get_location",
     }
 
     assert schemas["create_note"]["parameters"] == {
