@@ -228,7 +228,17 @@ class WebSocketLiveClient {
               emailAddr.isNotEmpty &&
               emailPw != null &&
               emailPw.isNotEmpty)
-          ? {'address': emailAddr, 'appPassword': emailPw}
+          ? {
+              'address': emailAddr,
+              'appPassword': emailPw,
+              if (_config.emailImapHost != null &&
+                  _config.emailImapHost!.isNotEmpty)
+                'host': _config.emailImapHost,
+              if (_config.emailSmtpHost != null &&
+                  _config.emailSmtpHost!.isNotEmpty)
+                'smtpHost': _config.emailSmtpHost,
+              'smtpPort': _config.emailSmtpPort,
+            }
           : null,
     ));
     send(const ConfigMessage());

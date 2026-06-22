@@ -33,9 +33,10 @@ async def test_send_email_requires_valid_recipient(db_session) -> None:
 async def test_send_email_sends(db_session, monkeypatch) -> None:
     captured: dict = {}
 
-    def fake_send(host, address, password, to, subject, body):
+    def fake_send(host, port, address, password, to, subject, body):
         captured.update(
-            host=host, address=address, to=to, subject=subject, body=body
+            host=host, port=port, address=address, to=to,
+            subject=subject, body=body,
         )
 
     monkeypatch.setattr(email_send, "_send", fake_send)
@@ -49,8 +50,30 @@ async def test_send_email_sends(db_session, monkeypatch) -> None:
     assert result["ok"] is True
     assert result["sent"] is True
     assert captured["host"] == "smtp.gmail.com"
+    assert captured["port"] == 587
     assert captured["to"] == "faraz@gmail.com"
     assert captured["body"] == "See you tomorrow"
+
+
+async def test_send_email_custom_host_and_port(db_session, monkeypatch) -> None:
+    """Custom SMTP host + 465 port (e.g. Hostinger) are passed through."""
+    seen: dict = {}
+
+    def fake_send(host, port, address, password, to, subject, body):
+        seen.update(host=host, port=port)
+
+    monkeypatch.setattr(email_send, "_send", fake_send)
+    ctx = ToolContext(
+        session=db_session,
+        email={
+            "address": "me@omaemirates.com", "appPassword": "pw",
+            "smtpHost": "smtp.hostinger.com", "smtpPort": 465,
+        },
+    )
+    result = await SendEmailTool().run(ctx, to="a@b.com", body="hi")
+    assert result["ok"] is True
+    assert seen["host"] == "smtp.hostinger.com"
+    assert seen["port"] == 465
 
 
 async def test_send_email_auth_error_is_graceful(db_session, monkeypatch) -> None:

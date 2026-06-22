@@ -322,10 +322,17 @@ class _SettingsSheetState extends State<_SettingsSheet> {
       TextEditingController(text: widget.current.emailAddress ?? '');
   late final _emailPwCtl =
       TextEditingController(text: widget.current.emailAppPassword ?? '');
+  late final _imapCtl =
+      TextEditingController(text: widget.current.emailImapHost ?? '');
+  late final _smtpCtl =
+      TextEditingController(text: widget.current.emailSmtpHost ?? '');
+  late final _smtpPortCtl =
+      TextEditingController(text: widget.current.emailSmtpPort.toString());
 
   late bool _secure = widget.current.secure;
   late String _provider = widget.current.provider;
   late String _wsProvider = widget.current.webSearchProvider;
+  late String _emailProvider = widget.current.emailProvider;
   bool _showEmailPw = false;
 
   @override
@@ -336,6 +343,9 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     _wsFbKeyCtl.dispose();
     _emailCtl.dispose();
     _emailPwCtl.dispose();
+    _imapCtl.dispose();
+    _smtpCtl.dispose();
+    _smtpPortCtl.dispose();
     super.dispose();
   }
 
@@ -352,6 +362,15 @@ class _SettingsSheetState extends State<_SettingsSheet> {
 
   void _save() {
     final port = int.tryParse(_portCtl.text.trim()) ?? widget.current.port;
+    // Resolve the mail hosts: presets fill them in; "custom" takes the fields.
+    final preset = EmailProviders.presets[_emailProvider] ??
+        EmailProviders.presets['gmail']!;
+    final custom = _emailProvider == 'custom';
+    final imapHost = custom ? _imapCtl.text.trim() : preset.imap;
+    final smtpHost = custom ? _smtpCtl.text.trim() : preset.smtp;
+    final smtpPort = custom
+        ? (int.tryParse(_smtpPortCtl.text.trim()) ?? 587)
+        : preset.port;
     widget.onSave(widget.current.copyWith(
       host: _hostCtl.text.trim(),
       port: port,
@@ -362,6 +381,10 @@ class _SettingsSheetState extends State<_SettingsSheet> {
       webSearchFallbackApiKey: _wsFbKeyCtl.text.trim(),
       emailAddress: _emailCtl.text.trim(),
       emailAppPassword: _emailPwCtl.text.trim(),
+      emailProvider: _emailProvider,
+      emailImapHost: imapHost,
+      emailSmtpHost: smtpHost,
+      emailSmtpPort: smtpPort,
     ));
     Navigator.pop(context);
   }
@@ -483,14 +506,31 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                       ],
                     ),
                     const Divider(height: 28, color: Aurora.glassBorder),
-                    _label('Email — read my inbox (optional)'),
+                    _label('Email — your own inbox (optional)'),
                     const SizedBox(height: 4),
                     Text(
-                      'Gmail needs a 16-digit App Password (not your login '
-                      'password). Create one at myaccount.google.com/apppasswords '
-                      'after turning on 2-Step Verification.',
+                      _emailProvider == 'gmail'
+                          ? 'Gmail: use a 16-digit App Password (not your login '
+                              'password) from myaccount.google.com/apppasswords '
+                              'after enabling 2-Step Verification.'
+                          : 'Use your mailbox password (or an app password if '
+                              'your provider requires one).',
                       style: theme.textTheme.bodySmall
                           ?.copyWith(color: Aurora.textMuted),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        for (final e in EmailProviders.presets.entries)
+                          ChoiceChip(
+                            label: Text(e.value.label),
+                            selected: _emailProvider == e.key,
+                            onSelected: (_) =>
+                                setState(() => _emailProvider = e.key),
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 10),
                     TextField(
@@ -499,7 +539,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                       autocorrect: false,
                       decoration: const InputDecoration(
                         labelText: 'Email address',
-                        hintText: 'you@gmail.com — blank to disable',
+                        hintText: 'you@example.com — blank to disable',
                         border: OutlineInputBorder(),
                       ),
                     ),
@@ -524,6 +564,47 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                         ),
                       ),
                     ),
+                    if (_emailProvider == 'custom') ...[
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _imapCtl,
+                        autocorrect: false,
+                        decoration: const InputDecoration(
+                          labelText: 'IMAP host (incoming)',
+                          hintText: 'mail.yourdomain.com',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _smtpCtl,
+                              autocorrect: false,
+                              decoration: const InputDecoration(
+                                labelText: 'SMTP host (outgoing)',
+                                hintText: 'mail.yourdomain.com',
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          SizedBox(
+                            width: 92,
+                            child: TextField(
+                              controller: _smtpPortCtl,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: 'Port',
+                                hintText: '587',
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                     const Divider(height: 28, color: Aurora.glassBorder),
                     _label('Web search (optional)'),
                     const SizedBox(height: 8),

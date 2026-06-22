@@ -30,6 +30,10 @@ class ConfigStore {
       webSearchFallbackApiKey: p.getString('cfg.ws.fbKey'),
       emailAddress: p.getString('cfg.email.addr'),
       emailAppPassword: p.getString('cfg.email.pw'),
+      emailProvider: p.getString('cfg.email.provider'),
+      emailImapHost: p.getString('cfg.email.imap'),
+      emailSmtpHost: p.getString('cfg.email.smtp'),
+      emailSmtpPort: p.getInt('cfg.email.smtpPort'),
     );
   }
 
@@ -46,5 +50,9 @@ class ConfigStore {
     await p.setString('cfg.ws.fbKey', c.webSearchFallbackApiKey ?? '');
     await p.setString('cfg.email.addr', c.emailAddress ?? '');
     await p.setString('cfg.email.pw', c.emailAppPassword ?? '');
+    await p.setString('cfg.email.provider', c.emailProvider);
+    await p.setString('cfg.email.imap', c.emailImapHost ?? '');
+    await p.setString('cfg.email.smtp', c.emailSmtpHost ?? '');
+    await p.setInt('cfg.email.smtpPort', c.emailSmtpPort);
   }
 }

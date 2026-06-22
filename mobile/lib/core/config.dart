@@ -27,6 +27,10 @@ class AppConfig {
     this.webSearchFallbackApiKey,
     this.emailAddress,
     this.emailAppPassword,
+    this.emailProvider = 'gmail',
+    this.emailImapHost,
+    this.emailSmtpHost,
+    this.emailSmtpPort = 587,
   });
 
   /// Backend host (IP or DNS name), without scheme or port.
@@ -61,6 +65,14 @@ class AppConfig {
   /// per-session in `hello.email`; the backend never persists it.
   final String? emailAddress;
   final String? emailAppPassword;
+
+  /// Mail provider preset (`gmail` | `outlook` | `yahoo` | `hostinger` |
+  /// `custom`) plus the resolved IMAP/SMTP hosts so any provider works — the
+  /// user reads and sends from their OWN mailbox.
+  final String emailProvider;
+  final String? emailImapHost;
+  final String? emailSmtpHost;
+  final int emailSmtpPort;
 
   /// Build the initial config from `--dart-define` values, falling back to
   /// localhost defaults suitable for an emulator talking to a host backend.
@@ -116,6 +128,10 @@ class AppConfig {
     String? webSearchFallbackApiKey,
     String? emailAddress,
     String? emailAppPassword,
+    String? emailProvider,
+    String? emailImapHost,
+    String? emailSmtpHost,
+    int? emailSmtpPort,
   }) =>
       AppConfig(
         host: host ?? this.host,
@@ -132,8 +148,48 @@ class AppConfig {
             webSearchFallbackApiKey ?? this.webSearchFallbackApiKey,
         emailAddress: emailAddress ?? this.emailAddress,
         emailAppPassword: emailAppPassword ?? this.emailAppPassword,
+        emailProvider: emailProvider ?? this.emailProvider,
+        emailImapHost: emailImapHost ?? this.emailImapHost,
+        emailSmtpHost: emailSmtpHost ?? this.emailSmtpHost,
+        emailSmtpPort: emailSmtpPort ?? this.emailSmtpPort,
       );
 
   @override
   String toString() => 'AppConfig(${secure ? "wss" : "ws"}://$host:$port)';
+}
+
+/// Known mail-provider presets so users connect their OWN mailbox in one tap.
+/// `custom` leaves the hosts blank for the user to fill.
+class EmailProviders {
+  EmailProviders._();
+
+  static const Map<String,
+          ({String label, String imap, String smtp, int port})>
+      presets = {
+    'gmail': (
+      label: 'Gmail',
+      imap: 'imap.gmail.com',
+      smtp: 'smtp.gmail.com',
+      port: 587,
+    ),
+    'outlook': (
+      label: 'Outlook / 365',
+      imap: 'outlook.office365.com',
+      smtp: 'smtp.office365.com',
+      port: 587,
+    ),
+    'yahoo': (
+      label: 'Yahoo',
+      imap: 'imap.mail.yahoo.com',
+      smtp: 'smtp.mail.yahoo.com',
+      port: 465,
+    ),
+    'hostinger': (
+      label: 'Hostinger',
+      imap: 'imap.hostinger.com',
+      smtp: 'smtp.hostinger.com',
+      port: 465,
+    ),
+    'custom': (label: 'Custom', imap: '', smtp: '', port: 587),
+  };
 }

@@ -22,22 +22,31 @@ from app.tools.base import Tool, ToolContext
 logger = get_logger(__name__)
 
 _DEFAULT_SMTP_HOST = "smtp.gmail.com"
-_SMTP_PORT = 587
+_DEFAULT_SMTP_PORT = 587
 
 
-def _send(host: str, address: str, password: str, to: str, subject: str,
-          body: str) -> None:
-    """Blocking SMTP send (run in a thread)."""
+def _send(host: str, port: int, address: str, password: str, to: str,
+          subject: str, body: str) -> None:
+    """Blocking SMTP send (run in a thread).
+
+    Port 465 uses implicit TLS (SMTP_SSL); any other port (587, 25) uses
+    STARTTLS — covering Gmail, Outlook/365, Yahoo, Hostinger and custom servers.
+    """
     msg = EmailMessage()
     msg["From"] = address
     msg["To"] = to
     msg["Subject"] = subject
     msg.set_content(body)
     context = ssl.create_default_context()
-    with smtplib.SMTP(host, _SMTP_PORT, timeout=20) as server:
-        server.starttls(context=context)
-        server.login(address, password)
-        server.send_message(msg)
+    if port == 465:
+        with smtplib.SMTP_SSL(host, port, timeout=25, context=context) as s:
+            s.login(address, password)
+            s.send_message(msg)
+    else:
+        with smtplib.SMTP(host, port, timeout=25) as s:
+            s.starttls(context=context)
+            s.login(address, password)
+            s.send_message(msg)
 
 
 class SendEmailTool(Tool):
@@ -68,6 +77,10 @@ class SendEmailTool(Tool):
         password = (cfg.get("appPassword") or "").strip()
         host = (cfg.get("smtpHost") or _DEFAULT_SMTP_HOST).strip() \
             or _DEFAULT_SMTP_HOST
+        try:
+            port = int(cfg.get("smtpPort") or _DEFAULT_SMTP_PORT)
+        except (TypeError, ValueError):
+            port = _DEFAULT_SMTP_PORT
         if not address or not password:
             return {
                 "ok": False,
@@ -83,7 +96,7 @@ class SendEmailTool(Tool):
         body = kwargs.get("body") or ""
         try:
             await asyncio.to_thread(
-                _send, host, address, password, to, subject, body
+                _send, host, port, address, password, to, subject, body
             )
         except smtplib.SMTPAuthenticationError as exc:
             logger.warning("send_email.auth_failed", error=str(exc))
