@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../capture/capture_source.dart';
 import '../capture/device_registry.dart';
+import '../core/chat_history.dart';
 import '../core/config.dart';
 import '../core/location.dart';
 import '../core/logger.dart';
@@ -155,6 +156,8 @@ class LiveController {
 
   /// Tear down capture, playback, and the socket (keeps objects reusable).
   Future<void> disconnect() async {
+    // Persist the conversation before tearing down so the user can revisit it.
+    unawaited(ChatHistoryStore.saveSession(_state.transcripts));
     await _stopAudio();
     await _stopVideo();
     await _player.stop();
@@ -530,6 +533,7 @@ class LiveController {
   // ---- Disposal ----------------------------------------------------------
 
   Future<void> dispose() async {
+    await ChatHistoryStore.saveSession(_state.transcripts);
     _ttsClear?.cancel();
     await _audioSub?.cancel();
     await _videoSub?.cancel();

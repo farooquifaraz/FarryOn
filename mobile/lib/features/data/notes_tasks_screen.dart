@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/chat_history.dart';
 import '../../core/theme.dart';
 import '../../data/data_api.dart';
 import '../../state/providers.dart';
@@ -16,7 +17,7 @@ class NotesTasksScreen extends ConsumerStatefulWidget {
 
 class _NotesTasksScreenState extends ConsumerState<NotesTasksScreen>
     with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 2, vsync: this);
+  late final TabController _tabs = TabController(length: 3, vsync: this);
 
   @override
   void dispose() {
@@ -36,12 +37,20 @@ class _NotesTasksScreenState extends ConsumerState<NotesTasksScreen>
           indicatorColor: Aurora.teal,
           labelColor: Aurora.textPrimary,
           unselectedLabelColor: Aurora.textMuted,
-          tabs: const [Tab(text: 'Notes'), Tab(text: 'Tasks')],
+          tabs: const [
+            Tab(text: 'Notes'),
+            Tab(text: 'Tasks'),
+            Tab(text: 'History'),
+          ],
         ),
       ),
       body: TabBarView(
         controller: _tabs,
-        children: [_NotesTab(api: api), _TasksTab(api: api)],
+        children: [
+          _NotesTab(api: api),
+          _TasksTab(api: api),
+          const _HistoryTab(),
+        ],
       ),
     );
   }
@@ -280,6 +289,158 @@ class _GroupHeader extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Past conversations, newest first. Tap one to read the full transcript.
+class _HistoryTab extends StatefulWidget {
+  const _HistoryTab();
+  @override
+  State<_HistoryTab> createState() => _HistoryTabState();
+}
+
+class _HistoryTabState extends State<_HistoryTab> {
+  late Future<List<ChatSession>> _future = ChatHistoryStore.load();
+
+  void _reload() => setState(() => _future = ChatHistoryStore.load());
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<ChatSession>>(
+      future: _future,
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final sessions = snap.data ?? const [];
+        if (sessions.isEmpty) {
+          return const _EmptyState(
+            icon: Icons.forum_outlined,
+            label: 'No saved conversations yet.\n'
+                'Chats are saved when you end a session.',
+          );
+        }
+        return Column(
+          children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                icon: const Icon(Icons.delete_sweep_outlined,
+                    size: 18, color: Aurora.textMuted),
+                label: const Text('Clear all',
+                    style: TextStyle(color: Aurora.textMuted)),
+                onPressed: () async {
+                  await ChatHistoryStore.clear();
+                  _reload();
+                },
+              ),
+            ),
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                itemCount: sessions.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, i) {
+                  final s = sessions[i];
+                  return _Card(
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        s.preview,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Aurora.textPrimary),
+                      ),
+                      subtitle: Text(
+                        '${_when(s.startedAt)} · ${s.lines.length} messages',
+                        style: const TextStyle(
+                            color: Aurora.textMuted, fontSize: 12),
+                      ),
+                      trailing: const Icon(Icons.chevron_right,
+                          color: Aurora.textMuted),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => _ChatSessionScreen(session: s),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Read-only view of one saved conversation.
+class _ChatSessionScreen extends StatelessWidget {
+  const _ChatSessionScreen({required this.session});
+  final ChatSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Aurora.base,
+      appBar: AppBar(title: Text(_when(session.startedAt))),
+      body: ListView.builder(
+        padding: const EdgeInsets.all(12),
+        itemCount: session.lines.length,
+        itemBuilder: (context, i) {
+          final l = session.lines[i];
+          final isUser = l.role == 'user';
+          return Align(
+            alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.78,
+              ),
+              decoration: BoxDecoration(
+                color: isUser
+                    ? Aurora.teal.withValues(alpha: 0.20)
+                    : Aurora.glass,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Aurora.glassBorder),
+              ),
+              child: Column(
+                crossAxisAlignment: isUser
+                    ? CrossAxisAlignment.end
+                    : CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isUser ? 'You' : 'FarryOn',
+                    style: TextStyle(
+                      color: isUser ? Aurora.mint : Aurora.tealInk,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(l.text,
+                      style: const TextStyle(
+                          color: Aurora.textPrimary, height: 1.35)),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// "21 Jun, 17:43"-style label for a saved conversation.
+String _when(DateTime d) {
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  final h = d.hour.toString().padLeft(2, '0');
+  final m = d.minute.toString().padLeft(2, '0');
+  return '${d.day} ${months[d.month - 1]}, $h:$m';
 }
 
 class _Card extends StatelessWidget {

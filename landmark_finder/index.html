@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🏛️ Landmark Finder</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh; color: #1a1a2e; padding: 24px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  header { text-align: center; color: #fff; margin-bottom: 24px; }
+  header h1 { font-size: 2rem; margin-bottom: 6px; }
+  header p { opacity: .9; font-size: .95rem; }
+  .card {
+    background: #fff; border-radius: 16px; padding: 24px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.2); margin-bottom: 20px;
+  }
+  label { font-weight: 600; font-size: .85rem; display: block; margin: 14px 0 6px; color: #444; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 12px 14px; border: 2px solid #e0e0e0;
+    border-radius: 10px; font-size: .95rem; transition: border .2s;
+  }
+  input:focus { outline: none; border-color: #764ba2; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .or { text-align: center; color: #999; font-size: .8rem; margin: 14px 0; }
+  .drop {
+    border: 2px dashed #cbd0dc; border-radius: 12px; padding: 26px;
+    text-align: center; color: #888; cursor: pointer; transition: .2s;
+  }
+  .drop:hover, .drop.over { border-color: #764ba2; background: #f7f4fc; color: #764ba2; }
+  .preview { max-width: 100%; max-height: 240px; border-radius: 12px; margin-top: 14px; display: none; }
+  .btns { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+  button {
+    flex: 1; min-width: 180px; padding: 14px; border: none; border-radius: 10px;
+    font-size: .95rem; font-weight: 600; cursor: pointer; transition: transform .1s, opacity .2s;
+  }
+  button:active { transform: scale(.98); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-web { background: #10b981; color: #fff; }
+  .btn-api { background: #764ba2; color: #fff; }
+  .btn-shop { background: #f59e0b; color: #fff; }
+  .mkt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px,1fr)); gap: 10px; margin-top: 12px; }
+  .mkt {
+    display: block; text-align: center; padding: 12px 8px; border-radius: 10px;
+    background: #fff7ed; border: 1px solid #fed7aa; color: #c2410c; font-weight: 600;
+    font-size: .85rem; text-decoration: none; transition: .15s;
+  }
+  .mkt:hover { background: #f59e0b; color: #fff; }
+  .mkt small { display: block; font-weight: 400; font-size: .7rem; opacity: .7; }
+  .chips { margin-top: 10px; }
+  .chip {
+    display: inline-block; background: #ede9fe; color: #6d28d9; padding: 4px 10px;
+    border-radius: 14px; font-size: .78rem; margin: 3px 4px 3px 0;
+  }
+  .simg { display: flex; gap: 8px; overflow-x: auto; margin-top: 12px; padding-bottom: 4px; }
+  .simg img { height: 80px; border-radius: 8px; border: 1px solid #eee; }
+  .pages a { display: block; font-size: .82rem; margin: 5px 0; color: #764ba2; }
+  .ai-box {
+    background: linear-gradient(135deg,#eef2ff,#faf5ff); border: 1px solid #ddd6fe;
+    border-radius: 12px; padding: 14px 16px; margin-top: 14px;
+    font-size: .9rem; line-height: 1.6; color: #312e81; white-space: pre-wrap;
+  }
+  .ai-box b { color: #6d28d9; }
+  .hint { font-size: .78rem; color: #999; margin-top: 8px; }
+  #results { display: none; }
+  .lm {
+    border: 1px solid #ececf1; border-radius: 12px; padding: 18px; margin-bottom: 14px;
+    background: #fafaff;
+  }
+  .lm h3 { color: #764ba2; margin-bottom: 8px; }
+  .meta { font-size: .85rem; color: #555; margin: 4px 0; }
+  .bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin: 8px 0; }
+  .bar > div { height: 100%; background: linear-gradient(90deg,#10b981,#764ba2); }
+  .about { font-size: .9rem; line-height: 1.5; color: #333; margin-top: 10px; }
+  .lm a { color: #764ba2; word-break: break-all; }
+  iframe { width: 100%; height: 220px; border: 0; border-radius: 10px; margin-top: 12px; }
+  .spinner { display: none; text-align: center; padding: 20px; color: #764ba2; font-weight: 600; }
+  .err { background: #fee; color: #c00; padding: 14px; border-radius: 10px; display: none; margin-top: 10px; }
+  .lens-link { background: #ecfdf5; padding: 16px; border-radius: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🏛️ Landmark Finder</h1>
+    <p>Kisi bhi landmark image se naam, location aur poori detail nikalo</p>
+  </header>
+
+  <div class="card">
+    <label>📎 Image URL</label>
+    <input type="text" id="imageUrl" placeholder="https://example.com/photo.jpg">
+
+    <div class="or">— ya —</div>
+
+    <div class="drop" id="drop">
+      📁 Yahan image drag karo, ya click karke upload karo
+      <input type="file" id="fileInput" accept="image/*" hidden>
+    </div>
+    <img id="preview" class="preview" alt="preview">
+
+    <label>🔑 Cloud Vision API Key <span style="font-weight:400;color:#999">(landmark/product ke liye)</span></label>
+    <input type="password" id="apiKey" placeholder="Cloud Vision API key">
+    <div class="hint">Key na dein to "Free Link" button se Google Lens link milega.</div>
+
+    <label>🤖 Gemini API Key <span style="font-weight:400;color:#999">(optional — product ki AI explanation ke liye)</span></label>
+    <input type="password" id="geminiKey" placeholder="Gemini API key (na ho to AI detail skip ho jayegi)">
+    <div class="hint">Ye alag key hai (Generative Language API). Product mode me AI explanation deti hai.</div>
+
+    <div class="btns">
+      <button class="btn-web" id="btnWeb">🌐 Free Link (no key)</button>
+      <button class="btn-api" id="btnApi">🏛️ Landmark Detail</button>
+    </div>
+    <div class="btns">
+      <button class="btn-shop" id="btnShop">🛍️ Product Khojo (price & links)</button>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
+
+  <div class="spinner" id="spinner">⏳ Detect kar raha hoon...</div>
+
+  <div class="card" id="results"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let uploadedData = null;
+
+// File upload + drag/drop
+const drop = $('drop'), fileInput = $('fileInput'), preview = $('preview');
+drop.onclick = () => fileInput.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); handleFile(e.dataTransfer.files[0]); };
+fileInput.onchange = e => handleFile(e.target.files[0]);
+
+function handleFile(file) {
+  if (!file) return;
+  $('imageUrl').value = '';
+  const reader = new FileReader();
+  reader.onload = e => {
+    uploadedData = e.target.result;       // data:image/...;base64,xxxx
+    preview.src = uploadedData;
+    preview.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+}
+$('imageUrl').oninput = () => {
+  uploadedData = null;
+  const v = $('imageUrl').value.trim();
+  if (v) { preview.src = v; preview.style.display = 'block'; }
+  else preview.style.display = 'none';
+};
+
+function showErr(msg) { const e = $('err'); e.textContent = msg; e.style.display = 'block'; }
+function clearErr() { $('err').style.display = 'none'; }
+function setLoading(on) {
+  $('spinner').style.display = on ? 'block' : 'none';
+  $('btnWeb').disabled = on; $('btnApi').disabled = on;
+}
+
+function getImage() {
+  const url = $('imageUrl').value.trim();
+  if (url) return { image_url: url };
+  if (uploadedData) return { image_data: uploadedData };
+  return null;
+}
+
+// WEB mode
+$('btnWeb').onclick = async () => {
+  clearErr();
+  const img = getImage();
+  if (!img) return showErr('Pehle image URL daalein ya file upload karein.');
+  if (!img.image_url) return showErr('Free link sirf image URL ke liye hai. File upload kiya hai to API mode use karein.');
+  setLoading(true);
+  try {
+    const res = await postJSON({ mode: 'web', ...img });
+    renderWeb(res.result.lens_url);
+  } catch (e) { showErr(e.message); }
+  setLoading(false);
+};
+
+// API mode
+$('btnApi').onclick = async () => {
+  clearErr();
+  const img = getImage();
+  if (!img) return showErr('Pehle image URL daalein ya file upload karein.');
+  const key = $('apiKey').value.trim();
+  if (!key) return showErr('API mode ke liye Cloud Vision API key chahiye (ya Free Link button use karein).');
+  setLoading(true);
+  try {
+    const res = await postJSON({ mode: 'api', api_key: key, ...img });
+    renderLandmarks(res.result.landmarks);
+  } catch (e) { showErr(e.message); }
+  setLoading(false);
+};
+
+// PRODUCT / SHOPPING mode
+$('btnShop').onclick = async () => {
+  clearErr();
+  const img = getImage();
+  if (!img) return showErr('Pehle product ki image URL daalein ya file upload karein.');
+  const key = $('apiKey').value.trim();
+  if (!key) return showErr('Product khojne ke liye Cloud Vision API key chahiye.');
+  setLoading(true);
+  try {
+    const geminiKey = $('geminiKey').value.trim();
+    const res = await postJSON({ mode: 'product', api_key: key, gemini_key: geminiKey, ...img });
+    renderProduct(res.result);
+  } catch (e) { showErr(e.message); }
+  setLoading(false);
+};
+
+async function postJSON(body) {
+  const r = await fetch('/api/detect', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await r.json();
+  if (!data.ok) throw new Error(data.error || 'Kuch galat hua');
+  return data;
+}
+
+function renderWeb(link) {
+  const r = $('results');
+  r.style.display = 'block';
+  r.innerHTML = `<div class="lens-link">
+    <h3 style="color:#10b981">🌐 Google Lens Link (free)</h3>
+    <p style="margin:10px 0;font-size:.9rem;color:#555">Niche link kholein — Google Lens image pehchan kar poori detail dikha dega:</p>
+    <a href="${link}" target="_blank">${link}</a>
+    <div style="margin-top:14px"><a href="${link}" target="_blank">
+      <button class="btn-web" style="width:auto;padding:10px 20px">↗ Google Lens me kholo</button></a></div>
+  </div>`;
+}
+
+function renderLandmarks(landmarks) {
+  const r = $('results');
+  r.style.display = 'block';
+  if (!landmarks || !landmarks.length) {
+    r.innerHTML = `<div class="lm"><h3>❌ Koi landmark nahi mila</h3>
+      <p class="meta">Image me clear/famous landmark nahi hai, ya pehchana nahi ja saka.</p></div>`;
+    return;
+  }
+  r.innerHTML = landmarks.map((lm, i) => {
+    const pct = (lm.confidence * 100).toFixed(1);
+    let map = '', coords = '';
+    if (lm.location) {
+      const { lat, lng } = lm.location;
+      coords = `<p class="meta">📍 <b>Location:</b> ${lat.toFixed(5)}, ${lng.toFixed(5)}
+        &nbsp;|&nbsp; <a href="${lm.maps_url}" target="_blank">🗺️ Google Maps</a></p>`;
+      map = `<iframe loading="lazy" src="https://www.google.com/maps?q=${lat},${lng}&output=embed"></iframe>`;
+    }
+    const about = lm.description ? `<div class="about">📖 ${lm.description}
+        ${lm.wikipedia_url ? `<br><br>🔗 <a href="${lm.wikipedia_url}" target="_blank">Wikipedia</a>` : ''}</div>` : '';
+    return `<div class="lm">
+      <h3>🏛️ ${lm.name}</h3>
+      <p class="meta">Confidence: <b>${pct}%</b></p>
+      <div class="bar"><div style="width:${pct}%"></div></div>
+      ${coords}${about}${map}
+    </div>`;
+  }).join('');
+}
+
+function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function renderProduct(p) {
+  const r = $('results');
+  r.style.display = 'block';
+  if (!p || !p.product_name) {
+    r.innerHTML = `<div class="lm"><h3>❌ Product pehchana nahi gaya</h3>
+      <p class="meta">Image clear nahi hai, ya ye product web par nahi mila. Saaf, single-product photo try karein.</p></div>`;
+    return;
+  }
+  // marketplace links region ke hisaab se group karo
+  const byRegion = {};
+  (p.marketplaces || []).forEach(m => { (byRegion[m.region] = byRegion[m.region] || []).push(m); });
+  const mktHtml = Object.keys(byRegion).map(reg => `
+    <p class="meta" style="margin-top:14px"><b>${reg}</b></p>
+    <div class="mkt-grid">
+      ${byRegion[reg].map(m => `<a class="mkt" href="${m.search_url}" target="_blank">${esc(m.name)}<small>search & price</small></a>`).join('')}
+    </div>`).join('');
+
+  // AI explanation (Gemini) — bullets ko thoda format kar do
+  const ai = p.ai_explanation
+    ? `<div class="ai-box">🤖 <b>AI Explanation:</b><br>${esc(p.ai_explanation).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}</div>`
+    : '';
+  const chips = (p.categories || []).map(e => `<span class="chip">${esc(e)}</span>`).join('');
+  const pages = (p.matching_pages || []).length
+    ? `<p class="meta" style="margin-top:14px"><b>🔗 Web par mila yahan:</b></p>
+       <div class="pages">${p.matching_pages.map(pg => `<a href="${pg.url}" target="_blank">${esc(pg.title)}</a>`).join('')}</div>`
+    : '';
+  const sim = (p.similar_images || []).length
+    ? `<p class="meta" style="margin-top:14px"><b>🖼️ Milti-julti images:</b></p>
+       <div class="simg">${p.similar_images.map(u => `<a href="${u}" target="_blank"><img src="${u}" loading="lazy"></a>`).join('')}</div>`
+    : '';
+
+  r.innerHTML = `<div class="lm">
+    <h3>🛍️ ${esc(p.product_name)}</h3>
+    <p class="meta">Google ne image se ye product pehchana. Niche marketplace links par click karke price dekhein:</p>
+    ${chips ? `<div class="chips">${chips}</div>` : ''}
+    ${ai}
+    ${mktHtml}
+    ${pages}
+    ${sim}
+  </div>`;
+}
+</script>
+</body>
+</html>
