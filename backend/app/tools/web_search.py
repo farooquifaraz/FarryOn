@@ -193,10 +193,7 @@ class WebSearchTool(Tool):
         # summary and put it AFTER the real sources.
         answer = (data.get("answer") or "").strip()
         if answer:
-            results.append(
-                {"title": "AI summary (verify with sources)", "url": "",
-                 "snippet": answer}
-            )
+            results.append({"title": "Summary", "url": "", "snippet": answer})
         return results
 
     async def _serper(self, query: str, api_key: str) -> list[dict[str, str]]:
