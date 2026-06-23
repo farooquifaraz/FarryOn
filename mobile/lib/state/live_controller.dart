@@ -108,6 +108,18 @@ class LiveController {
   /// The most recent camera frame (raw JPEG), or null if the camera is off.
   Uint8List? get lastFrame => _lastFrame;
 
+  /// The freshest camera frame, waiting up to ~2s if the camera just turned on
+  /// or resumed and the first frame (~1 fps) hasn't arrived yet — so the scan
+  /// button doesn't wrongly report "no camera frame".
+  Future<Uint8List?> grabFrame() async {
+    if (_lastFrame != null) return _lastFrame;
+    if (!_state.cameraOn) return null;
+    for (var i = 0; i < 8 && _lastFrame == null; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return _lastFrame;
+  }
+
   // Voice (`identify_image`) results, surfaced so the UI can present the same
   // result sheet the scan button shows.
   final _finderController = StreamController<FinderDetection>.broadcast();

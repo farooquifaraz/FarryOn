@@ -28,11 +28,13 @@ class IdentifyImageTool(Tool):
 
     name = "identify_image"
     description = (
-        "Identify the landmark or product the user's camera is currently looking "
-        "at. Use when they ask what a place/building/monument is, or what an "
-        "object/product is, while pointing the camera. 'kind' picks the type: "
-        "'landmark' for places, 'product' for objects/things to buy, 'auto' if "
-        "unsure (tries landmark then product)."
+        "Capture the current camera view and identify what it shows — a "
+        "landmark/place, a product, or any ordinary object. Use whenever the "
+        "user wants to know what they are looking at: 'what is this', 'what's "
+        "in front of me', 'take a photo and tell me what it is', 'click a pic', "
+        "'scan this', 'identify/describe this'. No tap is needed. 'kind' picks "
+        "the type: 'landmark', 'product', or 'auto' (default — auto-detects "
+        "landmark vs product vs object). Prefer 'auto' unless clearly told."
     )
     parameters: dict[str, Any] = {
         "type": "object",

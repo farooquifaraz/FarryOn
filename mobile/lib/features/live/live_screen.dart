@@ -80,7 +80,8 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
   /// Flow #2: identify whatever the live camera currently sees.
   Future<void> _scanCurrentView() async {
     final controller = ref.read(liveControllerProvider);
-    final frame = controller.lastFrame;
+    final frame = await controller.grabFrame();
+    if (!mounted) return;
     if (frame == null) {
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
@@ -1196,37 +1197,40 @@ class _TopOverlay extends StatelessWidget {
             connectionOnly: true,
           ),
           const Spacer(),
-          IconButton(
-            tooltip: 'Finder — identify a photo',
-            icon: const Icon(Icons.image_search, color: Colors.white),
-            onPressed: onFinder,
+          _BarIcon(Icons.image_search, 'Finder — identify a photo', onFinder),
+          _BarIcon(Icons.checklist, 'Notes & tasks', onNotes),
+          _BarIcon(
+            state.cameraPortrait
+                ? Icons.screen_rotation
+                : Icons.screen_lock_rotation,
+            state.cameraPortrait ? 'Switch to landscape' : 'Switch to portrait',
+            onOrientation,
           ),
-          IconButton(
-            tooltip: 'Notes & tasks',
-            icon: const Icon(Icons.checklist, color: Colors.white),
-            onPressed: onNotes,
-          ),
-          IconButton(
-            tooltip: state.cameraPortrait
-                ? 'Switch to landscape'
-                : 'Switch to portrait',
-            icon: Icon(
-              state.cameraPortrait
-                  ? Icons.screen_rotation
-                  : Icons.screen_lock_rotation,
-              color: Colors.white,
-            ),
-            onPressed: onOrientation,
-          ),
-          IconButton(
-            tooltip: 'Settings',
-            icon: const Icon(Icons.settings, color: Colors.white),
-            onPressed: onSettings,
-          ),
+          _BarIcon(Icons.settings, 'Settings', onSettings),
         ],
       ),
     );
   }
+}
+
+/// Compact icon button for the floating top bar (so all icons fit even when the
+/// connection-status pill is wide, e.g. "Connecting").
+class _BarIcon extends StatelessWidget {
+  const _BarIcon(this.icon, this.tooltip, this.onTap);
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+        tooltip: tooltip,
+        icon: Icon(icon, color: Colors.white),
+        onPressed: onTap,
+        iconSize: 22,
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
+      );
 }
 
 /// Vertical zoom preset chips (4× / 2× / 1×) on the camera's right edge.
