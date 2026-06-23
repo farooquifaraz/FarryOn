@@ -9,6 +9,7 @@ import '../core/config.dart';
 import '../core/location.dart';
 import '../core/logger.dart';
 import '../core/notifications.dart';
+import '../data/finder_api.dart';
 import '../data/live_client.dart';
 import '../playback/pcm_player.dart';
 import '../protocol/frames.dart';
@@ -99,6 +100,20 @@ class LiveController {
 
   /// Stream of state snapshots for the UI.
   Stream<LiveSessionState> get stateStream => _stateController.stream;
+
+  // Latest camera JPEG frame, kept so the live-scan button and (via the cached
+  // server-side frame) the identify_image tool can inspect the current view.
+  Uint8List? _lastFrame;
+
+  /// The most recent camera frame (raw JPEG), or null if the camera is off.
+  Uint8List? get lastFrame => _lastFrame;
+
+  // Voice (`identify_image`) results, surfaced so the UI can present the same
+  // result sheet the scan button shows.
+  final _finderController = StreamController<FinderDetection>.broadcast();
+
+  /// Detections produced by the `identify_image` voice tool.
+  Stream<FinderDetection> get finderEvents => _finderController.stream;
 
   LiveSessionState _state = const LiveSessionState();
   LiveSessionState get state => _state;
@@ -341,6 +356,15 @@ class LiveController {
     }
     _emit(_state.copyWith(tools: list));
     _applyReminder(msg);
+
+    // Voice flow: surface identify_image results so the UI can show the same
+    // result sheet the scan button shows. The tool returns the full
+    // {ok, mode, result} envelope as its payload.
+    if (msg.name == 'identify_image' && msg.result != null) {
+      if (!_finderController.isClosed) {
+        _finderController.add(FinderDetection.fromEnvelope(msg.result!));
+      }
+    }
   }
 
   /// Schedule, reschedule, or cancel the phone reminder for a task whose
@@ -455,6 +479,9 @@ class LiveController {
     await _activeSource.startVideo();
     await _videoSub?.cancel();
     _videoSub = _activeSource.jpegFrames.listen((jpeg) {
+      // Always keep the freshest frame for the scan button / identify_image,
+      // even while the assistant is speaking.
+      _lastFrame = jpeg;
       // Don't feed frames while the assistant is speaking: they can't influence
       // the in-flight reply and would only pile up in the realtime model's
       // context, slowing later turns. Frames resume the moment TTS drains.
@@ -467,6 +494,9 @@ class LiveController {
   Future<void> _stopVideo() async {
     await _videoSub?.cancel();
     _videoSub = null;
+    // Drop the cached frame so a later scan/identify can't run against a stale
+    // scene from before the camera was turned off.
+    _lastFrame = null;
     await _activeSource.stopVideo();
     _emit(_state.copyWith(cameraOn: false));
   }
@@ -478,6 +508,31 @@ class LiveController {
       await _startVideo();
     } else {
       await _stopVideo();
+    }
+  }
+
+  // ---- App lifecycle (background/foreground) -----------------------------
+
+  bool _cameraWasOn = false;
+
+  /// App went to the background: the OS invalidates the camera, so fully
+  /// release it (a frozen dead controller is exactly the "camera stuck" hang).
+  Future<void> handleAppBackground() async {
+    _cameraWasOn = _state.cameraOn;
+    if (_state.cameraOn) {
+      await _stopVideo();
+      await _activeSource.releaseCamera();
+      _emit(_state.copyWith(cameraOn: false));
+    }
+  }
+
+  /// App returned to the foreground: re-open the camera fresh if it was on and
+  /// the session is still connected.
+  Future<void> handleAppForeground() async {
+    if (_cameraWasOn &&
+        _state.connection == ConnectionStatus.connected &&
+        !_state.cameraOn) {
+      await _startVideo(); // re-opens a fresh controller (camera was released)
     }
   }
 
@@ -544,5 +599,6 @@ class LiveController {
     await _player.dispose();
     await _registry.dispose();
     await _stateController.close();
+    await _finderController.close();
   }
 }

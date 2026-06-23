@@ -22,3 +22,10 @@
 
 # Flutter embedding (defensive).
 -keep class io.flutter.** { *; }
+
+# Flutter's embedding references Google Play Core (deferred components / split
+# install) classes that we don't bundle — we ship a plain APK with no dynamic
+# feature modules. Suppress the resulting R8 "missing class" errors.
+-dontwarn com.google.android.play.core.**
+-keep class io.flutter.embedding.engine.deferredcomponents.** { *; }
+-keep class io.flutter.embedding.android.FlutterPlayStoreSplitApplication { *; }

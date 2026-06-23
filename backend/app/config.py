@@ -62,6 +62,13 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://... for production.",
     )
 
+    # -- Vision / image understanding (landmark + product finder) --------------
+    # Google Cloud Vision API key (LANDMARK_DETECTION + WEB_DETECTION). Required
+    # for the `identify_image` tool and the `POST /detect` endpoint. The Gemini
+    # key above (`gemini_api_key`) is reused for the optional product AI
+    # explanation, so no separate key is needed for that.
+    vision_api_key: str | None = Field(default=None)
+
     # -- Web search tool -------------------------------------------------------
     web_search_api_key: str | None = Field(default=None)
     web_search_provider: str = Field(

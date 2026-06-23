@@ -6,12 +6,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../capture/device_registry.dart';
 import '../../core/config.dart';
 import '../../core/theme.dart';
+import '../../data/finder_api.dart';
 import '../../data/live_client.dart';
 import '../../protocol/protocol.dart';
 import '../../state/live_state.dart';
 import '../../state/permissions.dart';
 import '../../state/providers.dart';
 import '../data/notes_tasks_screen.dart';
+import '../finder/finder_result_view.dart';
+import '../finder/finder_screen.dart';
 import 'widgets/aurora_orb.dart';
 import 'widgets/camera_preview_view.dart';
 import 'widgets/status_indicator.dart';
@@ -32,20 +35,107 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
   final _textController = TextEditingController();
   bool _connectRequested = false;
   double _zoomBase = 1.0; // zoom level when a pinch gesture begins
+  StreamSubscription<FinderDetection>? _finderSub;
+  bool _finderSheetOpen = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     // Kick off connection after first frame so providers are ready.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _connect());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_connect());
+      // Voice flow (#3): when identify_image returns, show the same result sheet
+      // the scan button shows so the user can tap Maps/Wikipedia/shop links.
+      // Present failures too (no frame / Vision error / nothing found) — the
+      // sheet renders a friendly error state, otherwise the voice path would
+      // show nothing at all on failure.
+      _finderSub = ref.read(liveControllerProvider).finderEvents.listen((d) {
+        if (mounted) _presentFinder(detection: d);
+      });
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _finderSub?.cancel();
     _textController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState lifecycle) {
+    // Recover the camera across background/foreground: Android invalidates the
+    // camera when the app is backgrounded, which froze the preview until the
+    // app was force-closed. Release it on pause, re-open it on resume.
+    final controller = ref.read(liveControllerProvider);
+    if (lifecycle == AppLifecycleState.paused) {
+      unawaited(controller.handleAppBackground());
+    } else if (lifecycle == AppLifecycleState.resumed) {
+      unawaited(controller.handleAppForeground());
+    }
+  }
+
+  /// Flow #2: identify whatever the live camera currently sees.
+  Future<void> _scanCurrentView() async {
+    final controller = ref.read(liveControllerProvider);
+    final frame = controller.lastFrame;
+    if (frame == null) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(
+          content: Text('No camera frame yet — turn the camera on and try again.'),
+        ));
+      return;
+    }
+    await _presentFinder(
+      future: ref.read(finderApiProvider).detect(imageBytes: frame),
+    );
+  }
+
+  /// Present the detection in a draggable bottom sheet. Pass [detection] when
+  /// it's already resolved (voice), or [future] to show a loading state first
+  /// (scan button).
+  Future<void> _presentFinder({
+    FinderDetection? detection,
+    Future<FinderDetection>? future,
+  }) async {
+    if (_finderSheetOpen) return;
+    _finderSheetOpen = true;
+    // Pause the live mic while the Finder result is open so the assistant
+    // doesn't keep listening/replying in the background while the user reads.
+    final controller = ref.read(liveControllerProvider);
+    final wasListening = ref.read(liveProvider).micOpen;
+    if (wasListening) await controller.stopListening();
+    try {
+      if (!mounted) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Aurora.surface,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (_) => DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.55,
+          minChildSize: 0.3,
+          maxChildSize: 0.92,
+          builder: (_, scrollController) => _FinderSheet(
+            detection: detection,
+            future: future,
+            scrollController: scrollController,
+          ),
+        ),
+      );
+    } finally {
+      // Always release the guard, even if the sheet failed to present —
+      // otherwise scan + voice sheets would be permanently disabled.
+      _finderSheetOpen = false;
+      // Resume listening if we paused it (and the session is still up).
+      if (wasListening && mounted) await controller.startListening();
+    }
   }
 
   Future<void> _connect() async {
@@ -155,6 +245,11 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                 onSettings: _showSettingsSheet,
                 onOrientation: () =>
                     notifier.setCameraPortrait(!state.cameraPortrait),
+                onFinder: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const FinderScreen(),
+                  ),
+                ),
                 onNotes: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const NotesTasksScreen(),
@@ -200,6 +295,7 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                     },
                     onToggleCamera: () =>
                         notifier.setCameraEnabled(!state.cameraOn),
+                    onScan: _scanCurrentView,
                   ),
                   ],
                 ),
@@ -292,6 +388,11 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
 const String _kCloudHost = 'farryon-backend.onrender.com';
 const int _kCloudPort = 443;
 
+/// Default local/dev backend (the user's PC on the LAN). Editable below the
+/// toggle, but one tap fills the common case.
+const String _kLocalHost = '192.168.1.107';
+const int _kLocalPort = 8000;
+
 /// A scrollable, keyboard-safe settings sheet with a pinned Save bar. Replaces
 /// the old fixed Column that pushed the Save button (and the lower fields) off
 /// screen once the keyboard opened.
@@ -357,6 +458,14 @@ class _SettingsSheetState extends State<_SettingsSheet> {
       _hostCtl.text = _kCloudHost;
       _portCtl.text = '$_kCloudPort';
       _secure = true;
+    });
+  }
+
+  void _useLocal() {
+    setState(() {
+      _hostCtl.text = _kLocalHost;
+      _portCtl.text = '$_kLocalPort';
+      _secure = false;
     });
   }
 
@@ -431,8 +540,10 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                   children: [
                     _label('Connection'),
                     const SizedBox(height: 8),
-                    _cloudButton(),
+                    _connectionStatus(),
                     const SizedBox(height: 12),
+                    _modeToggle(),
+                    const SizedBox(height: 14),
                     TextField(
                       controller: _hostCtl,
                       autocorrect: false,
@@ -679,47 +790,124 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         ),
       );
 
-  Widget _cloudButton() {
-    final on = _isCloud;
-    return InkWell(
-      onTap: _useCloud,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: on ? Aurora.teal.withValues(alpha: 0.18) : Aurora.glass,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: on ? Aurora.teal : Aurora.glassBorder,
-            width: on ? 1.5 : 1,
+  /// Live connection status pill (watches the session) + the target it points at.
+  Widget _connectionStatus() {
+    return Consumer(
+      builder: (context, ref, _) {
+        final status = ref.watch(liveProvider.select((s) => s.connection));
+        final (color, icon, label) = switch (status) {
+          ConnectionStatus.connected => (Aurora.teal, Icons.check_circle, 'Connected'),
+          ConnectionStatus.connecting => (Aurora.amber, Icons.sync, 'Connecting…'),
+          ConnectionStatus.reconnecting =>
+            (Aurora.amber, Icons.sync, 'Reconnecting…'),
+          ConnectionStatus.disconnected => (Aurora.danger, Icons.error_outline, 'Offline'),
+        };
+        final scheme = _secure ? 'https' : 'http';
+        final target = '$scheme://${_hostCtl.text.trim()}:${_portCtl.text.trim()}';
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: Aurora.tint(color, 0.14),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Aurora.tint(color, 0.3)),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, color: color, size: 20),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label,
+                        style: TextStyle(
+                            color: color, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text(target,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: Aurora.textMuted, fontSize: 12)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Cloud vs Local (Dev) target picker — either can be used; one tap fills
+  /// the host/port/TLS for that target (still editable below).
+  Widget _modeToggle() {
+    return Row(
+      children: [
+        Expanded(
+          child: _modeChip(
+            label: 'Cloud',
+            subtitle: 'Always online',
+            icon: Icons.cloud_outlined,
+            selected: _isCloud,
+            onTap: _useCloud,
           ),
         ),
-        child: Row(
+        const SizedBox(width: 10),
+        Expanded(
+          child: _modeChip(
+            label: 'Local (Dev)',
+            subtitle: 'Your PC on Wi-Fi',
+            icon: Icons.lan_outlined,
+            selected: !_isCloud,
+            onTap: _useLocal,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _modeChip({
+    required String label,
+    required String subtitle,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? Aurora.teal.withValues(alpha: 0.18) : Aurora.glass,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: selected ? Aurora.teal : Aurora.glassBorder,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.cloud_done_outlined,
-                color: on ? Aurora.teal : Aurora.textMuted),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Use FarryOn Cloud',
-                      style: TextStyle(
-                          color: Aurora.textPrimary,
-                          fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 2),
-                  Text(
-                    on
-                        ? 'Connected to the cloud — nothing else needed.'
-                        : 'One tap — no PC needed, always online.',
-                    style: const TextStyle(
-                        color: Aurora.textMuted, fontSize: 12),
-                  ),
+            Row(
+              children: [
+                Icon(icon,
+                    size: 18,
+                    color: selected ? Aurora.teal : Aurora.textMuted),
+                const SizedBox(width: 8),
+                Text(label,
+                    style: TextStyle(
+                        color: selected ? Aurora.textPrimary : Aurora.textMuted,
+                        fontWeight: FontWeight.w600)),
+                if (selected) ...[
+                  const Spacer(),
+                  const Icon(Icons.check_circle, color: Aurora.teal, size: 16),
                 ],
-              ),
+              ],
             ),
-            if (on)
-              const Icon(Icons.check_circle, color: Aurora.teal, size: 20),
+            const SizedBox(height: 2),
+            Text(subtitle,
+                style: const TextStyle(color: Aurora.textMuted, fontSize: 11)),
           ],
         ),
       ),
@@ -737,6 +925,7 @@ class _Controls extends StatelessWidget {
     required this.onInterrupt,
     required this.onSendText,
     required this.onToggleCamera,
+    required this.onScan,
   });
 
   final LiveSessionState state;
@@ -745,6 +934,7 @@ class _Controls extends StatelessWidget {
   final VoidCallback onInterrupt;
   final ValueChanged<String> onSendText;
   final VoidCallback onToggleCamera;
+  final VoidCallback onScan;
 
   @override
   Widget build(BuildContext context) {
@@ -765,6 +955,11 @@ class _Controls extends StatelessWidget {
                 icon: state.cameraOn ? Icons.videocam : Icons.videocam_off,
                 tooltip: state.cameraOn ? 'Turn camera off' : 'Turn camera on',
                 onPressed: onToggleCamera,
+              ),
+              _CircleButton(
+                icon: Icons.center_focus_strong,
+                tooltip: 'Identify what the camera sees',
+                onPressed: state.cameraOn ? onScan : null,
               ),
               _MicButton(
                 micOpen: state.micOpen,
@@ -964,12 +1159,14 @@ class _TopOverlay extends StatelessWidget {
     required this.state,
     required this.onSettings,
     required this.onOrientation,
+    required this.onFinder,
     required this.onNotes,
   });
 
   final LiveSessionState state;
   final VoidCallback onSettings;
   final VoidCallback onOrientation;
+  final VoidCallback onFinder;
   final VoidCallback onNotes;
 
   @override
@@ -980,26 +1177,24 @@ class _TopOverlay extends StatelessWidget {
       color: Colors.black.withValues(alpha: 0.34),
       child: Row(
         children: [
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  if (state.cameraOn) ...[
-                    const _LiveBadge(),
-                    const SizedBox(width: 8),
-                  ],
-                  StatusIndicator(
-                    connection: state.connection,
-                    liveState: state.liveState,
-                    deviceKind: state.deviceKind,
-                  ),
-                ],
-              ),
-            ),
+          if (state.cameraOn) ...[
+            const _LiveBadge(),
+            const SizedBox(width: 8),
+          ],
+          // Connection status only here (never clipped); state is shown by the
+          // orb and device by the settings sheet.
+          StatusIndicator(
+            connection: state.connection,
+            liveState: state.liveState,
+            deviceKind: state.deviceKind,
+            connectionOnly: true,
           ),
-          const SizedBox(width: 8),
-          _ZoomReadout(zoom: state.cameraZoom),
+          const Spacer(),
+          IconButton(
+            tooltip: 'Finder — identify a photo',
+            icon: const Icon(Icons.image_search, color: Colors.white),
+            onPressed: onFinder,
+          ),
           IconButton(
             tooltip: 'Notes & tasks',
             icon: const Icon(Icons.checklist, color: Colors.white),
@@ -1023,33 +1218,6 @@ class _TopOverlay extends StatelessWidget {
             onPressed: onSettings,
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// Pill showing the current zoom magnification (e.g. "2.0×").
-class _ZoomReadout extends StatelessWidget {
-  const _ZoomReadout({required this.zoom});
-
-  final double zoom;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
-      ),
-      child: Text(
-        '${zoom.toStringAsFixed(1)}×',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-        ),
       ),
     );
   }
@@ -1183,6 +1351,71 @@ class _LiveBadge extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Bottom-sheet body for a Finder result — either a resolved [detection]
+/// (voice) or a [future] that shows a loading state first (scan button).
+class _FinderSheet extends StatelessWidget {
+  const _FinderSheet({
+    required this.detection,
+    required this.future,
+    required this.scrollController,
+  });
+
+  final FinderDetection? detection;
+  final Future<FinderDetection>? future;
+  final ScrollController scrollController;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          margin: const EdgeInsets.only(top: 10, bottom: 4),
+          width: 40,
+          height: 4,
+          decoration: BoxDecoration(
+            color: Aurora.glassBorder,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            controller: scrollController,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            child: detection != null
+                ? FinderResultView(detection!)
+                : FutureBuilder<FinderDetection>(
+                    future: future,
+                    builder: (context, snap) {
+                      if (snap.connectionState != ConnectionState.done) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 48),
+                          child: Column(
+                            children: [
+                              CircularProgressIndicator(color: Aurora.mint),
+                              SizedBox(height: 16),
+                              Text('Identifying…',
+                                  style: TextStyle(color: Aurora.textMuted)),
+                            ],
+                          ),
+                        );
+                      }
+                      if (snap.hasError) {
+                        return FinderResultView(FinderDetection(
+                          ok: false,
+                          mode: 'error',
+                          error: snap.error.toString(),
+                        ));
+                      }
+                      return FinderResultView(snap.data!);
+                    },
+                  ),
+          ),
+        ),
+      ],
     );
   }
 }

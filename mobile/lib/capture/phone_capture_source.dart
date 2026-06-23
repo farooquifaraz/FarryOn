@@ -187,6 +187,19 @@ class PhoneCaptureSource implements CaptureSource {
   }
 
   @override
+  Future<void> releaseCamera() async {
+    _frameTimer?.cancel();
+    _frameTimer = null;
+    try {
+      await _camera?.dispose();
+    } catch (e) {
+      _log.warn('camera dispose failed: $e');
+    }
+    _camera = null;
+    _log.info('camera released (will reopen on next startVideo)');
+  }
+
+  @override
   Future<void> setPortrait(bool portrait) async {
     final camera = _camera;
     if (camera == null || !camera.value.isInitialized) return;

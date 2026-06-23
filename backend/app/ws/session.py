@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -287,6 +288,12 @@ class Session:
             await self._gateway.send_audio(payload, ts_ms=ts)
         elif tag == FrameTag.INPUT_VIDEO:
             metrics.FRAMES_IN.labels(kind="video").inc()
+            # Cache the latest frame (+ arrival time) so the identify_image tool
+            # can inspect what the camera currently sees and reject a stale frame
+            # from before the camera was lowered/turned off.
+            if self._orchestrator is not None:
+                self._orchestrator.last_frame = payload
+                self._orchestrator.last_frame_at = time.monotonic()
             await self._gateway.send_video(payload, ts_ms=ts)
         else:
             metrics.FRAMES_IN.labels(kind="unknown").inc()

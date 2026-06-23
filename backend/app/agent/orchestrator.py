@@ -71,6 +71,11 @@ class Orchestrator:
         self._email = email
         #: Mutable — updated in place when the client sends a ``location_update``.
         self.location = location
+        #: Mutable — set to the latest INPUT_VIDEO JPEG by the session so the
+        #: ``identify_image`` tool can inspect what the camera currently sees,
+        #: with the monotonic time it arrived so stale frames can be rejected.
+        self.last_frame: bytes | None = None
+        self.last_frame_at: float | None = None
 
     async def handle_tool_call(self, event: ToolCallEvent) -> ToolResult:
         """Execute one model-requested tool call end-to-end.
@@ -108,6 +113,8 @@ class Orchestrator:
                 web_search=self._web_search,
                 email=self._email,
                 location=self.location,
+                last_frame=self.last_frame,
+                last_frame_at=self.last_frame_at,
             )
             result = await self._engine.dispatch(event.name, event.args, ctx)
             try:

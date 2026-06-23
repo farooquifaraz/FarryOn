@@ -34,6 +34,10 @@ services:
         sync: false                         # set in the Render dashboard (secret)
       - key: GEMINI_MODEL
         value: gemini-2.5-flash-native-audio-latest  # a LIVE model (not gemini-1.5-flash)
+      # Landmark & product finder (Google Cloud Vision). Product AI text reuses
+      # GEMINI_API_KEY above — no separate key needed for that.
+      - key: VISION_API_KEY
+        sync: false                         # set in the Render dashboard (secret)
       - key: OPENAI_API_KEY
         sync: false                         # optional — only if you use OpenAI
       - key: OPENAI_REALTIME_MODEL

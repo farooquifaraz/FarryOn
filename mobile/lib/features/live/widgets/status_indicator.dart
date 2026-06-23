@@ -12,24 +12,32 @@ class StatusIndicator extends StatelessWidget {
     required this.connection,
     required this.liveState,
     required this.deviceKind,
+    this.connectionOnly = false,
   });
 
   final ConnectionStatus connection;
   final LiveState liveState;
   final String deviceKind;
 
+  /// When true, render ONLY the connection pill (used in the cramped top bar so
+  /// the status is never clipped). The conversational state is shown by the orb
+  /// and the device by the settings sheet, so they're omitted there.
+  final bool connectionOnly;
+
   @override
   Widget build(BuildContext context) {
-    final (label, color, icon) = _stateVisual();
+    final connectionPill = _Pill(
+      color: _connectionColor(),
+      icon: _connectionIcon(),
+      label: _connectionLabel(),
+    );
+    if (connectionOnly) return connectionPill;
 
+    final (label, color, icon) = _stateVisual();
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _Pill(
-          color: _connectionColor(),
-          icon: _connectionIcon(),
-          label: _connectionLabel(),
-        ),
+        connectionPill,
         const SizedBox(width: 8),
         _Pill(color: color, icon: icon, label: label),
         const SizedBox(width: 8),

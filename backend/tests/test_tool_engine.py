@@ -50,6 +50,7 @@ def test_export_schemas_matches_protocol() -> None:
         "read_email",
         "send_email",
         "get_location",
+        "identify_image",
     }
 
     assert schemas["create_note"]["parameters"] == {

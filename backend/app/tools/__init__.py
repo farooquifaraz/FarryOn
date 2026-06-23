@@ -16,6 +16,7 @@ from app.tools.device import (
 )
 from app.tools.email_read import ReadEmailsTool, ReadEmailTool
 from app.tools.email_send import SendEmailTool
+from app.tools.identify import IdentifyImageTool
 from app.tools.location import GetLocationTool
 from app.tools.messaging import SendMessageTool
 from app.tools.notes import CreateNoteTool
@@ -36,6 +37,7 @@ __all__ = [
     "DeleteNoteTool",
     "DeleteTaskTool",
     "EndSessionTool",
+    "IdentifyImageTool",
     "ListNotesTool",
     "ListTasksTool",
     "GetLocationTool",
@@ -80,4 +82,5 @@ def build_default_tools() -> list[Tool]:
         ReadEmailTool(),
         SendEmailTool(),
         GetLocationTool(),
+        IdentifyImageTool(),
     ]

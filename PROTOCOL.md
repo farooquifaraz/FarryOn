@@ -166,7 +166,14 @@ register exactly these names/params; Flutter renders them by `name`.
     "parameters": { "type": "object",
       "properties": {
         "level": { "type": "number", "description": "Magnification 1.0–8.0" } },
-      "required": ["level"] } }
+      "required": ["level"] } },
+
+  { "name": "identify_image",
+    "description": "Identify the landmark or product the camera is currently looking at.",
+    "parameters": { "type": "object",
+      "properties": {
+        "kind": { "type": "string", "enum": ["landmark", "product", "auto"],
+          "description": "What to identify; default 'auto'." } } } }
 ]
 ```
 

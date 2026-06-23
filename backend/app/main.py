@@ -18,15 +18,33 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from app.config import Settings, get_settings
 from app.db import repo
 from app.db.base import dispose_db, get_sessionmaker, init_db
 from app.logging_conf import configure_logging, get_logger
+from app.services.vision import run_detection
 from app.ws.live import router as ws_router
 
 logger = get_logger(__name__)
+
+
+class DetectRequest(BaseModel):
+    """Body for ``POST /detect`` (the Finder screen's request).
+
+    Exactly one image source is expected: ``image_data`` (a base64 / data-URL
+    string from a file or camera capture) or ``image_url`` (a public URL).
+    API keys are NOT accepted here — they live server-side in settings.
+    """
+
+    mode: str = "auto"
+    image_data: str | None = None
+    image_url: str | None = None
+    # BCP-47 language code (device locale) so the product AI explanation comes
+    # back in the user's language. Optional; defaults to English server-side.
+    lang: str | None = None
 
 
 @asynccontextmanager
@@ -199,6 +217,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse(
                 {"deleted": ok}, status_code=200 if ok else 404
             )
+
+    # ---- Image understanding (landmark & product finder) -------------------
+
+    @app.post("/detect", tags=["vision"])
+    async def detect_endpoint(req: DetectRequest) -> JSONResponse:
+        """Identify a landmark or product in an uploaded image.
+
+        Mirrors the standalone finder's contract — returns the
+        ``{ok, mode, result}`` envelope — but reads API keys from server config
+        instead of the request body. ``mode`` is ``auto`` | ``landmark`` |
+        ``product`` | ``web``. Used by the app's Finder screen and live-scan.
+        """
+        envelope = await run_detection(
+            req.mode,  # type: ignore[arg-type]
+            settings=settings,
+            image_data=req.image_data,
+            image_url=req.image_url,
+            lang=req.lang,
+        )
+        return JSONResponse(envelope)
 
     return app
 

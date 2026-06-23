@@ -14,6 +14,9 @@ asyncpg>=0.29             # Postgres driver (production)
 # --- HTTP client (web_search tool, TestClient WebSocket support) ---
 httpx>=0.27,<1.0
 
+# --- Image processing (vision service: resize/re-encode before Vision API) ---
+Pillow>=9.0
+
 # --- Observability ---
 structlog>=24.1
 prometheus-client>=0.20

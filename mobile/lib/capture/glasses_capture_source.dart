@@ -107,6 +107,9 @@ class GlassesCaptureSource implements CaptureSource {
   }
 
   @override
+  Future<void> releaseCamera() async {}
+
+  @override
   Future<void> setPortrait(bool portrait) async {
     // Orientation is fixed by the headset; nothing to do for the stub.
   }

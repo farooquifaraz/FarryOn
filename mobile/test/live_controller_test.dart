@@ -49,6 +49,8 @@ class FakeCaptureSource implements CaptureSource {
   @override
   Future<void> stopVideo() async => videoStarted = false;
   @override
+  Future<void> releaseCamera() async {}
+  @override
   Future<void> setPortrait(bool portrait) async => this.portrait = portrait;
   @override
   Future<double> setZoom(double level) async => zoom = level;

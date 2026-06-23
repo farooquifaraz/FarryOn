@@ -32,6 +32,12 @@ class ToolContext:
         location: Optional last-known device location supplied by the client
             (``{lat, lng, address?}``). Updated via ``location_update`` and read
             by the ``get_location`` tool to answer "where am I?".
+        last_frame: Most recent camera frame (raw JPEG bytes) streamed by the
+            device over INPUT_VIDEO. Cached by the session and read by the
+            ``identify_image`` tool to answer "what landmark/object is this?".
+        last_frame_at: Monotonic timestamp (``time.monotonic()``) when
+            ``last_frame`` arrived, so the tool can reject a stale frame from
+            before the camera was lowered/turned off.
     """
 
     session: AsyncSession
@@ -40,6 +46,8 @@ class ToolContext:
     web_search: dict[str, Any] | None = None
     email: dict[str, Any] | None = None
     location: dict[str, Any] | None = None
+    last_frame: bytes | None = None
+    last_frame_at: float | None = None
 
 
 class Tool(abc.ABC):

@@ -51,6 +51,11 @@ abstract class CaptureSource {
   /// Stop streaming camera frames.
   Future<void> stopVideo();
 
+  /// Fully release the camera device (dispose the controller) so a fresh one is
+  /// created on the next [startVideo] — used to recover the camera after the OS
+  /// invalidates it when the app is backgrounded. Default: no-op.
+  Future<void> releaseCamera() async {}
+
   /// Lock the camera/preview orientation: `true` → portrait, `false` →
   /// landscape. No-op for sources without a controllable camera.
   Future<void> setPortrait(bool portrait);
