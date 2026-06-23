@@ -1171,10 +1171,16 @@ class _TopOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A floating rounded bar (with a margin from the camera's rounded corners)
+    // so nothing gets clipped by the 24px viewport radius and it reads as a
+    // clean, intentional control bar.
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
-      color: Colors.black.withValues(alpha: 0.34),
+      margin: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+      padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(20),
+      ),
       child: Row(
         children: [
           if (state.cameraOn) ...[
@@ -1357,6 +1363,99 @@ class _LiveBadge extends StatelessWidget {
 
 /// Bottom-sheet body for a Finder result — either a resolved [detection]
 /// (voice) or a [future] that shows a loading state first (scan button).
+/// A radar-style "scanning" pulse shown while the Finder identifies an image —
+/// expanding teal rings around a glowing viewfinder, with a meaningful caption.
+class _IdentifyingAnimation extends StatefulWidget {
+  const _IdentifyingAnimation();
+
+  @override
+  State<_IdentifyingAnimation> createState() => _IdentifyingAnimationState();
+}
+
+class _IdentifyingAnimationState extends State<_IdentifyingAnimation>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1800),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      child: Column(
+        children: [
+          SizedBox(
+            width: 132,
+            height: 132,
+            child: AnimatedBuilder(
+              animation: _c,
+              builder: (context, _) => Stack(
+                alignment: Alignment.center,
+                children: [
+                  for (var i = 0; i < 3; i++)
+                    _ring((_c.value + i / 3) % 1.0),
+                  Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: const RadialGradient(
+                        colors: [Aurora.mint, Aurora.teal],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Aurora.teal.withValues(alpha: 0.55),
+                          blurRadius: 18,
+                          spreadRadius: 1,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(Icons.center_focus_strong,
+                        color: Colors.white, size: 30),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text('Identifying…',
+              style: TextStyle(
+                color: Aurora.mint,
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.3,
+              )),
+          const SizedBox(height: 6),
+          const Text('Looking closely at what you captured',
+              style: TextStyle(color: Aurora.textMuted, fontSize: 13)),
+        ],
+      ),
+    );
+  }
+
+  Widget _ring(double t) {
+    final size = 54 + t * 74; // expand outward
+    return Opacity(
+      opacity: (1 - t) * 0.5, // fade as it grows
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Aurora.teal, width: 2),
+        ),
+      ),
+    );
+  }
+}
+
 class _FinderSheet extends StatelessWidget {
   const _FinderSheet({
     required this.detection,
@@ -1391,17 +1490,7 @@ class _FinderSheet extends StatelessWidget {
                     future: future,
                     builder: (context, snap) {
                       if (snap.connectionState != ConnectionState.done) {
-                        return const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 48),
-                          child: Column(
-                            children: [
-                              CircularProgressIndicator(color: Aurora.mint),
-                              SizedBox(height: 16),
-                              Text('Identifying…',
-                                  style: TextStyle(color: Aurora.textMuted)),
-                            ],
-                          ),
-                        );
+                        return const _IdentifyingAnimation();
                       }
                       if (snap.hasError) {
                         return FinderResultView(FinderDetection(
