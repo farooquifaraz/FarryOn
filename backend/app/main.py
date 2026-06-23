@@ -14,7 +14,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -237,6 +237,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             lang=req.lang,
         )
         return JSONResponse(envelope)
+
+    @app.post("/webhook/telegram", tags=["messaging"])
+    async def telegram_webhook(request: Request) -> JSONResponse:
+        """Telegram pushes incoming bot messages here.
+
+        On ``/start`` we save the sender's ``chat_id`` so the agent can later
+        message them automatically, and reply with a welcome. Always returns
+        ``{ok: true}`` so Telegram doesn't retry.
+        """
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"ok": True})
+        msg = data.get("message") or data.get("edited_message") or {}
+        chat = msg.get("chat") or {}
+        chat_id = chat.get("id")
+        text_msg = (msg.get("text") or "").strip()
+        if chat_id and text_msg.startswith("/start"):
+            try:
+                async with get_sessionmaker()() as db:
+                    await repo.upsert_telegram_chat(
+                        db, chat_id=str(chat_id),
+                        username=chat.get("username"),
+                        display_name=chat.get("first_name"),
+                    )
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("telegram_webhook.save_failed", error=str(exc))
+            token = settings.telegram_bot_token
+            if token:
+                import httpx
+                name = chat.get("first_name", "")
+                try:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        await client.post(
+                            f"https://api.telegram.org/bot{token}/sendMessage",
+                            json={
+                                "chat_id": chat_id,
+                                "text": f"Salaam {name}! You're connected to "
+                                "FarryOn — I can message you here now.",
+                            },
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
+        return JSONResponse({"ok": True})
 
     return app
 

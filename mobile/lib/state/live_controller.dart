@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../capture/capture_source.dart';
 import '../capture/device_registry.dart';
@@ -368,6 +369,7 @@ class LiveController {
     }
     _emit(_state.copyWith(tools: list));
     _applyReminder(msg);
+    _applyOpenUrl(msg);
 
     // Voice flow: surface identify_image results so the UI can show the same
     // result sheet the scan button shows. The tool returns the full
@@ -401,6 +403,27 @@ class LiveController {
       case 'complete_task':
       case 'delete_task':
         unawaited(Notifications.cancel(id));
+    }
+  }
+
+  /// Client-executed messaging: when a tool result asks to open a URL (a
+  /// WhatsApp/Telegram deep link), open it so the user can send.
+  void _applyOpenUrl(ToolResultMessage msg) {
+    if (!msg.ok) return;
+    final res = msg.result;
+    if (res == null || res['action'] != 'open_url') return;
+    final url = res['url'] as String?;
+    if (url == null || url.isEmpty) return;
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    unawaited(_openExternal(uri));
+  }
+
+  Future<void> _openExternal(Uri uri) async {
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (e) {
+      _log.warn('open external url failed: $e');
     }
   }
 

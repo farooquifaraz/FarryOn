@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.tools.base import Tool
 from app.tools.camera import SetCameraZoomTool
+from app.tools.contacts import SaveContactTool
 from app.tools.device import (
     EndSessionTool,
     MuteMicTool,
@@ -21,6 +22,8 @@ from app.tools.location import GetLocationTool
 from app.tools.messaging import SendMessageTool
 from app.tools.notes import CreateNoteTool
 from app.tools.recall import ListNotesTool, ListTasksTool
+from app.tools.telegram import SendTelegramTool
+from app.tools.whatsapp import SendWhatsAppTool
 from app.tools.task_manage import (
     CompleteTaskTool,
     DeleteNoteTool,
@@ -45,8 +48,11 @@ __all__ = [
     "ReadEmailTool",
     "ReadEmailsTool",
     "RotateCameraTool",
+    "SaveContactTool",
     "SendEmailTool",
     "SendMessageTool",
+    "SendTelegramTool",
+    "SendWhatsAppTool",
     "SetCameraTool",
     "SetCameraZoomTool",
     "UpdateTaskTool",
@@ -83,4 +89,7 @@ def build_default_tools() -> list[Tool]:
         SendEmailTool(),
         GetLocationTool(),
         IdentifyImageTool(),
+        SendWhatsAppTool(),
+        SendTelegramTool(),
+        SaveContactTool(),
     ]

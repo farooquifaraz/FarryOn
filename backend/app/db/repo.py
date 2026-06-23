@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
+    Contact,
     Note,
     OutboundMessage,
     Session,
@@ -161,6 +162,81 @@ async def find_note(
     if user_id is not None:
         stmt = stmt.where(Note.user_id == user_id)
     return (await session.execute(stmt)).scalars().first()
+
+
+async def save_contact(
+    session: AsyncSession,
+    *,
+    name: str,
+    phone: str | None = None,
+    telegram_username: str | None = None,
+    user_id: int | None = None,
+) -> Contact:
+    """Create or update a contact by name (so re-saving just fills in fields)."""
+    existing = await find_contact(session, query=name, user_id=user_id, exact=True)
+    if existing is not None:
+        if phone:
+            existing.phone = phone
+        if telegram_username:
+            existing.telegram_username = telegram_username.lstrip("@")
+        await session.flush()
+        return existing
+    contact = Contact(
+        name=name.strip(),
+        phone=phone,
+        telegram_username=(telegram_username or "").lstrip("@") or None,
+        user_id=user_id,
+    )
+    session.add(contact)
+    await session.flush()
+    return contact
+
+
+async def find_contact(
+    session: AsyncSession,
+    *,
+    query: str,
+    user_id: int | None = None,
+    exact: bool = False,
+) -> Contact | None:
+    """Find a contact by name (case-insensitive; substring unless ``exact``)."""
+    q = query.strip()
+    pattern = q if exact else f"%{q}%"
+    op = Contact.name.ilike(q) if exact else Contact.name.ilike(pattern)
+    stmt = select(Contact).where(op).order_by(Contact.updated_at.desc())
+    if user_id is not None:
+        stmt = stmt.where(Contact.user_id == user_id)
+    return (await session.execute(stmt)).scalars().first()
+
+
+async def upsert_telegram_chat(
+    session: AsyncSession,
+    *,
+    chat_id: str,
+    username: str | None = None,
+    display_name: str | None = None,
+) -> Contact:
+    """Save a Telegram chat_id (from the bot ``/start`` webhook) for later sends.
+
+    Matched first by chat_id, then by username; otherwise a new contact is made.
+    """
+    stmt = select(Contact).where(Contact.telegram_chat_id == str(chat_id))
+    contact = (await session.execute(stmt)).scalars().first()
+    if contact is None and username:
+        stmt2 = select(Contact).where(
+            Contact.telegram_username.ilike(username.lstrip("@"))
+        )
+        contact = (await session.execute(stmt2)).scalars().first()
+    if contact is None:
+        contact = Contact(name=display_name or username or f"tg:{chat_id}")
+        session.add(contact)
+    contact.telegram_chat_id = str(chat_id)
+    if username:
+        contact.telegram_username = username.lstrip("@")
+    if display_name and contact.name.startswith("tg:"):
+        contact.name = display_name
+    await session.flush()
+    return contact
 
 
 async def update_task(

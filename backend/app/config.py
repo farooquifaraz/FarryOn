@@ -82,6 +82,18 @@ class Settings(BaseSettings):
     web_search_fallback_provider: str | None = Field(default=None)
     web_search_fallback_api_key: str | None = Field(default=None)
 
+    # -- Messaging (WhatsApp / Telegram) ---------------------------------------
+    # Telegram Bot API token from @BotFather. When set, send_telegram can send
+    # messages directly to users who have started the bot; without it the tool
+    # falls back to a t.me deep-link the user opens themselves.
+    telegram_bot_token: str | None = Field(default=None)
+    # WhatsApp Business Cloud API (optional Phase 2 — fully automated sending).
+    # Without these, send_whatsapp uses a free wa.me deep-link (1-tap send).
+    whatsapp_token: str | None = Field(default=None)
+    whatsapp_phone_id: str | None = Field(default=None)
+    # Default country code used to normalise phone numbers (UAE=971, India=91).
+    default_country_code: str = Field(default="971")
+
     # -- Observability ---------------------------------------------------------
     log_level: str = Field(default="INFO")
 

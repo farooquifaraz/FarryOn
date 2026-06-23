@@ -118,6 +118,37 @@ class Task(Base):
     )
 
 
+class Contact(Base):
+    """A saved contact for the messaging tools (WhatsApp / Telegram).
+
+    Holds the phone number and/or Telegram handle so the user can say "WhatsApp
+    Sara" and the agent resolves the destination. ``telegram_chat_id`` is filled
+    in when that person starts the FarryOn bot (webhook ``/start``), enabling
+    fully-automated Telegram sends.
+    """
+
+    __tablename__ = "contacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    telegram_username: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    telegram_chat_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
 class OutboundMessage(Base):
     """A message queued for delivery via the ``send_message`` tool (stub)."""
 
