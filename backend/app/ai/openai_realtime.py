@@ -19,6 +19,7 @@ import asyncio
 import base64
 import json
 import math
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -42,6 +43,9 @@ logger = get_logger(__name__)
 #: requires input audio >= 24 kHz, so we upsample on the way in.
 _CLIENT_INPUT_RATE = 16000
 _REALTIME_INPUT_RATE = 24000
+
+#: Don't attach a camera frame older than this (camera likely lowered/off).
+_FRAME_MAX_AGE_SECONDS = 4.0
 
 
 class _LinearResampler:
@@ -131,6 +135,16 @@ class OpenAIRealtimeGateway(AIGateway):
         # Cumulative transcript of the USER's current spoken turn (from the
         # input-audio transcription stream), so their chat line fills in live.
         self._user_buf = ""
+        # Latest camera frame (base64 JPEG) + when it arrived, so we can show
+        # the model what the user is looking at on each turn — vision parity
+        # with Gemini, which streams frames continuously.
+        self._latest_frame_b64: str | None = None
+        self._latest_frame_at: float = 0.0
+        # Live vision via conversation image items + manual response creation.
+        # Only OpenAI's GA Realtime supports this; xAI/Grok does not honour
+        # create_response=false / input_image, so it stays on auto-response and
+        # its voice path is left exactly as-is (no regression).
+        self._vision_items = self.provider == "openai"
 
     def _tool_definitions(self) -> list[dict[str, Any]]:
         """Render tools in the Realtime ``session.tools`` format."""
@@ -191,7 +205,19 @@ class OpenAIRealtimeGateway(AIGateway):
                         "type": "audio/pcm",
                         "rate": _REALTIME_INPUT_RATE,
                     },
-                    "turn_detection": {"type": "server_vad"},
+                    # OpenAI: detect end-of-speech but DON'T auto-create the
+                    # reply — we create it after attaching the current camera
+                    # frame (vision parity with Gemini). Other providers keep
+                    # the default server auto-response.
+                    "turn_detection": (
+                        {
+                            "type": "server_vad",
+                            "create_response": False,
+                            "interrupt_response": True,
+                        }
+                        if self._vision_items
+                        else {"type": "server_vad"}
+                    ),
                     # Transcribe the user's speech so their side of the
                     # conversation shows in the chat too (parity with Gemini).
                     # Without this the
@@ -285,6 +311,12 @@ class OpenAIRealtimeGateway(AIGateway):
                     )
                 )
 
+        elif etype == "input_audio_buffer.committed" and self._vision_items:
+            # The user finished an audio turn (server VAD). Auto-response is
+            # off (OpenAI only), so we attach the current frame and create the
+            # reply here — giving the model live vision on every spoken turn.
+            await self._create_response_with_frame()
+
         elif etype == (
             "conversation.item.input_audio_transcription.delta"
         ):
@@ -356,12 +388,54 @@ class OpenAIRealtimeGateway(AIGateway):
         )
 
     async def send_video(self, jpeg: bytes, ts_ms: int | None = None) -> None:
-        """OpenAI Realtime does not accept live video frames; ignored.
+        """Cache the latest camera frame.
 
-        Vision can be added by attaching image content to a conversation item;
-        for the realtime audio path this is a no-op.
+        The Realtime audio stream can't accept continuous video, so instead of
+        forwarding every frame we keep only the most recent one and attach it to
+        the conversation when the user takes a turn (see
+        :meth:`_create_response_with_frame`). This gives the model live vision —
+        "what am I looking at?", "read this label" — matching Gemini.
         """
-        return None
+        if not jpeg:
+            return
+        self._latest_frame_b64 = base64.b64encode(jpeg).decode("ascii")
+        self._latest_frame_at = time.monotonic()
+
+    async def _attach_latest_frame(self) -> None:
+        """Add the most recent camera frame to the conversation, if fresh.
+
+        Only attaches a frame seen in the last few seconds so a stale image from
+        before the camera was lowered/turned off is never sent.
+        """
+        if self._conn is None or not self._latest_frame_b64:
+            return
+        if (time.monotonic() - self._latest_frame_at) > _FRAME_MAX_AGE_SECONDS:
+            return
+        try:
+            await self._conn.conversation.item.create(
+                item={
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_image",
+                            "image_url": (
+                                "data:image/jpeg;base64,"
+                                f"{self._latest_frame_b64}"
+                            ),
+                        }
+                    ],
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - vision is best-effort
+            logger.warning("openai.attach_frame_failed", error=repr(exc))
+
+    async def _create_response_with_frame(self) -> None:
+        """Attach the current frame (if any) then ask the model to respond."""
+        if self._conn is None:
+            return
+        await self._attach_latest_frame()
+        await self._conn.response.create()
 
     async def send_text(self, text: str) -> None:
         """Create a user message item and request a response."""
@@ -374,7 +448,12 @@ class OpenAIRealtimeGateway(AIGateway):
                 "content": [{"type": "input_text", "text": text}],
             }
         )
-        await self._conn.response.create()
+        # OpenAI: attach the current camera frame so typed turns get vision
+        # too. Other providers just create the response.
+        if self._vision_items:
+            await self._create_response_with_frame()
+        else:
+            await self._conn.response.create()
 
     async def send_tool_result(
         self, call_id: str, name: str, result: Any, ok: bool = True
