@@ -104,8 +104,15 @@ async def test_every_registered_tool_dispatches(db_session) -> None:
     )
     r = await run("send_message", {"text": "hi", "contact_name": "Unknown"})
     ok(
-        "send_message(name->device)",
-        r.get("action") == "resolve_contact" and r.get("platform") == "sms",
+        "send_message(unresolved-name)",
+        r.get("ok") is False and r.get("status") == "not_resolved",
+        str(r),
+    )
+    r = await run("send_message", {"text": "hi", "contact_id": "c_x"})
+    ok(
+        "send_message(contact_id)",
+        r.get("ok") is True and r.get("action") == "open_messaging"
+        and r.get("channel") == "sms",
         str(r),
     )
 
@@ -121,9 +128,30 @@ async def test_every_registered_tool_dispatches(db_session) -> None:
 
     r = await run("send_whatsapp", {"message": "hi", "contact_name": "Zoya"})
     ok(
-        "send_whatsapp(name->device)",
-        r.get("ok") is True and r.get("action") == "resolve_contact"
-        and r.get("name") == "Zoya",
+        "send_whatsapp(unresolved-name)",
+        r.get("ok") is False and r.get("status") == "not_resolved",
+        str(r),
+    )
+    r = await run("send_whatsapp", {"message": "hi", "contact_id": "c_y"})
+    ok(
+        "send_whatsapp(contact_id)",
+        r.get("ok") is True and r.get("action") == "open_messaging"
+        and r.get("contact_id") == "c_y",
+        str(r),
+    )
+
+    # resolve_contact: telegram with no saved handle -> not_found (read-only).
+    r = await run("resolve_contact", {"name": "Ghost", "channel": "telegram"})
+    ok(
+        "resolve_contact(telegram-miss)",
+        r.get("ok") is True and r.get("status") == "not_found",
+        str(r),
+    )
+    # whatsapp with no device bridge in this harness -> index_unavailable.
+    r = await run("resolve_contact", {"name": "Ghost", "channel": "whatsapp"})
+    ok(
+        "resolve_contact(no-bridge)",
+        r.get("ok") is True and r.get("status") == "index_unavailable",
         str(r),
     )
 

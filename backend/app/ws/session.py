@@ -338,6 +338,12 @@ class Session:
             if isinstance(loc, dict) and self._orchestrator is not None:
                 self._orchestrator.location = loc
                 logger.info("location.updated", session_id=self.session_id)
+        elif mtype == "resolve_contact_result":
+            # The device finished resolving a contact name locally (privacy-
+            # preserving). Hand the masked result back to the awaiting tool.
+            req_id = message.get("requestId")
+            if isinstance(req_id, str) and self._orchestrator is not None:
+                self._orchestrator.resolve_pending(req_id, message)
         elif mtype == "tool_permission":
             # Permission gating is optional; tools are not gated by default.
             logger.info(

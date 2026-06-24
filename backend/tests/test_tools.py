@@ -254,13 +254,20 @@ async def test_send_message_opens_sms_with_number(db_session) -> None:
     assert "On" in result["url"]
 
 
-async def test_send_message_unknown_name_defers_to_device(db_session) -> None:
+async def test_send_message_unknown_name_not_resolved(db_session) -> None:
+    """An unresolved name returns ok:false so the model never claims 'sent'."""
     ctx = ToolContext(session=db_session)
     result = await SendMessageTool().run(ctx, text="hi", contact_name="Alex")
+    assert result["ok"] is False
+    assert result["status"] == "not_resolved"
+
+
+async def test_send_message_contact_id_opens_on_device(db_session) -> None:
+    ctx = ToolContext(session=db_session)
+    result = await SendMessageTool().run(ctx, text="hi", contact_id="c_1")
     assert result["ok"] is True
-    assert result["action"] == "resolve_contact"
-    assert result["platform"] == "sms"
-    assert result["name"] == "Alex"
+    assert result["action"] == "open_messaging"
+    assert result["channel"] == "sms"
 
 
 async def test_web_search_returns_mock_results_offline(db_session) -> None:

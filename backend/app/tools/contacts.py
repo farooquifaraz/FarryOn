@@ -9,8 +9,142 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.config import get_settings
 from app.db import repo
+from app.logging_conf import get_logger
 from app.tools.base import Tool, ToolContext
+from app.tools.whatsapp import mask_phone
+
+logger = get_logger(__name__)
+
+
+class ResolveContactTool(Tool):
+    """Find who to message BEFORE sending — read-only, no confirmation.
+
+    Resolves a person's NAME to a messaging recipient so the assistant can
+    confirm the right person (by a masked number) before it ever sends. For
+    WhatsApp it first checks the user's app-saved contacts, then asks the phone
+    to match its own device contacts (privacy-preserving: only a masked number +
+    an opaque contact id come back). For Telegram it uses saved contacts only
+    (device contacts don't carry Telegram handles).
+    """
+
+    name = "resolve_contact"
+    description = (
+        "Find a person to message BEFORE sending. Read-only, NO confirmation "
+        "needed — call this FIRST whenever the user names someone to WhatsApp or "
+        "Telegram and you don't already have their number/handle. Returns "
+        "status=found with a MASKED number (read it back to confirm) and a "
+        "contact_id to pass to send_whatsapp; or not_found / ambiguous / "
+        "no_number / permission_denied so you can ask the user. NEVER say a "
+        "message was sent based on this — it only looks up the recipient."
+    )
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Person's name to find."},
+            "channel": {
+                "type": "string",
+                "enum": ["whatsapp", "telegram", "sms"],
+                "description": "Which app the user wants to message on.",
+            },
+        },
+        "required": ["name"],
+    }
+
+    async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+        name = (kwargs.get("name") or "").strip()
+        channel = (kwargs.get("channel") or "whatsapp").strip().lower()
+        if channel not in ("whatsapp", "telegram", "sms"):
+            channel = "whatsapp"
+        if not name:
+            return {"ok": True, "status": "not_found", "message": "Who?"}
+
+        saved = await repo.find_contact(
+            ctx.session, query=name, user_id=ctx.user_id
+        )
+
+        if channel == "telegram":
+            # Device contacts don't hold Telegram handles — saved contacts only.
+            if saved and (saved.telegram_chat_id or saved.telegram_username):
+                has_bot = bool(
+                    get_settings().telegram_bot_token and saved.telegram_chat_id
+                )
+                return {
+                    "ok": True,
+                    "status": "found",
+                    "channel": "telegram",
+                    "name": saved.name,
+                    "contact_name": saved.name,
+                    "via": "bot" if has_bot else "deeplink",
+                }
+            return {
+                "ok": True,
+                "status": "not_found",
+                "channel": "telegram",
+                "name": name,
+                "message": (
+                    f"No saved Telegram handle for {name}. Ask for their "
+                    "@username."
+                ),
+            }
+
+        # WhatsApp: saved contacts first (server already has that number).
+        if saved and saved.phone:
+            return {
+                "ok": True,
+                "status": "found",
+                "channel": channel,
+                "name": saved.name,
+                "contact_name": saved.name,
+                "masked_number": mask_phone(saved.phone),
+                "source": "saved",
+            }
+
+        # Otherwise resolve on the device (number never reaches the server).
+        if ctx.resolve_contact is None:
+            return {"ok": True, "status": "index_unavailable", "name": name}
+
+        res = await ctx.resolve_contact(name, channel)
+        status = (res.get("status") or "index_unavailable").lower()
+        candidates = res.get("candidates") or []
+
+        if status == "found" and len(candidates) == 1:
+            c = candidates[0]
+            return {
+                "ok": True,
+                "status": "found",
+                "channel": channel,
+                "name": c.get("displayName") or name,
+                "masked_number": c.get("maskedNumber"),
+                "contact_id": c.get("contactId"),
+                "source": "device",
+            }
+        if status == "ambiguous" or len(candidates) > 1:
+            return {
+                "ok": True,
+                "status": "ambiguous",
+                "channel": channel,
+                "name": name,
+                "options": [
+                    {
+                        "name": c.get("displayName"),
+                        "masked_number": c.get("maskedNumber"),
+                        "contact_id": c.get("contactId"),
+                    }
+                    for c in candidates
+                ],
+            }
+        # not_found / no_number / permission_denied / index_unavailable
+        return {
+            "ok": True,
+            "status": status if status in (
+                "not_found", "no_number", "permission_denied",
+                "index_unavailable",
+            ) else "not_found",
+            "channel": "whatsapp",
+            "name": name,
+        }
 
 
 class SaveContactTool(Tool):

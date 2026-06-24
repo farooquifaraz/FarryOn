@@ -9,6 +9,7 @@ session id, user id) so implementations stay decoupled from transport and config
 from __future__ import annotations
 
 import abc
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -48,6 +49,16 @@ class ToolContext:
     location: dict[str, Any] | None = None
     last_frame: bytes | None = None
     last_frame_at: float | None = None
+    #: Round-trip to the device to resolve a contact NAME against the phone's
+    #: own contacts (privacy-preserving: the real number never reaches the
+    #: server — only a masked number + an opaque per-session contact id). Set by
+    #: the orchestrator; ``None`` outside a live session (e.g. in tests).
+    #: Signature: ``await resolve_contact(name, channel) -> dict``.
+    resolve_contact: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None
+    #: Recall the contact id from a recent device resolution of a name, so a
+    #: send_* tool still works if the model passed only the name (not the id).
+    #: Signature: ``recall_resolved(name) -> contact_id | None``.
+    recall_resolved: Callable[[str], str | None] | None = None
 
 
 class Tool(abc.ABC):

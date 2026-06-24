@@ -15,6 +15,8 @@ which:
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -76,6 +78,61 @@ class Orchestrator:
         #: with the monotonic time it arrived so stale frames can be rejected.
         self.last_frame: bytes | None = None
         self.last_frame_at: float | None = None
+        #: In-flight device contact-resolution requests, keyed by requestId.
+        #: ``request_contact_resolution`` creates a Future here and the session
+        #: resolves it when the matching ``resolve_contact_result`` arrives.
+        self._pending_resolves: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        #: Recently device-resolved names -> contact_id, so send_whatsapp /
+        #: send_message still work if a weaker model forgets to thread the
+        #: contact_id back from resolve_contact (it passes just the name).
+        self._resolved_ids: dict[str, str] = {}
+
+    async def request_contact_resolution(
+        self, name: str, channel: str
+    ) -> dict[str, Any]:
+        """Ask the device to resolve a contact NAME locally and await the reply.
+
+        Privacy-preserving: the phone matches against its own contacts and
+        returns only masked numbers + opaque per-session contact ids — the real
+        number never reaches the server. Returns the device's payload, or
+        ``{"status": "index_unavailable"}`` if it doesn't answer in time.
+        """
+        request_id = uuid.uuid4().hex
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._pending_resolves[request_id] = future
+        try:
+            await self._safe_notify(
+                {
+                    "type": "resolve_contact_request",
+                    "requestId": request_id,
+                    "name": name,
+                    "channel": channel,
+                }
+            )
+            result = await asyncio.wait_for(future, timeout=8.0)
+            # Remember a single unambiguous match so a later send_* call can
+            # still find it by name if the model didn't pass the contact_id.
+            cands = result.get("candidates") or []
+            if result.get("status") == "found" and len(cands) == 1:
+                cid = cands[0].get("contactId")
+                if cid:
+                    self._resolved_ids[name.strip().lower()] = cid
+            return result
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+            return {"status": "index_unavailable"}
+        finally:
+            self._pending_resolves.pop(request_id, None)
+
+    def resolve_pending(self, request_id: str, payload: dict[str, Any]) -> None:
+        """Fulfil the Future for a device ``resolve_contact_result`` reply."""
+        future = self._pending_resolves.get(request_id)
+        if future is not None and not future.done():
+            future.set_result(payload)
+
+    def recall_resolved(self, name: str) -> str | None:
+        """Contact id from a recent device resolution of ``name``, if any."""
+        return self._resolved_ids.get((name or "").strip().lower())
 
     async def handle_tool_call(self, event: ToolCallEvent) -> ToolResult:
         """Execute one model-requested tool call end-to-end.
@@ -115,6 +172,8 @@ class Orchestrator:
                 location=self.location,
                 last_frame=self.last_frame,
                 last_frame_at=self.last_frame_at,
+                resolve_contact=self.request_contact_resolution,
+                recall_resolved=self.recall_resolved,
             )
             result = await self._engine.dispatch(event.name, event.args, ctx)
             try:

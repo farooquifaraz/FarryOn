@@ -187,6 +187,8 @@ class LiveController {
   Future<void> disconnect() async {
     // Persist the conversation before tearing down so the user can revisit it.
     unawaited(ChatHistoryStore.saveSession(_state.transcripts));
+    // Drop any resolved numbers held for this session (privacy hygiene).
+    _contactNumbers.clear();
     await _stopAudio();
     await _stopVideo();
     await _player.stop();
@@ -268,6 +270,10 @@ class LiveController {
         _emit(_state.copyWith(lastError: msg.message));
       case PongMessage():
         break; // handled inside the client (heartbeat)
+      case ResolveContactRequestMessage():
+        unawaited(_handleResolveContactRequest(msg));
+      case OpenMessagingMessage():
+        unawaited(_handleOpenMessaging(msg));
       case UnknownServerMessage():
         _log.debug('unknown server message: ${msg.type}');
     }
@@ -371,7 +377,6 @@ class LiveController {
     _emit(_state.copyWith(tools: list));
     _applyReminder(msg);
     _applyOpenUrl(msg);
-    _applyResolveContact(msg);
 
     // Voice flow: surface identify_image results so the UI can show the same
     // result sheet the scan button shows. The tool returns the full
@@ -429,61 +434,90 @@ class LiveController {
     }
   }
 
-  /// Client-executed contact resolution: the backend couldn't find a saved
-  /// number for a name, so look it up in the phone's own contacts (with the
-  /// user's permission, on-device) and open WhatsApp. Contacts never leave the
-  /// device.
-  void _applyResolveContact(ToolResultMessage msg) {
-    if (!msg.ok) return;
-    final res = msg.result;
-    if (res == null || res['action'] != 'resolve_contact') return;
-    final name = (res['name'] as String?)?.trim() ?? '';
-    final message = (res['message'] as String?) ?? '';
-    final platform = (res['platform'] as String?) ?? 'whatsapp';
-    if (name.isEmpty) return;
-    unawaited(_resolveAndOpenMessage(name, message, platform));
-  }
+  // ---- Privacy-preserving contact resolution (round-trip) ----------------
+  //
+  // The backend asks us to resolve a NAME against the phone's own contacts and
+  // we reply with MASKED numbers + opaque per-session ids. The real number is
+  // kept only here (never sent to the server); when the user confirms, the
+  // backend sends `open_messaging` with the id and we open WhatsApp/SMS using
+  // the locally-stored number.
 
-  Future<void> _resolveAndOpenMessage(
-    String name,
-    String message,
-    String platform,
+  /// Opaque contactId -> real phone number, for this session only.
+  final Map<String, String> _contactNumbers = {};
+  int _contactIdSeq = 0;
+
+  /// The backend asked us to find a contact by name. Match locally, mask the
+  /// numbers, and reply — never auto-send.
+  Future<void> _handleResolveContactRequest(
+    ResolveContactRequestMessage req,
   ) async {
+    Future<void> reply(String status,
+        [List<Map<String, dynamic>> candidates = const []]) async {
+      _client.send(ResolveContactResultMessage(
+        requestId: req.requestId,
+        status: status,
+        candidates: candidates,
+      ));
+    }
+
     try {
       if (!await FlutterContacts.requestPermission(readonly: true)) {
-        _emit(_state.copyWith(
-          lastError: 'Allow contacts access to message people by name.',
-        ));
+        await reply('permission_denied');
         return;
       }
-      final matches = await _findContactsByName(name);
-      final number = _firstPhone(matches);
-      if (number == null) {
-        _emit(_state.copyWith(
-          lastError: "Couldn't find \"$name\" with a number in your contacts.",
-        ));
-        return;
+      final matches = await _findContactsByName(req.name);
+      // Collapse to distinct numbers, minting an id for each.
+      final seen = <String>{};
+      final candidates = <Map<String, dynamic>>[];
+      for (final c in matches) {
+        final raw = _firstPhone([c]);
+        if (raw == null) continue;
+        final clean = _normalizePhone(raw);
+        if (clean.isEmpty || seen.contains(clean)) continue;
+        seen.add(clean);
+        final id = 'c${_contactIdSeq++}';
+        _contactNumbers[id] = clean;
+        candidates.add({
+          'contactId': id,
+          'displayName': c.displayName,
+          'maskedNumber': _maskPhone(clean),
+        });
       }
-      final clean = _normalizePhone(number);
-      if (clean.isEmpty) {
-        _emit(_state.copyWith(lastError: '"$name" has no valid phone number.'));
-        return;
+      if (candidates.isEmpty) {
+        await reply(matches.isEmpty ? 'not_found' : 'no_number');
+      } else if (candidates.length == 1) {
+        await reply('found', candidates);
+      } else {
+        await reply('ambiguous', candidates);
       }
-      final body = Uri.encodeComponent(message);
-      final uri = Uri.parse(platform == 'sms'
-          ? 'sms:+$clean?body=$body'
-          : 'https://wa.me/$clean?text=$body');
-      await _openExternal(uri);
     } catch (e) {
-      _log.warn('resolve contact failed: $e');
-      _emit(_state.copyWith(lastError: "Couldn't open contacts."));
+      _log.warn('resolve contact request failed: $e');
+      await reply('not_found');
     }
+  }
+
+  /// The user confirmed — open the messaging app for a resolved contact id,
+  /// using the real number we kept locally.
+  Future<void> _handleOpenMessaging(OpenMessagingMessage msg) async {
+    final number = _contactNumbers[msg.contactId];
+    if (number == null || number.isEmpty) {
+      _emit(_state.copyWith(
+        lastError: "Couldn't open that contact — try again.",
+      ));
+      return;
+    }
+    final body = Uri.encodeComponent(msg.message);
+    final uri = Uri.parse(msg.channel == 'sms'
+        ? 'sms:+$number?body=$body'
+        : 'https://wa.me/$number?text=$body');
+    await _openExternal(uri);
   }
 
   /// Contacts whose display name matches [name] (case-insensitive), exact
   /// matches first so "Sara" prefers a contact literally named Sara.
   Future<List<Contact>> _findContactsByName(String name) async {
-    final q = name.toLowerCase();
+    final q = name.toLowerCase().trim();
+    if (q.isEmpty) return const [];
     final all = await FlutterContacts.getContacts(withProperties: true);
     final hits = all
         .where((c) => c.displayName.toLowerCase().contains(q))
@@ -505,13 +539,20 @@ class LiveController {
     return null;
   }
 
-  /// Digits-only number with a country code (mirrors the backend's
-  /// normalize_phone; default UAE country code 971).
+  /// Digits-only number with a country code. Mirrors the backend's
+  /// normalize_phone; falls back to UAE (971) when no code is present.
   String _normalizePhone(String phone, {String defaultCc = '971'}) {
     final digits = phone.replaceAll(RegExp(r'\D'), '');
     if (digits.isEmpty) return '';
     if (digits.startsWith(defaultCc)) return digits;
     return defaultCc + digits.replaceFirst(RegExp(r'^0+'), '');
+  }
+
+  /// A read-aloud masked number, e.g. `+971 ••• ••67` — hides the middle so the
+  /// assistant can confirm by ear without exposing the full number.
+  String _maskPhone(String digits) {
+    if (digits.length < 5) return '••${digits.length >= 2 ? digits.substring(digits.length - 2) : digits}';
+    return '+${digits.substring(0, 3)} ••• ••${digits.substring(digits.length - 2)}';
   }
 
   // ---- Mic (push-to-talk / toggle) --------------------------------------

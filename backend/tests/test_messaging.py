@@ -8,9 +8,9 @@ import pytest
 
 from app.tools import telegram as tg_mod
 from app.tools.base import ToolContext
-from app.tools.contacts import SaveContactTool
+from app.tools.contacts import ResolveContactTool, SaveContactTool
 from app.tools.telegram import SendTelegramTool
-from app.tools.whatsapp import SendWhatsAppTool, normalize_phone
+from app.tools.whatsapp import SendWhatsAppTool, mask_phone, normalize_phone
 
 pytestmark = pytest.mark.asyncio
 
@@ -40,15 +40,131 @@ async def test_whatsapp_needs_number(db_session):
     assert res["ok"] is False
 
 
-async def test_whatsapp_unknown_name_defers_to_device(db_session):
-    """A name with no saved number asks the phone to resolve it on-device."""
+async def test_mask_phone():
+    assert mask_phone("+971501234567").endswith("67")
+    assert "•" in mask_phone("+971501234567")
+    assert mask_phone("12") == "••12"
+
+
+async def test_whatsapp_unknown_name_not_resolved(db_session):
+    """An unresolved name returns ok:false so the model never claims 'sent'."""
     res = await SendWhatsAppTool().run(
         ToolContext(session=db_session), message="hi", contact_name="Sara",
     )
+    assert res["ok"] is False
+    assert res["status"] == "not_resolved"
+
+
+async def test_whatsapp_contact_id_opens_on_device(db_session):
+    """A resolved device contact_id yields an open_messaging action."""
+    res = await SendWhatsAppTool().run(
+        ToolContext(session=db_session), message="hi", contact_id="c_abc",
+    )
     assert res["ok"] is True
-    assert res["action"] == "resolve_contact"
-    assert res["name"] == "Sara"
-    assert res["message"] == "hi"
+    assert res["action"] == "open_messaging"
+    assert res["contact_id"] == "c_abc"
+    assert res["channel"] == "whatsapp"
+
+
+async def test_whatsapp_recalls_resolved_id(db_session):
+    """If the model names a just-resolved contact without the id, recover it."""
+    ctx = ToolContext(
+        session=db_session,
+        recall_resolved=lambda n: "c_recalled" if n.lower() == "kamlesh" else None,
+    )
+    res = await SendWhatsAppTool().run(ctx, message="hi", contact_name="Kamlesh")
+    assert res["ok"] is True
+    assert res["action"] == "open_messaging"
+    assert res["contact_id"] == "c_recalled"
+
+
+async def test_resolve_telegram_not_found(db_session):
+    res = await ResolveContactTool().run(
+        ToolContext(session=db_session), name="Nobody", channel="telegram",
+    )
+    assert res["status"] == "not_found"
+    assert res["channel"] == "telegram"
+
+
+async def test_resolve_telegram_found_saved(db_session):
+    from app.db import repo
+    await repo.save_contact(
+        db_session, name="Rahul", telegram_username="@rahul", user_id=None,
+    )
+    await db_session.commit()
+    res = await ResolveContactTool().run(
+        ToolContext(session=db_session), name="Rahul", channel="telegram",
+    )
+    assert res["status"] == "found"
+    assert res["via"] == "deeplink"
+
+
+async def test_resolve_whatsapp_saved_masked(db_session):
+    from app.db import repo
+    await repo.save_contact(
+        db_session, name="Mom", phone="+971501112233", user_id=None,
+    )
+    await db_session.commit()
+    res = await ResolveContactTool().run(
+        ToolContext(session=db_session), name="Mom", channel="whatsapp",
+    )
+    assert res["status"] == "found"
+    assert res["source"] == "saved"
+    assert "•" in res["masked_number"]
+    assert "contact_id" not in res  # saved -> no device id needed
+
+
+async def test_resolve_whatsapp_device_found(db_session):
+    async def fake_resolve(name, channel):
+        return {
+            "status": "found",
+            "candidates": [
+                {"contactId": "c1", "displayName": "Kamlesh",
+                 "maskedNumber": "+971 ••• ••67"}
+            ],
+        }
+
+    ctx = ToolContext(session=db_session, resolve_contact=fake_resolve)
+    res = await ResolveContactTool().run(ctx, name="Kamlesh", channel="whatsapp")
+    assert res["status"] == "found"
+    assert res["source"] == "device"
+    assert res["contact_id"] == "c1"
+    assert res["masked_number"] == "+971 ••• ••67"
+
+
+async def test_resolve_whatsapp_device_ambiguous(db_session):
+    async def fake_resolve(name, channel):
+        return {
+            "status": "ambiguous",
+            "candidates": [
+                {"contactId": "c1", "displayName": "Kamlesh Home",
+                 "maskedNumber": "+971 ••• ••67"},
+                {"contactId": "c2", "displayName": "Kamlesh Office",
+                 "maskedNumber": "+971 ••• ••88"},
+            ],
+        }
+
+    ctx = ToolContext(session=db_session, resolve_contact=fake_resolve)
+    res = await ResolveContactTool().run(ctx, name="Kamlesh", channel="whatsapp")
+    assert res["status"] == "ambiguous"
+    assert len(res["options"]) == 2
+
+
+async def test_resolve_whatsapp_permission_denied(db_session):
+    async def fake_resolve(name, channel):
+        return {"status": "permission_denied"}
+
+    ctx = ToolContext(session=db_session, resolve_contact=fake_resolve)
+    res = await ResolveContactTool().run(ctx, name="X", channel="whatsapp")
+    assert res["status"] == "permission_denied"
+
+
+async def test_resolve_whatsapp_no_device_bridge(db_session):
+    """Outside a live session (no bridge) it degrades, never crashes."""
+    res = await ResolveContactTool().run(
+        ToolContext(session=db_session), name="X", channel="whatsapp",
+    )
+    assert res["status"] == "index_unavailable"
 
 
 async def test_save_contact_then_whatsapp(db_session):

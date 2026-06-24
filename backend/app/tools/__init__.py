@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from app.tools.base import Tool
 from app.tools.camera import SetCameraZoomTool
-from app.tools.contacts import SaveContactTool
+from app.tools.contacts import ResolveContactTool, SaveContactTool
 from app.tools.device import (
     EndSessionTool,
     MuteMicTool,
@@ -47,6 +47,7 @@ __all__ = [
     "MuteMicTool",
     "ReadEmailTool",
     "ReadEmailsTool",
+    "ResolveContactTool",
     "RotateCameraTool",
     "SaveContactTool",
     "SendEmailTool",
@@ -91,5 +92,6 @@ def build_default_tools() -> list[Tool]:
         IdentifyImageTool(),
         SendWhatsAppTool(),
         SendTelegramTool(),
+        ResolveContactTool(),
         SaveContactTool(),
     ]

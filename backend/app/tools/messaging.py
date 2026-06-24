@@ -42,11 +42,16 @@ class SendMessageTool(Tool):
             "phone_number": {
                 "type": "string",
                 "description": "Recipient phone (with country code if known). "
-                "Optional if contact_name is given.",
+                "Use when the user gave a number directly.",
+            },
+            "contact_id": {
+                "type": "string",
+                "description": "Opaque id from a resolve_contact match (device "
+                "contact). The phone opens Messages using its local number.",
             },
             "contact_name": {
                 "type": "string",
-                "description": "Name of the person to look up in contacts.",
+                "description": "Name of a contact the user SAVED in the app.",
             },
         },
         "required": ["text"],
@@ -59,7 +64,22 @@ class SendMessageTool(Tool):
 
         settings = get_settings()
         phone = (kwargs.get("phone_number") or "").strip()
+        contact_id = (kwargs.get("contact_id") or "").strip()
         name = (kwargs.get("contact_name") or "").strip()
+
+        # A device contact resolved earlier — let the phone open Messages by id
+        # (the real number stays on the device).
+        if not phone and contact_id:
+            logger.info("send_message.open_messaging", contact_id=contact_id)
+            return {
+                "ok": True,
+                "action": "open_messaging",
+                "platform": "sms",
+                "channel": "sms",
+                "contact_id": contact_id,
+                "message": text,
+                "status": "opening_sms",
+            }
 
         if not phone and name:
             contact = await repo.find_contact(
@@ -67,22 +87,35 @@ class SendMessageTool(Tool):
             )
             if contact and contact.phone:
                 phone = contact.phone
-            else:
-                # Let the phone resolve the number from its own contacts and
-                # open the SMS app (contacts never leave the device).
-                logger.info("send_message.resolve_contact", name=name)
+            elif ctx.recall_resolved and ctx.recall_resolved(name):
+                # Recover a just-resolved device contact the model named but
+                # didn't pass the id for.
+                recalled = ctx.recall_resolved(name)
+                logger.info("send_message.recalled", contact_id=recalled)
                 return {
                     "ok": True,
-                    "action": "resolve_contact",
+                    "action": "open_messaging",
                     "platform": "sms",
-                    "name": name,
+                    "channel": "sms",
+                    "contact_id": recalled,
                     "message": text,
-                    "status": "looking_up_contact",
+                    "status": "opening_sms",
+                }
+            else:
+                # Unknown name — the model should resolve_contact first. Report
+                # not-found so it asks instead of claiming the text was sent.
+                return {
+                    "ok": False,
+                    "status": "not_resolved",
+                    "message": (
+                        f"I haven't resolved {name} yet. Use resolve_contact "
+                        "to find them, or ask the user for the number."
+                    ),
                 }
         if not phone:
             return {
                 "ok": False,
-                "message": "I need a phone number or a contact name to text.",
+                "message": "I need a phone number or a resolved contact.",
             }
 
         clean = normalize_phone(phone, settings.default_country_code)

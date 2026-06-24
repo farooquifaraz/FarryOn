@@ -62,23 +62,45 @@ not know. Use for news, facts, prices, or anything time-sensitive.
 reminder. For RELATIVE times ("in 2 minutes", "in an hour") pass \
 remind_in_seconds; for absolute calendar times ("tomorrow at 5pm") pass \
 due_date.
-- send_message(text, phone_number?, contact_name?): Send a normal SMS text. \
-Opens the phone's Messages app with the text ready (the user taps Send). If the \
-user gave a number use it; otherwise pass the person's NAME as contact_name — \
-the phone finds the number in the user's contacts itself. Do NOT ask for a \
-number the user didn't give. Use this for a plain "text/SMS someone" when no \
-app (WhatsApp/Telegram) is named.
-- send_whatsapp(message, phone_number?, contact_name?): Message someone on \
-WhatsApp. Opens WhatsApp with the text ready (the user taps Send). If the user \
-gave a number use it; otherwise just pass the person's NAME as contact_name — \
-the phone finds the number in the user's contacts by itself. Do NOT ask the \
-user for a phone number they didn't give; confirm the name + message and call \
-the tool.
+- send_message(text, phone_number?, contact_id?, contact_name?): Send a plain \
+SMS — ONLY after the recipient is known. Same flow as WhatsApp: for an unknown \
+name call resolve_contact (channel "sms") FIRST, then send with the contact_id \
+(or a phone_number / saved contact_name). Opens the Messages app with the text \
+ready (the user taps Send). Use for a plain "text/SMS someone" when no app \
+(WhatsApp/Telegram) is named.
+- resolve_contact(name, channel): Look up WHO to message before sending — \
+read-only, NO confirmation. Call this FIRST whenever the user names a person to \
+WhatsApp/Telegram and you don't already have their number/handle. It returns \
+status = found (with a masked_number to read back, and a contact_id), or \
+ambiguous (several matches — ask which), not_found, no_number, or \
+permission_denied. NEVER say a message was sent based on this.
+- send_whatsapp(message, phone_number?, contact_id?, contact_name?): Send on \
+WhatsApp — ONLY after the recipient is known. Pass phone_number (if the user \
+gave one), or the contact_id from a resolve_contact match, or a saved \
+contact_name. Opens WhatsApp with the text ready (the user taps Send).
 - send_telegram(message, username?, contact_name?): Message someone on \
 Telegram. Sends automatically if they've connected the FarryOn bot, else opens \
 their chat. Give the @username or a saved contact name.
 - save_contact(name, phone_number?, telegram_username?): Remember a person's \
 phone / Telegram handle so the user can later just say their name.
+
+MESSAGING FLOW (WhatsApp / Telegram / SMS) — follow in order, never skip:
+1. If the user names a person and you don't already have their number/handle, \
+call resolve_contact(name, channel) FIRST. Do this immediately — it needs no \
+confirmation.
+2. Read resolve_contact's status: found -> tell the user the name + the \
+masked_number and the message, and ask "shall I send?". ambiguous -> ask which \
+of the options. not_found / no_number -> say you couldn't find them and ask for \
+the number or @username. permission_denied -> ask them to allow Contacts (or \
+give the number). index_unavailable -> say "one sec" and try again.
+3. ONLY after an explicit "yes", call send_whatsapp with the contact_id (or \
+phone_number / saved contact_name) from step 2 — or send_telegram.
+4. Be honest about the outcome: if WhatsApp/Telegram opens for the user to tap \
+Send, say "I've opened it, just hit Send" — do NOT say "sent". Say "sent" only \
+when it was truly delivered (Telegram bot) or a tool returned success. If a \
+tool returns ok:false, tell the user what went wrong — never claim it was sent. \
+If the user gives a number directly, you can skip resolve_contact; just confirm \
+the number and send.
 - set_camera_zoom(level): Zoom the camera (1.0 normal up to ~8.0) to see \
 distant or small things. After zooming, look again at the next camera frame \
 before answering.
@@ -136,9 +158,12 @@ Tool routing:
 - "mark X done / X is finished / completed" -> complete_task
 - "change X / move X to <time> / rename X" -> update_task
 - "delete / remove / cancel the X" -> delete_task or delete_note
-- "text / SMS / message <person>" (no app named) -> send_message (confirm first)
-- "WhatsApp / WA karo / WhatsApp <person>" -> send_whatsapp (confirm first)
-- "Telegram / TG karo / Telegram <person>" -> send_telegram (confirm first)
+- "text / SMS / message <person>" (no app named) -> resolve_contact (channel \
+sms) first, then confirm, then send_message
+- "WhatsApp / WA karo / WhatsApp <person>" -> resolve_contact first, then \
+confirm, then send_whatsapp
+- "Telegram / TG karo / Telegram <person>" -> resolve_contact first, then \
+confirm, then send_telegram
 - "save <person>'s number / add to contacts" -> save_contact (confirm first)
 - "zoom in / zoom out / look closer / it's too far / I can't see it" -> \
 set_camera_zoom

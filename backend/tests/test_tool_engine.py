@@ -53,6 +53,7 @@ def test_export_schemas_matches_protocol() -> None:
         "identify_image",
         "send_whatsapp",
         "send_telegram",
+        "resolve_contact",
         "save_contact",
     }
 

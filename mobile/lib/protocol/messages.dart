@@ -217,6 +217,36 @@ class PingMessage extends ClientMessage {
   Map<String, dynamic> toJson() => {'type': type, 't': t};
 }
 
+/// Reply to a [ResolveContactRequestMessage]: the result of matching a name
+/// against the device's own contacts. Carries only MASKED numbers + opaque
+/// contact ids — the real number never leaves the phone.
+class ResolveContactResultMessage extends ClientMessage {
+  const ResolveContactResultMessage({
+    required this.requestId,
+    required this.status,
+    this.candidates = const [],
+  });
+
+  /// Correlates with the request's `requestId`.
+  final String requestId;
+
+  /// found | ambiguous | not_found | no_number | permission_denied.
+  final String status;
+
+  /// `[{contactId, displayName, maskedNumber}]` — empty unless found/ambiguous.
+  final List<Map<String, dynamic>> candidates;
+
+  @override
+  String get type => MsgType.resolveContactResult;
+  @override
+  Map<String, dynamic> toJson() => {
+        'type': type,
+        'requestId': requestId,
+        'status': status,
+        'candidates': candidates,
+      };
+}
+
 // ---------------------------------------------------------------------------
 // Server → Client
 // ---------------------------------------------------------------------------
@@ -250,6 +280,10 @@ sealed class ServerMessage {
         return ErrorMessage.fromJson(json);
       case MsgType.pong:
         return PongMessage.fromJson(json);
+      case MsgType.resolveContactRequest:
+        return ResolveContactRequestMessage.fromJson(json);
+      case MsgType.openMessaging:
+        return OpenMessagingMessage.fromJson(json);
       default:
         return UnknownServerMessage(type ?? '<missing>', json);
     }
@@ -402,6 +436,53 @@ class PongMessage extends ServerMessage {
 
   factory PongMessage.fromJson(Map<String, dynamic> json) =>
       PongMessage((json['t'] as num?)?.toInt() ?? 0);
+}
+
+/// The server asks the phone to resolve a contact NAME against its own
+/// contacts (privacy-preserving). The phone replies with a
+/// [ResolveContactResultMessage]. Never auto-sends — only looks up.
+class ResolveContactRequestMessage extends ServerMessage {
+  const ResolveContactRequestMessage({
+    required this.requestId,
+    required this.name,
+    required this.channel,
+  });
+
+  final String requestId;
+  final String name;
+
+  /// whatsapp | sms | telegram.
+  final String channel;
+
+  factory ResolveContactRequestMessage.fromJson(Map<String, dynamic> json) =>
+      ResolveContactRequestMessage(
+        requestId: json['requestId'] as String? ?? '',
+        name: json['name'] as String? ?? '',
+        channel: json['channel'] as String? ?? 'whatsapp',
+      );
+}
+
+/// The server tells the phone to open a messaging app for a previously-resolved
+/// [contactId]. The phone looks up the real number locally (kept in a session
+/// map) and opens WhatsApp / SMS with the message pre-filled.
+class OpenMessagingMessage extends ServerMessage {
+  const OpenMessagingMessage({
+    required this.channel,
+    required this.contactId,
+    required this.message,
+  });
+
+  /// whatsapp | sms.
+  final String channel;
+  final String contactId;
+  final String message;
+
+  factory OpenMessagingMessage.fromJson(Map<String, dynamic> json) =>
+      OpenMessagingMessage(
+        channel: json['channel'] as String? ?? 'whatsapp',
+        contactId: json['contact_id'] as String? ?? '',
+        message: json['message'] as String? ?? '',
+      );
 }
 
 /// Fallback for an unrecognized server `type`. Carries the raw map so callers

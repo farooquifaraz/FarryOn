@@ -65,6 +65,7 @@ abstract final class MsgType {
   static const String interrupt = 'interrupt';
   static const String toolPermission = 'tool_permission';
   static const String locationUpdate = 'location_update';
+  static const String resolveContactResult = 'resolve_contact_result';
   static const String ping = 'ping';
 
   // server → client
@@ -77,6 +78,8 @@ abstract final class MsgType {
   static const String state = 'state';
   static const String error = 'error';
   static const String pong = 'pong';
+  static const String resolveContactRequest = 'resolve_contact_request';
+  static const String openMessaging = 'open_messaging';
 }
 
 /// Canonical tool names (see `PROTOCOL.md` §5). The UI renders tool activity by
