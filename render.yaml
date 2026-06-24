@@ -41,7 +41,7 @@ services:
       - key: OPENAI_API_KEY
         sync: false                         # optional — only if you use OpenAI
       - key: OPENAI_REALTIME_MODEL
-        value: gpt-4o-realtime-preview      # a REALTIME model (not gpt-4.1)
+        value: gpt-realtime      # a REALTIME model (not gpt-4.1)
       - key: GROK_API_KEY
         sync: false                         # optional — only if you use Grok
       - key: GROK_REALTIME_MODEL

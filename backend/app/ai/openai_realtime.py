@@ -128,6 +128,9 @@ class OpenAIRealtimeGateway(AIGateway):
         # streams *deltas*; we accumulate so the client always receives the full
         # line (the UI replaces the live line with each cumulative emit).
         self._assistant_buf = ""
+        # Cumulative transcript of the USER's current spoken turn (from the
+        # input-audio transcription stream), so their chat line fills in live.
+        self._user_buf = ""
 
     def _tool_definitions(self) -> list[dict[str, Any]]:
         """Render tools in the Realtime ``session.tools`` format."""
@@ -189,6 +192,12 @@ class OpenAIRealtimeGateway(AIGateway):
                         "rate": _REALTIME_INPUT_RATE,
                     },
                     "turn_detection": {"type": "server_vad"},
+                    # Transcribe the user's speech so their side of the
+                    # conversation shows in the chat too (parity with Gemini).
+                    # Without this the
+                    # conversation.item.input_audio_transcription.completed
+                    # event never fires and only the assistant's text appears.
+                    "transcription": {"model": "whisper-1"},
                 },
                 "output": {
                     "format": {"type": "audio/pcm", "rate": 24000},
@@ -277,9 +286,26 @@ class OpenAIRealtimeGateway(AIGateway):
                 )
 
         elif etype == (
+            "conversation.item.input_audio_transcription.delta"
+        ):
+            # Stream the user's own words as they're transcribed so their side
+            # of the chat fills in live (cumulative, like the assistant line).
+            delta = getattr(event, "delta", "") or ""
+            if delta:
+                self._user_buf += delta
+                await self._queue.put(
+                    TranscriptEvent(
+                        role="user", text=self._user_buf, final=False
+                    )
+                )
+
+        elif etype == (
             "conversation.item.input_audio_transcription.completed"
         ):
-            transcript = getattr(event, "transcript", "") or ""
+            transcript = (
+                getattr(event, "transcript", "") or self._user_buf or ""
+            )
+            self._user_buf = ""
             if transcript:
                 await self._queue.put(
                     TranscriptEvent(role="user", text=transcript, final=True)
