@@ -103,8 +103,15 @@ class OpenAIRealtimeGateway(AIGateway):
         )
         # ``api_key``/``websocket_base_url`` let OpenAI-compatible realtime
         # backends (e.g. Grok/xAI) reuse this adapter by only changing the
-        # endpoint; default to the OpenAI settings.
-        self._api_key = api_key if api_key is not None else settings.openai_api_key
+        # endpoint. Only the OpenAI provider falls back to the OpenAI key — a
+        # subclass (Grok) must use its OWN key, never the OpenAI one, otherwise
+        # we'd send an ``sk-...`` key to x.ai and get "Incorrect API key".
+        if api_key is not None:
+            self._api_key = api_key
+        elif self.provider == "openai":
+            self._api_key = settings.openai_api_key
+        else:
+            self._api_key = None
         self._ws_base_url = websocket_base_url
         self._queue: asyncio.Queue[GatewayEvent | None] = asyncio.Queue()
         self._conn: Any = None
@@ -154,7 +161,10 @@ class OpenAIRealtimeGateway(AIGateway):
             ) from exc
 
         if not self._api_key:
-            raise RuntimeError("OPENAI_API_KEY is not set.")
+            raise RuntimeError(
+                f"{self.provider.upper()} API key is not set "
+                f"(set {self.provider.upper()}_API_KEY)."
+            )
 
         client_kwargs: dict[str, Any] = {"api_key": self._api_key}
         if self._ws_base_url:

@@ -41,9 +41,10 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = Field(default=None)
     gemini_model: str = Field(default="gemini-2.5-flash-native-audio-latest")
 
-    # OpenAI Realtime
+    # OpenAI Realtime. Use the GA model id — the old "gpt-4o-realtime-preview"
+    # now returns 4004 model_not_found and only wasted a connect attempt.
     openai_api_key: str | None = Field(default=None)
-    openai_realtime_model: str = Field(default="gpt-4o-realtime-preview")
+    openai_realtime_model: str = Field(default="gpt-realtime")
 
     # Grok / xAI Realtime (OpenAI Realtime-compatible; only the endpoint differs)
     grok_api_key: str | None = Field(default=None)
