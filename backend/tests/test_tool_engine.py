@@ -64,7 +64,7 @@ def test_export_schemas_matches_protocol() -> None:
     assert schemas["web_search"]["parameters"]["required"] == ["query"]
     assert schemas["create_task"]["parameters"]["required"] == ["title"]
     assert "due_date" in schemas["create_task"]["parameters"]["properties"]
-    assert schemas["send_message"]["parameters"]["required"] == ["contact", "text"]
+    assert schemas["send_message"]["parameters"]["required"] == ["text"]
 
 
 def test_validate_accepts_valid_args() -> None:

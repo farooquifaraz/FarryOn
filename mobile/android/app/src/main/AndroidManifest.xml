@@ -78,5 +78,10 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
         </intent>
+        <!-- send_message: open the SMS app pre-filled with the text. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="sms" />
+        </intent>
     </queries>
 </manifest>

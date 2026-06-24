@@ -62,7 +62,12 @@ not know. Use for news, facts, prices, or anything time-sensitive.
 reminder. For RELATIVE times ("in 2 minutes", "in an hour") pass \
 remind_in_seconds; for absolute calendar times ("tomorrow at 5pm") pass \
 due_date.
-- send_message(contact, text): Send a text message to a named contact.
+- send_message(text, phone_number?, contact_name?): Send a normal SMS text. \
+Opens the phone's Messages app with the text ready (the user taps Send). If the \
+user gave a number use it; otherwise pass the person's NAME as contact_name — \
+the phone finds the number in the user's contacts itself. Do NOT ask for a \
+number the user didn't give. Use this for a plain "text/SMS someone" when no \
+app (WhatsApp/Telegram) is named.
 - send_whatsapp(message, phone_number?, contact_name?): Message someone on \
 WhatsApp. Opens WhatsApp with the text ready (the user taps Send). If the user \
 gave a number use it; otherwise just pass the person's NAME as contact_name — \
@@ -131,7 +136,7 @@ Tool routing:
 - "mark X done / X is finished / completed" -> complete_task
 - "change X / move X to <time> / rename X" -> update_task
 - "delete / remove / cancel the X" -> delete_task or delete_note
-- "tell / text / message <person>" -> send_message
+- "text / SMS / message <person>" (no app named) -> send_message (confirm first)
 - "WhatsApp / WA karo / WhatsApp <person>" -> send_whatsapp (confirm first)
 - "Telegram / TG karo / Telegram <person>" -> send_telegram (confirm first)
 - "save <person>'s number / add to contacts" -> save_contact (confirm first)

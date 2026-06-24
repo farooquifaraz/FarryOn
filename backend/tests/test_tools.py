@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import httpx
 from sqlalchemy import select
 
-from app.db.models import Note, OutboundMessage, Task
+from app.db.models import Note, Task
 from app.tools.base import ToolContext
 from app.tools.camera import SetCameraZoomTool
 from app.tools.messaging import SendMessageTool
@@ -243,21 +243,24 @@ async def test_create_task_relative_remind_in_seconds(db_session) -> None:
     assert 118 <= delta <= 125
 
 
-async def test_send_message_persists_queued(db_session) -> None:
+async def test_send_message_opens_sms_with_number(db_session) -> None:
     ctx = ToolContext(session=db_session)
     result = await SendMessageTool().run(
-        ctx, contact="Alex", text="On my way"
+        ctx, text="On my way", phone_number="+971501234567"
     )
-    await db_session.commit()
+    assert result["ok"] is True
+    assert result["action"] == "open_url"
+    assert result["url"].startswith("sms:+971501234567?body=")
+    assert "On" in result["url"]
 
-    assert result["contact"] == "Alex"
-    assert result["status"] == "queued"
 
-    rows = (
-        await db_session.execute(select(OutboundMessage))
-    ).scalars().all()
-    assert len(rows) == 1
-    assert rows[0].text == "On my way"
+async def test_send_message_unknown_name_defers_to_device(db_session) -> None:
+    ctx = ToolContext(session=db_session)
+    result = await SendMessageTool().run(ctx, text="hi", contact_name="Alex")
+    assert result["ok"] is True
+    assert result["action"] == "resolve_contact"
+    assert result["platform"] == "sms"
+    assert result["name"] == "Alex"
 
 
 async def test_web_search_returns_mock_results_offline(db_session) -> None:

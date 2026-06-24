@@ -439,11 +439,16 @@ class LiveController {
     if (res == null || res['action'] != 'resolve_contact') return;
     final name = (res['name'] as String?)?.trim() ?? '';
     final message = (res['message'] as String?) ?? '';
+    final platform = (res['platform'] as String?) ?? 'whatsapp';
     if (name.isEmpty) return;
-    unawaited(_resolveAndOpenWhatsApp(name, message));
+    unawaited(_resolveAndOpenMessage(name, message, platform));
   }
 
-  Future<void> _resolveAndOpenWhatsApp(String name, String message) async {
+  Future<void> _resolveAndOpenMessage(
+    String name,
+    String message,
+    String platform,
+  ) async {
     try {
       if (!await FlutterContacts.requestPermission(readonly: true)) {
         _emit(_state.copyWith(
@@ -464,9 +469,10 @@ class LiveController {
         _emit(_state.copyWith(lastError: '"$name" has no valid phone number.'));
         return;
       }
-      final uri = Uri.parse(
-        'https://wa.me/$clean?text=${Uri.encodeComponent(message)}',
-      );
+      final body = Uri.encodeComponent(message);
+      final uri = Uri.parse(platform == 'sms'
+          ? 'sms:+$clean?body=$body'
+          : 'https://wa.me/$clean?text=$body');
       await _openExternal(uri);
     } catch (e) {
       _log.warn('resolve contact failed: $e');
