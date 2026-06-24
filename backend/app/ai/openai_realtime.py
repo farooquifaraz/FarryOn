@@ -14,9 +14,11 @@ match the Realtime defaults (``pcm16``).
 
 from __future__ import annotations
 
+import array
 import asyncio
 import base64
 import json
+import math
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -35,6 +37,48 @@ from app.config import get_settings
 from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
+
+#: The phone streams 16 kHz PCM16 (PROTOCOL.md), but the GA Realtime API
+#: requires input audio >= 24 kHz, so we upsample on the way in.
+_CLIENT_INPUT_RATE = 16000
+_REALTIME_INPUT_RATE = 24000
+
+
+class _LinearResampler:
+    """Streaming linear-interpolation resampler for PCM16 mono audio.
+
+    Keeps a continuous fractional read position and the last sample of the
+    previous chunk so consecutive ``process`` calls join seamlessly (no clicks
+    at chunk boundaries). Cheap enough for a realtime mic stream and adds no
+    native dependency (``audioop`` was removed in Python 3.13).
+    """
+
+    def __init__(self, in_rate: int, out_rate: int) -> None:
+        self._step = in_rate / out_rate  # input samples advanced per output
+        self._pos = 0.0  # next output's source index (-1 == previous tail)
+        self._prev = 0  # last sample carried from the previous chunk
+
+    def process(self, pcm: bytes) -> bytes:
+        if not pcm:
+            return b""
+        src = array.array("h")
+        src.frombytes(pcm)
+        n = len(src)
+        if n == 0:
+            return b""
+        out = array.array("h")
+        pos = self._pos
+        # Emit outputs whose source position falls within [prev .. src[n-1]].
+        while pos < n - 1:
+            i = math.floor(pos)
+            frac = pos - i
+            a = self._prev if i < 0 else src[i]
+            b = src[i + 1]
+            out.append(int(a + (b - a) * frac))
+            pos += self._step
+        self._prev = src[n - 1]
+        self._pos = pos - n  # rebase origin onto the next chunk
+        return out.tobytes()
 
 
 class OpenAIRealtimeGateway(AIGateway):
@@ -68,6 +112,11 @@ class OpenAIRealtimeGateway(AIGateway):
         self._recv_task: asyncio.Task[None] | None = None
         self._audio_open = False
         self._closed = False
+        # Upsample the phone's 16 kHz mic stream to the 24 kHz the GA Realtime
+        # API requires (shared by the Grok subclass, same OpenAI-compatible API).
+        self._in_resampler = _LinearResampler(
+            _CLIENT_INPUT_RATE, _REALTIME_INPUT_RATE
+        )
         # Cumulative assistant transcript for the current turn. The Realtime API
         # streams *deltas*; we accumulate so the client always receives the full
         # line (the UI replaces the live line with each cumulative emit).
@@ -125,7 +174,10 @@ class OpenAIRealtimeGateway(AIGateway):
             "output_modalities": ["audio"],
             "audio": {
                 "input": {
-                    "format": {"type": "audio/pcm", "rate": 16000},
+                    "format": {
+                        "type": "audio/pcm",
+                        "rate": _REALTIME_INPUT_RATE,
+                    },
                     "turn_detection": {"type": "server_vad"},
                 },
                 "output": {
@@ -260,8 +312,11 @@ class OpenAIRealtimeGateway(AIGateway):
         """Append input audio to the Realtime input buffer."""
         if self._conn is None:
             return
+        pcm24 = self._in_resampler.process(pcm)
+        if not pcm24:
+            return
         await self._conn.input_audio_buffer.append(
-            audio=base64.b64encode(pcm).decode("ascii")
+            audio=base64.b64encode(pcm24).decode("ascii")
         )
 
     async def send_video(self, jpeg: bytes, ts_ms: int | None = None) -> None:

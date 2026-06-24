@@ -48,6 +48,10 @@ dependencies:
   image_picker: ^1.1.0
   url_launcher: ^6.3.0
 
+  # Resolve a spoken contact name to a phone number for WhatsApp, on-device
+  # (contacts never leave the phone).
+  flutter_contacts: ^1.1.9+1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

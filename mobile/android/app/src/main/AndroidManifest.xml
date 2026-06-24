@@ -21,6 +21,9 @@
     <!-- Ask to be exempt from battery optimisation so reminders fire on time. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Resolve a spoken contact name to a WhatsApp number (read-only, on-device). -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 

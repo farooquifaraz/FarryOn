@@ -64,8 +64,11 @@ remind_in_seconds; for absolute calendar times ("tomorrow at 5pm") pass \
 due_date.
 - send_message(contact, text): Send a text message to a named contact.
 - send_whatsapp(message, phone_number?, contact_name?): Message someone on \
-WhatsApp. Opens WhatsApp with the text ready (the user taps Send). Give the \
-phone number or a saved contact name.
+WhatsApp. Opens WhatsApp with the text ready (the user taps Send). If the user \
+gave a number use it; otherwise just pass the person's NAME as contact_name — \
+the phone finds the number in the user's contacts by itself. Do NOT ask the \
+user for a phone number they didn't give; confirm the name + message and call \
+the tool.
 - send_telegram(message, username?, contact_name?): Message someone on \
 Telegram. Sends automatically if they've connected the FarryOn bot, else opens \
 their chat. Give the @username or a saved contact name.

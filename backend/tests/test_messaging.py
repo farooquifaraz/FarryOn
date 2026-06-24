@@ -40,6 +40,17 @@ async def test_whatsapp_needs_number(db_session):
     assert res["ok"] is False
 
 
+async def test_whatsapp_unknown_name_defers_to_device(db_session):
+    """A name with no saved number asks the phone to resolve it on-device."""
+    res = await SendWhatsAppTool().run(
+        ToolContext(session=db_session), message="hi", contact_name="Sara",
+    )
+    assert res["ok"] is True
+    assert res["action"] == "resolve_contact"
+    assert res["name"] == "Sara"
+    assert res["message"] == "hi"
+
+
 async def test_save_contact_then_whatsapp(db_session):
     ctx = ToolContext(session=db_session)
     saved = await SaveContactTool().run(

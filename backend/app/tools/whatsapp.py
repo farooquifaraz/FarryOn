@@ -42,11 +42,13 @@ class SendWhatsAppTool(Tool):
 
     name = "send_whatsapp"
     description = (
-        "Send a WhatsApp message to someone. Provide the message and either a "
-        "phone number (with country code if you have it) or a saved contact "
-        "name. Use for 'WhatsApp karo', 'WA bhejo', 'message on WhatsApp'. "
-        "Opens WhatsApp with the message ready; the user taps Send. ALWAYS "
-        "confirm the recipient and message first."
+        "Send a WhatsApp message to someone. Provide the message and the "
+        "recipient: a phone number if the user gave one, OTHERWISE just pass "
+        "the person's NAME as contact_name — the phone looks the number up in "
+        "the user's own contacts automatically, so do NOT ask for a number you "
+        "weren't given. Use for 'WhatsApp karo', 'WA bhejo', 'message on "
+        "WhatsApp'. Opens WhatsApp with the message ready; the user taps Send. "
+        "ALWAYS confirm the recipient and message first."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -81,12 +83,18 @@ class SendWhatsAppTool(Tool):
             if contact and contact.phone:
                 phone = contact.phone
             else:
+                # Not in the app's own saved contacts — hand the name to the
+                # phone so it can resolve the number from the device's contact
+                # list (with the user's permission) and open WhatsApp. Contacts
+                # never leave the device this way.
+                logger.info("send_whatsapp.resolve_contact", name=name)
                 return {
-                    "ok": False,
-                    "message": (
-                        f"I don't have a phone number for {name}. Ask the user "
-                        "for it, then you can save it for next time."
-                    ),
+                    "ok": True,
+                    "action": "resolve_contact",
+                    "platform": "whatsapp",
+                    "name": name,
+                    "message": message,
+                    "status": "looking_up_contact",
                 }
         if not phone:
             return {

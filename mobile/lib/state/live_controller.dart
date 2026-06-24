@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../capture/capture_source.dart';
@@ -370,6 +371,7 @@ class LiveController {
     _emit(_state.copyWith(tools: list));
     _applyReminder(msg);
     _applyOpenUrl(msg);
+    _applyResolveContact(msg);
 
     // Voice flow: surface identify_image results so the UI can show the same
     // result sheet the scan button shows. The tool returns the full
@@ -425,6 +427,85 @@ class LiveController {
     } catch (e) {
       _log.warn('open external url failed: $e');
     }
+  }
+
+  /// Client-executed contact resolution: the backend couldn't find a saved
+  /// number for a name, so look it up in the phone's own contacts (with the
+  /// user's permission, on-device) and open WhatsApp. Contacts never leave the
+  /// device.
+  void _applyResolveContact(ToolResultMessage msg) {
+    if (!msg.ok) return;
+    final res = msg.result;
+    if (res == null || res['action'] != 'resolve_contact') return;
+    final name = (res['name'] as String?)?.trim() ?? '';
+    final message = (res['message'] as String?) ?? '';
+    if (name.isEmpty) return;
+    unawaited(_resolveAndOpenWhatsApp(name, message));
+  }
+
+  Future<void> _resolveAndOpenWhatsApp(String name, String message) async {
+    try {
+      if (!await FlutterContacts.requestPermission(readonly: true)) {
+        _emit(_state.copyWith(
+          lastError: 'Allow contacts access to message people by name.',
+        ));
+        return;
+      }
+      final matches = await _findContactsByName(name);
+      final number = _firstPhone(matches);
+      if (number == null) {
+        _emit(_state.copyWith(
+          lastError: "Couldn't find \"$name\" with a number in your contacts.",
+        ));
+        return;
+      }
+      final clean = _normalizePhone(number);
+      if (clean.isEmpty) {
+        _emit(_state.copyWith(lastError: '"$name" has no valid phone number.'));
+        return;
+      }
+      final uri = Uri.parse(
+        'https://wa.me/$clean?text=${Uri.encodeComponent(message)}',
+      );
+      await _openExternal(uri);
+    } catch (e) {
+      _log.warn('resolve contact failed: $e');
+      _emit(_state.copyWith(lastError: "Couldn't open contacts."));
+    }
+  }
+
+  /// Contacts whose display name matches [name] (case-insensitive), exact
+  /// matches first so "Sara" prefers a contact literally named Sara.
+  Future<List<Contact>> _findContactsByName(String name) async {
+    final q = name.toLowerCase();
+    final all = await FlutterContacts.getContacts(withProperties: true);
+    final hits = all
+        .where((c) => c.displayName.toLowerCase().contains(q))
+        .toList()
+      ..sort((a, b) {
+        final ax = a.displayName.toLowerCase() == q ? 0 : 1;
+        final bx = b.displayName.toLowerCase() == q ? 0 : 1;
+        return ax.compareTo(bx);
+      });
+    return hits;
+  }
+
+  String? _firstPhone(List<Contact> contacts) {
+    for (final c in contacts) {
+      for (final p in c.phones) {
+        if (p.number.trim().isNotEmpty) return p.number;
+      }
+    }
+    return null;
+  }
+
+  /// Digits-only number with a country code (mirrors the backend's
+  /// normalize_phone; default UAE country code 971).
+  String _normalizePhone(String phone, {String defaultCc = '971'}) {
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) return '';
+    if (digits.startsWith(defaultCc)) return digits;
+    return defaultCc + digits.replaceFirst(RegExp(r'^0+'), '');
   }
 
   // ---- Mic (push-to-talk / toggle) --------------------------------------
