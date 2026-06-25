@@ -140,6 +140,12 @@ class OpenAIRealtimeGateway(AIGateway):
         # with Gemini, which streams frames continuously.
         self._latest_frame_b64: str | None = None
         self._latest_frame_at: float = 0.0
+        # Whether a model response is currently being generated. The GA API
+        # rejects a second response.create while one is active ("Conversation
+        # already has an active response in progress"), which happened when our
+        # manual create raced the server. Tracked from response.created/.done
+        # and set optimistically before we create, so we never double-create.
+        self._response_active = False
         # Live vision via conversation image items + manual response creation.
         # Only OpenAI's GA Realtime supports this; xAI/Grok does not honour
         # create_response=false / input_image, so it stays on auto-response and
@@ -357,7 +363,11 @@ class OpenAIRealtimeGateway(AIGateway):
                 )
             )
 
+        elif etype == "response.created":
+            self._response_active = True
+
         elif etype == "response.done":
+            self._response_active = False
             if self._assistant_buf:
                 await self._queue.put(
                     TranscriptEvent(
@@ -370,6 +380,9 @@ class OpenAIRealtimeGateway(AIGateway):
             await self._queue.put(TurnCompleteEvent())
 
         elif etype == "error":
+            # An errored response won't emit response.done, so clear the active
+            # flag here or the session would go silent (no new response allowed).
+            self._response_active = False
             err = getattr(event, "error", None)
             message = getattr(err, "message", "unknown error") if err else "error"
             await self._queue.put(
@@ -430,12 +443,29 @@ class OpenAIRealtimeGateway(AIGateway):
         except Exception as exc:  # noqa: BLE001 - vision is best-effort
             logger.warning("openai.attach_frame_failed", error=repr(exc))
 
+    async def _safe_response_create(self) -> None:
+        """Ask the model to respond, unless a response is already in flight.
+
+        The GA API rejects a second ``response.create`` while one is active. We
+        set the flag optimistically (before the call) so two near-simultaneous
+        triggers — e.g. a server-VAD commit racing our manual create — can't
+        both fire and produce the "active response in progress" error.
+        """
+        if self._conn is None or self._response_active:
+            return
+        self._response_active = True
+        try:
+            await self._conn.response.create()
+        except Exception:
+            self._response_active = False
+            raise
+
     async def _create_response_with_frame(self) -> None:
         """Attach the current frame (if any) then ask the model to respond."""
-        if self._conn is None:
+        if self._conn is None or self._response_active:
             return
         await self._attach_latest_frame()
-        await self._conn.response.create()
+        await self._safe_response_create()
 
     async def send_text(self, text: str) -> None:
         """Create a user message item and request a response."""
@@ -448,12 +478,11 @@ class OpenAIRealtimeGateway(AIGateway):
                 "content": [{"type": "input_text", "text": text}],
             }
         )
-        # OpenAI: attach the current camera frame so typed turns get vision
-        # too. Other providers just create the response.
+        # OpenAI: attach the current camera frame so typed turns get vision too.
         if self._vision_items:
             await self._create_response_with_frame()
         else:
-            await self._conn.response.create()
+            await self._safe_response_create()
 
     async def send_tool_result(
         self, call_id: str, name: str, result: Any, ok: bool = True
@@ -469,7 +498,7 @@ class OpenAIRealtimeGateway(AIGateway):
                 "output": json.dumps(payload, default=str),
             }
         )
-        await self._conn.response.create()
+        await self._safe_response_create()
 
     async def events(self) -> AsyncIterator[GatewayEvent]:
         """Yield normalized gateway events until the session closes."""
@@ -491,6 +520,9 @@ class OpenAIRealtimeGateway(AIGateway):
             await self._conn.response.cancel()
         except Exception:  # pragma: no cover - best-effort
             pass
+        # The cancelled response is no longer active, so the next turn can
+        # create one (response.done may not arrive for a cancelled response).
+        self._response_active = False
 
     async def close(self) -> None:
         """Tear down the receive task and connection (idempotent)."""
