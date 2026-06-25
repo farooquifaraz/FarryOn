@@ -218,11 +218,25 @@ class OpenAIRealtimeGateway(AIGateway):
                     "turn_detection": (
                         {
                             "type": "server_vad",
+                            # Less twitchy than the 0.5 default so a loud TV,
+                            # room noise, or the assistant's own echo tail
+                            # doesn't get committed as a phantom user turn (seen
+                            # in real logs: AI answering itself / Whisper
+                            # hallucinating "subscribe…" on non-speech). Needs a
+                            # slightly clearer pause to end a turn, too.
+                            "threshold": 0.6,
+                            "prefix_padding_ms": 300,
+                            "silence_duration_ms": 600,
                             "create_response": False,
                             "interrupt_response": True,
                         }
                         if self._vision_items
-                        else {"type": "server_vad"}
+                        else {
+                            "type": "server_vad",
+                            "threshold": 0.6,
+                            "prefix_padding_ms": 300,
+                            "silence_duration_ms": 600,
+                        }
                     ),
                     # Transcribe the user's speech so their side of the
                     # conversation shows in the chat too (parity with Gemini).

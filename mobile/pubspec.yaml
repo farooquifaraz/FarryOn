@@ -53,8 +53,10 @@ dependencies:
   flutter_contacts: ^1.1.9+1
 
   # Share the in-app debug log (tool/usage/error trail) via the OS share sheet,
-  # so issues can be reported without screenshots.
+  # so issues can be reported without screenshots. Written to a temp .txt file
+  # (path_provider) and shared as a FILE — a long log is too big for a chat box.
   share_plus: ^10.0.0
+  path_provider: ^2.1.3
 
 dev_dependencies:
   flutter_test:

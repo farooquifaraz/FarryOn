@@ -95,14 +95,12 @@ class LiveController {
   // word is still audible and the assistant's own voice echoes back in as a
   // bogus "user" turn (the garbled chat the user saw).
   //
-  // CHANGED (UX Spec BUG 3 / latency): reduced 1200 -> 450 ms. The old 1.2s
-  // tail created a long dead-window after every reply where the user's next
-  // words weren't captured ("my voice processes slowly"). 450 ms still covers
-  // the OS buffer drain + ring-down because the on-device acoustic echo
-  // cancellation (enableVoiceProcessing, see PhoneCaptureSource) already
-  // suppresses the assistant's own voice. If you ever hear the assistant echo
-  // itself back as a "user" line on a specific device, nudge this up to ~700.
-  static const int _ttsTailMarginMs = 450;
+  // History: 1200 ms originally (no echo, but felt slow), then 450 ms (faster,
+  // but on a loud device the assistant's own voice tail leaked back in as a
+  // bogus "user" turn and it answered itself — seen in real logs). 800 ms is
+  // the balance: it covers the speaker decay + room ring-down so the echo is
+  // gone, while staying far snappier than the old 1.2 s.
+  static const int _ttsTailMarginMs = 800;
 
   // ---- Observable state --------------------------------------------------
 

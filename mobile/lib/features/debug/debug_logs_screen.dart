@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/log_store.dart';
@@ -13,6 +16,27 @@ class DebugLogsScreen extends StatelessWidget {
   static Future<void> open(BuildContext context) => Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const DebugLogsScreen()),
       );
+
+  /// Write the log to a temp .txt file and share it as a FILE attachment — a
+  /// full session log is far too long to paste into a chat box, but as a file
+  /// it sends to WhatsApp/email in one tap.
+  Future<void> _shareAsFile(BuildContext context) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final stamp = DateTime.now()
+          .toIso8601String()
+          .replaceAll(RegExp(r'[:.]'), '-');
+      final file = File('${dir.path}/farryon_log_$stamp.txt');
+      await file.writeAsString(LogStore.instance.export());
+      await Share.shareXFiles(
+        [XFile(file.path, mimeType: 'text/plain')],
+        subject: 'FarryOn debug log',
+      );
+    } catch (e) {
+      // Fallback to plain-text share if writing the file fails.
+      await Share.share(LogStore.instance.export(), subject: 'FarryOn debug log');
+    }
+  }
 
   Color _levelColor(String level, ColorScheme cs) => switch (level) {
         'ERROR' => cs.error,
@@ -42,12 +66,9 @@ class DebugLogsScreen extends StatelessWidget {
             },
           ),
           IconButton(
-            tooltip: 'Share',
+            tooltip: 'Share as file',
             icon: const Icon(Icons.ios_share),
-            onPressed: () => Share.share(
-              store.export(),
-              subject: 'FarryOn debug log',
-            ),
+            onPressed: () => _shareAsFile(context),
           ),
           IconButton(
             tooltip: 'Clear',
