@@ -213,6 +213,7 @@ class LiveController {
 
   void _bindClient() {
     _statusSub = _client.status.listen((status) {
+      _log.info('event: connection → ${status.name}');
       _emit(_state.copyWith(connection: status));
     });
 
@@ -263,11 +264,13 @@ class LiveController {
         _applyTranscript(msg);
       case AudioStartEvent():
         // Assistant begins speaking — mute the mic until playback drains.
+        _log.info('event: AI started speaking');
         _beginTts();
         _emit(_state.copyWith(liveState: LiveState.speaking));
       case AudioEndEvent():
         // Server finished sending audio, but the player is still draining its
         // buffer — keep the mic muted for that remaining playback + a margin.
+        _log.info('event: AI finished speaking');
         _endTtsAfterPlayback();
         if (_state.liveState == LiveState.speaking) {
           _emit(_state.copyWith(liveState: LiveState.idle));
@@ -277,6 +280,7 @@ class LiveController {
       case ToolResultMessage():
         _applyToolResult(msg);
       case StateMessage():
+        _log.info('event: state → ${msg.value.name}');
         _emit(_state.copyWith(liveState: msg.value));
       case ErrorMessage():
         _log.warn('server error ${msg.code}: ${msg.message}');
@@ -284,6 +288,7 @@ class LiveController {
       case PongMessage():
         break; // handled inside the client (heartbeat)
       case ResolveContactRequestMessage():
+        _log.info('event: resolve contact "${msg.name}" (${msg.channel})');
         unawaited(_handleResolveContactRequest(msg));
       case OpenMessagingMessage():
         unawaited(_handleOpenMessaging(msg));
@@ -305,6 +310,12 @@ class LiveController {
     // only be the assistant's own voice leaking back in. Drop it so it never
     // pollutes the chat or gets treated as a real turn.
     if (msg.role == 'user' && _ttsActive) return;
+
+    // Capture the actual conversation in the debug log (final lines only, so
+    // streaming fragments don't spam it). Stamped with the active AI.
+    if (msg.isFinal && msg.text.trim().isNotEmpty) {
+      _log.info('${msg.role == 'user' ? 'USER' : 'AI  '}: ${msg.text.trim()}');
+    }
 
     final list = List<TranscriptEntry>.of(_state.transcripts);
     // Merge consecutive non-final fragments for the same role into one growing
@@ -611,11 +622,13 @@ class LiveController {
 
     // Barge-in: if TTS is playing, stop it locally and tell the server.
     if (_state.liveState == LiveState.speaking) {
+      _log.info('event: user barge-in (interrupted AI)');
       await interrupt();
     }
 
     // Open the activity window BEFORE audio flows so the backend's manual VAD
     // counts the very first words (audio sent before audio_start is dropped).
+    _log.info('event: mic opened (listening)');
     _client.send(const AudioStartMessage());
     await _startAudio();
     _emit(_state.copyWith(micOpen: true, liveState: LiveState.listening));
@@ -624,6 +637,7 @@ class LiveController {
   /// Close the mic and announce `audio_stop`.
   Future<void> stopListening() async {
     if (!_state.micOpen) return;
+    _log.info('event: mic closed');
     await _stopAudio();
     _client.send(const AudioStopMessage());
     _emit(_state.copyWith(
