@@ -31,6 +31,7 @@ class AppConfig {
     this.emailImapHost,
     this.emailSmtpHost,
     this.emailSmtpPort = 587,
+    this.handsFree = true,
   });
 
   /// Backend host (IP or DNS name), without scheme or port.
@@ -73,6 +74,12 @@ class AppConfig {
   final String? emailImapHost;
   final String? emailSmtpHost;
   final int emailSmtpPort;
+
+  /// Hands-free (default): the mic opens automatically and the provider's VAD
+  /// handles turn-taking. When false, it's TAP-TO-TALK — the mic stays closed
+  /// until the user taps it, so background noise / a TV / the assistant's own
+  /// voice can never trigger a phantom turn. Best in noisy rooms.
+  final bool handsFree;
 
   /// Build the initial config from `--dart-define` values, falling back to
   /// localhost defaults suitable for an emulator talking to a host backend.
@@ -132,6 +139,7 @@ class AppConfig {
     String? emailImapHost,
     String? emailSmtpHost,
     int? emailSmtpPort,
+    bool? handsFree,
   }) =>
       AppConfig(
         host: host ?? this.host,
@@ -152,6 +160,7 @@ class AppConfig {
         emailImapHost: emailImapHost ?? this.emailImapHost,
         emailSmtpHost: emailSmtpHost ?? this.emailSmtpHost,
         emailSmtpPort: emailSmtpPort ?? this.emailSmtpPort,
+        handsFree: handsFree ?? this.handsFree,
       );
 
   @override

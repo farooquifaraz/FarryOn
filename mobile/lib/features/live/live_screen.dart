@@ -436,6 +436,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   late String _provider = widget.current.provider;
   late String _wsProvider = widget.current.webSearchProvider;
   late String _emailProvider = widget.current.emailProvider;
+  late bool _handsFree = widget.current.handsFree;
   bool _showEmailPw = false;
 
   @override
@@ -496,6 +497,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
       emailImapHost: imapHost,
       emailSmtpHost: smtpHost,
       emailSmtpPort: smtpPort,
+      handsFree: _handsFree,
     ));
     Navigator.pop(context);
   }
@@ -610,6 +612,23 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                       trailing: const Icon(Icons.chevron_right,
                           color: Aurora.textMuted),
                       onTap: () => DebugLogsScreen.open(context),
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      secondary: Icon(
+                        _handsFree ? Icons.hearing : Icons.touch_app,
+                        color: Aurora.textMuted,
+                      ),
+                      title: const Text('Hands-free mic'),
+                      subtitle: Text(
+                        _handsFree
+                            ? 'Always listening (best in a quiet room)'
+                            : 'Tap-to-talk: mic opens only when you tap it '
+                                '(best with background noise / a TV)',
+                        style: const TextStyle(color: Aurora.textMuted),
+                      ),
+                      value: _handsFree,
+                      onChanged: (v) => setState(() => _handsFree = v),
                     ),
                     const Divider(height: 28, color: Aurora.glassBorder),
                     _label('AI provider'),

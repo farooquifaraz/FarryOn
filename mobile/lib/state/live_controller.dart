@@ -169,10 +169,16 @@ class LiveController {
     await _startVideo();
 
     _client.start();
-    // Hands-free: open the mic right away so the user can just talk. The mic
-    // button is a mute toggle, and we never feed the mic while the assistant
-    // is speaking (half-duplex, see [_startAudio]).
-    await startListening();
+    // Hands-free: open the mic right away so the user can just talk. In
+    // TAP-TO-TALK mode we leave it closed — the user taps the mic button to
+    // speak, so a noisy room / TV / the assistant's own voice can't trigger a
+    // phantom turn. Either way the mic button toggles it.
+    if (_config.handsFree) {
+      await startListening();
+    } else {
+      _log.info('tap-to-talk mode: mic stays closed until you tap it');
+      _emit(_state.copyWith(liveState: LiveState.idle));
+    }
     // Fetch the device location in the background and push it to the backend so
     // "where am I?" works. Non-blocking — GPS can take a few seconds and must
     // not delay the session.
@@ -309,6 +315,26 @@ class LiveController {
     // pollutes the chat or gets treated as a real turn.
     if (msg.role == 'user' && _ttsActive) return;
 
+    // Remember the assistant's last final line so we can detect echo below.
+    if (msg.role != 'user' && msg.isFinal) {
+      _lastAssistantFinal = msg.text;
+    }
+
+    // GLOBAL transcript guard (provider-agnostic — every AI's transcripts flow
+    // through here). Reject a FINAL user line that is empty, a duplicate of the
+    // previous one (some providers, e.g. Grok, emit the same utterance 2-3×),
+    // or an echo of what the assistant just said (its voice leaked into the
+    // mic). On reject, drop the in-progress partial so the chat stays clean.
+    if (msg.role == 'user' && msg.isFinal && !_acceptUserFinal(msg.text)) {
+      _log.info('filtered user line (echo/dup/empty): "${msg.text.trim()}"');
+      final cur = List<TranscriptEntry>.of(_state.transcripts);
+      if (cur.isNotEmpty && cur.last.role == 'user' && !cur.last.isFinal) {
+        cur.removeLast();
+        _emit(_state.copyWith(transcripts: cur));
+      }
+      return;
+    }
+
     // Capture the actual conversation in the debug log (final lines only, so
     // streaming fragments don't spam it). Stamped with the active AI.
     if (msg.isFinal && msg.text.trim().isNotEmpty) {
@@ -336,6 +362,40 @@ class LiveController {
       list.removeRange(0, list.length - _maxTranscripts);
     }
     _emit(_state.copyWith(transcripts: list));
+  }
+
+  // ---- Global transcript guard (provider-agnostic) -----------------------
+  String _lastUserFinal = '';
+  String _lastAssistantFinal = '';
+
+  /// Whether to keep a FINAL user line. Rejects empty, near-duplicate of the
+  /// previous user line, or an echo of the assistant's last line. Same logic
+  /// for every provider — it sits at the one point all transcripts pass.
+  bool _acceptUserFinal(String text) {
+    final norm = _normForCompare(text);
+    if (norm.isEmpty) return false;
+    if (norm == _normForCompare(_lastUserFinal)) return false; // exact repeat
+    if (_jaccard(text, _lastUserFinal) >= 0.9) return false; // near-duplicate
+    if (_lastAssistantFinal.isNotEmpty &&
+        _jaccard(text, _lastAssistantFinal) >= 0.6) {
+      return false; // echo of the assistant's own voice
+    }
+    _lastUserFinal = text;
+    return true;
+  }
+
+  String _normForCompare(String s) => s
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^\w\s]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  /// Word-set overlap (Jaccard) of two phrases — 1.0 identical, 0.0 disjoint.
+  double _jaccard(String a, String b) {
+    final sa = _normForCompare(a).split(' ').where((w) => w.isNotEmpty).toSet();
+    final sb = _normForCompare(b).split(' ').where((w) => w.isNotEmpty).toSet();
+    if (sa.isEmpty || sb.isEmpty) return 0;
+    return sa.intersection(sb).length / sa.union(sb).length;
   }
 
   /// Cap on retained tool-activity rows, for the same reason as transcripts.

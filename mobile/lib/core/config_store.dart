@@ -34,6 +34,7 @@ class ConfigStore {
       emailImapHost: p.getString('cfg.email.imap'),
       emailSmtpHost: p.getString('cfg.email.smtp'),
       emailSmtpPort: p.getInt('cfg.email.smtpPort'),
+      handsFree: p.getBool('cfg.handsFree'),
     );
   }
 
@@ -54,5 +55,6 @@ class ConfigStore {
     await p.setString('cfg.email.imap', c.emailImapHost ?? '');
     await p.setString('cfg.email.smtp', c.emailSmtpHost ?? '');
     await p.setInt('cfg.email.smtpPort', c.emailSmtpPort);
+    await p.setBool('cfg.handsFree', c.handsFree);
   }
 }
