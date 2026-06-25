@@ -11,6 +11,7 @@ this tool — never auto-send.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -18,6 +19,8 @@ from typing import Any
 
 from app.logging_conf import get_logger
 from app.tools.base import Tool, ToolContext
+from app.tools.idempotency import already_sent, mark_sent  # UX Spec §3.4
+from app.tools.validators import valid_email  # UX Spec §3.1
 
 logger = get_logger(__name__)
 
@@ -90,10 +93,34 @@ class SendEmailTool(Tool):
                 ),
             }
         to = (kwargs.get("to") or "").strip()
-        if not to or "@" not in to:
-            return {"ok": False, "message": "Need a valid recipient address."}
+        # CHANGED (UX Spec §3.1): real email validation instead of `"@" in to`,
+        # which accepted "@", "a@" and "a@b" (no TLD).
+        ok_addr, to = valid_email(to)
+        if not ok_addr:
+            return {
+                "ok": False,
+                "message": "That doesn't look like a complete email address.",
+            }
         subject = (kwargs.get("subject") or "(no subject)").strip()
         body = kwargs.get("body") or ""
+
+        # CHANGED (UX Spec §3.4): idempotency. Email is a REAL outward send, so a
+        # retried turn (model re-issuing the send, or a reconnect replay) could
+        # deliver the same mail twice. A fingerprint of sender+recipient+content
+        # suppresses an identical resend inside a short window.
+        fingerprint = (
+            f"email:{address}->{to}:"
+            + hashlib.sha1(
+                f"{subject}\n{body}".encode("utf-8")
+            ).hexdigest()
+        )
+        if already_sent(fingerprint):
+            logger.info("send_email.deduped", to=to)
+            return {
+                "ok": True, "to": to, "subject": subject,
+                "sent": True, "deduped": True,
+            }
+
         try:
             await asyncio.to_thread(
                 _send, host, port, address, password, to, subject, body
@@ -110,5 +137,6 @@ class SendEmailTool(Tool):
         except Exception as exc:  # noqa: BLE001
             logger.warning("send_email.failed", error=str(exc))
             return {"ok": False, "message": "Couldn't send the email right now."}
+        mark_sent(fingerprint)  # UX Spec §3.4: block an identical resend
         logger.info("send_email.sent", to=to)
         return {"ok": True, "to": to, "subject": subject, "sent": True}

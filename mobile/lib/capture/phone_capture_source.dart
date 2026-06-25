@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart'; // compute() — off-main-isolate work
 import 'package:flutter/services.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:image/image.dart' as img;
@@ -9,6 +10,40 @@ import '../core/logger.dart';
 import '../protocol/messages.dart';
 import '../protocol/protocol.dart';
 import 'capture_source.dart';
+
+/// CHANGED (UX Spec BUG 3 / latency): inputs for the off-main-isolate JPEG
+/// downscale. A plain record/class is required because `compute` can only hand a
+/// single, sendable argument to the isolate entry point.
+class _JpegJob {
+  const _JpegJob(this.source, this.maxDim, this.quality);
+  final Uint8List source;
+  final int maxDim;
+  final int quality;
+}
+
+/// Top-level (isolate-safe) JPEG decode + downscale + re-encode.
+///
+/// Runs on a background isolate via `compute` so the heavy `img.decodeImage`
+/// (which previously ran on the UI isolate every ~1s and stalled audio
+/// forwarding + WS sends — the "voice slow" symptom) no longer blocks the event
+/// loop. Returns null if decoding fails.
+Uint8List? _downscaleJpegInIsolate(_JpegJob job) {
+  final decoded = img.decodeImage(job.source);
+  if (decoded == null) return null;
+
+  final longEdge =
+      decoded.width > decoded.height ? decoded.width : decoded.height;
+
+  final img.Image sized = longEdge > job.maxDim
+      ? img.copyResize(
+          decoded,
+          width: decoded.width >= decoded.height ? job.maxDim : null,
+          height: decoded.height > decoded.width ? job.maxDim : null,
+        )
+      : decoded;
+
+  return Uint8List.fromList(img.encodeJpg(sized, quality: job.quality));
+}
 
 /// Phone implementation of [CaptureSource] using the device camera and mic.
 ///
@@ -147,10 +182,12 @@ class PhoneCaptureSource implements CaptureSource {
     );
     final controller = CameraController(
       selected,
-      // High resolution so frames (and zoomed-in crops) stay sharp enough for
-      // the vision model to read distant/small subjects accurately. We still
-      // throttle to ~1 fps and downscale, so the cost stays modest.
-      ResolutionPreset.high,
+      // CHANGED (UX Spec BUG 3 / latency): high -> medium. We throttle to ~1 fps
+      // and then downscale to <=VideoFormat.maxWidth anyway, so a full high-res
+      // capture was wasted work that made each takePicture() (and its decode)
+      // heavier and competed with the audio path. Medium is still sharp enough
+      // for the vision model after downscaling, and noticeably lighter/faster.
+      ResolutionPreset.medium,
       enableAudio: false, // audio comes from flutter_sound, not the camera
       imageFormatGroup: ImageFormatGroup.jpeg,
     );
@@ -240,7 +277,13 @@ class PhoneCaptureSource implements CaptureSource {
     try {
       final shot = await camera.takePicture();
       final raw = await shot.readAsBytes();
-      final jpeg = _downscaleToJpeg(raw);
+      // CHANGED (UX Spec BUG 3 / latency): downscale on a background isolate so
+      // the per-second JPEG decode never blocks the UI isolate that also
+      // forwards mic audio + WS frames.
+      final jpeg = await compute(
+        _downscaleJpegInIsolate,
+        _JpegJob(raw, VideoFormat.maxWidth, jpegQuality),
+      );
       if (jpeg != null && !_videoController.isClosed) {
         _videoController.add(jpeg);
       }
@@ -249,28 +292,6 @@ class PhoneCaptureSource implements CaptureSource {
     } finally {
       _capturingFrame = false;
     }
-  }
-
-  /// Decode, downscale to ≤ [VideoFormat.maxWidth] on the long edge, and
-  /// re-encode as JPEG. Returns null if decoding fails.
-  Uint8List? _downscaleToJpeg(Uint8List source) {
-    final decoded = img.decodeImage(source);
-    if (decoded == null) return null;
-
-    const maxDim = VideoFormat.maxWidth;
-    final longEdge = decoded.width > decoded.height
-        ? decoded.width
-        : decoded.height;
-
-    final img.Image sized = longEdge > maxDim
-        ? img.copyResize(
-            decoded,
-            width: decoded.width >= decoded.height ? maxDim : null,
-            height: decoded.height > decoded.width ? maxDim : null,
-          )
-        : decoded;
-
-    return Uint8List.fromList(img.encodeJpg(sized, quality: jpegQuality));
   }
 
   // ---- Lifecycle ---------------------------------------------------------

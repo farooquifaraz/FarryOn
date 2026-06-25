@@ -15,6 +15,7 @@ Confirm the recipient + message before calling (system-prompt rule).
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import httpx
@@ -23,6 +24,7 @@ from app.config import get_settings
 from app.db import repo
 from app.logging_conf import get_logger
 from app.tools.base import Tool, ToolContext
+from app.tools.idempotency import already_sent, mark_sent  # UX Spec §3.4
 
 logger = get_logger(__name__)
 _API = "https://api.telegram.org/bot{token}/sendMessage"
@@ -95,12 +97,24 @@ class SendTelegramTool(Tool):
 
         # Automatic send when we have a token + the recipient's chat_id.
         if token and chat_id:
+            # CHANGED (UX Spec §3.4): idempotency. The bot path is a REAL send,
+            # so a retried turn could deliver the same Telegram message twice.
+            # A fingerprint of chat_id+message suppresses an identical resend.
+            fingerprint = (
+                "tg:" + chat_id + ":"
+                + hashlib.sha1(message.encode("utf-8")).hexdigest()
+            )
+            if already_sent(fingerprint):
+                logger.info("send_telegram.deduped", chat_id=chat_id)
+                return {"ok": True, "platform": "telegram", "to": chat_id,
+                        "message": message, "sent": True, "deduped": True}
             try:
                 data = await _bot_send(token, chat_id, message)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("send_telegram.failed", error=str(exc))
                 return {"ok": False, "message": "Couldn't send on Telegram."}
             if data.get("ok"):
+                mark_sent(fingerprint)  # block an identical resend
                 logger.info("send_telegram.sent", chat_id=chat_id)
                 return {"ok": True, "platform": "telegram", "to": chat_id,
                         "message": message, "sent": True}

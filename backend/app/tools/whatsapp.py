@@ -21,6 +21,7 @@ from app.config import get_settings
 from app.db import repo
 from app.logging_conf import get_logger
 from app.tools.base import Tool, ToolContext
+from app.tools.validators import valid_phone  # UX Spec §3.1: digit-count guard
 
 logger = get_logger(__name__)
 
@@ -146,9 +147,20 @@ class SendWhatsAppTool(Tool):
                 "message": "I need a phone number or a resolved contact.",
             }
 
-        clean = normalize_phone(phone, settings.default_country_code)
-        if not clean:
-            return {"ok": False, "message": "That phone number looks invalid."}
+        # CHANGED (UX Spec §3.1): validate the digit count, not just "non-empty".
+        # The old check only rejected zero-digit input, so a single mis-heard
+        # digit ("5") became a broken wa.me link. valid_phone normalizes to the
+        # plain-international-digits form wa.me requires AND rejects implausible
+        # lengths (<7 or >15 digits).
+        ok_phone, clean = valid_phone(phone, settings.default_country_code)
+        if not ok_phone:
+            return {
+                "ok": False,
+                "message": (
+                    "That number doesn't look complete — can you give the full "
+                    "number with country code?"
+                ),
+            }
 
         url = f"https://wa.me/{clean}?text={quote(message)}"
         logger.info("send_whatsapp.link", to=clean)

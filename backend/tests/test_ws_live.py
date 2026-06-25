@@ -203,18 +203,21 @@ def _hello(provider: str | None = None) -> dict:
 def test_provider_selection_builds_requested_gateway() -> None:
     """hello.provider actually picks the gateway.
 
-    Requesting ``gemini`` with no API key configured makes that gateway fail to
-    connect — proving the *requested* provider was built, not the mock default
-    (which would have succeeded).
+    Requesting ``gemini`` with no API key makes that gateway fail to connect —
+    proving the *requested* provider was built (not the mock default). The
+    session then falls back to the server default (mock here) and emits a
+    NON-fatal ``provider_fallback`` notice instead of a dead session.
     """
     app = create_app()
     with TestClient(app) as client:
         with client.websocket_connect("/ws/live") as ws:
             ws.send_json(_hello(provider="gemini"))
             msg = ws.receive_json()
+            # The fallback notice proves gemini was built + attempted (and
+            # failed); a silent mock-default path would emit no such notice.
             assert msg["type"] == "error"
-            assert msg["code"] == "provider_unavailable"
-            assert msg["fatal"] is True
+            assert msg["code"] == "provider_fallback"
+            assert msg["fatal"] is False
 
 
 def test_invalid_provider_falls_back_to_default() -> None:

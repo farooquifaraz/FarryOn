@@ -7,6 +7,7 @@ from typing import Any
 
 from app.db import repo
 from app.tools.base import Tool, ToolContext
+from app.tools.validators import clean_text, validate_iso_datetime  # UX Spec §3.1
 
 
 def resolve_due_date(
@@ -62,10 +63,24 @@ class CreateTaskTool(Tool):
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
         """Persist the task and return its id, title, and due date."""
-        title: str = kwargs["title"]
-        due_date = resolve_due_date(
-            kwargs.get("due_date"), kwargs.get("remind_in_seconds")
-        )
+        # CHANGED (UX Spec §2.6 / §3.1): reject an empty title and validate an
+        # absolute due_date as real ISO-8601 BEFORE persisting. Previously a
+        # blank title or a junk date string ("next tuesday") was stored and
+        # shipped to the phone's alarm clock. A valid date is preserved verbatim
+        # (we store the original string, not a reformatted one).
+        ok_title, title = clean_text(kwargs.get("title"), field="title", max_len=512)
+        if not ok_title:
+            return {"ok": False, "message": "What should the task be?"}
+        ok_date, due_in = validate_iso_datetime(kwargs.get("due_date"))
+        if not ok_date:
+            return {
+                "ok": False,
+                "message": (
+                    "That reminder time wasn't a clear date — when should I "
+                    "remind you?"
+                ),
+            }
+        due_date = resolve_due_date(due_in, kwargs.get("remind_in_seconds"))
         task = await repo.add_task(
             ctx.session,
             title=title,

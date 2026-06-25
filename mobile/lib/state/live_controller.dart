@@ -93,7 +93,15 @@ class LiveController {
   // and room reverb — without this tail margin the mic re-opens while the last
   // word is still audible and the assistant's own voice echoes back in as a
   // bogus "user" turn (the garbled chat the user saw).
-  static const int _ttsTailMarginMs = 1200;
+  //
+  // CHANGED (UX Spec BUG 3 / latency): reduced 1200 -> 450 ms. The old 1.2s
+  // tail created a long dead-window after every reply where the user's next
+  // words weren't captured ("my voice processes slowly"). 450 ms still covers
+  // the OS buffer drain + ring-down because the on-device acoustic echo
+  // cancellation (enableVoiceProcessing, see PhoneCaptureSource) already
+  // suppresses the assistant's own voice. If you ever hear the assistant echo
+  // itself back as a "user" line on a specific device, nudge this up to ~700.
+  static const int _ttsTailMarginMs = 450;
 
   // ---- Observable state --------------------------------------------------
 
@@ -377,6 +385,7 @@ class LiveController {
     _emit(_state.copyWith(tools: list));
     _applyReminder(msg);
     _applyOpenUrl(msg);
+    _applyOpenMessaging(msg);
 
     // Voice flow: surface identify_image results so the UI can show the same
     // result sheet the scan button shows. The tool returns the full
@@ -424,6 +433,33 @@ class LiveController {
     final uri = Uri.tryParse(url);
     if (uri == null) return;
     unawaited(_openExternal(uri));
+  }
+
+  /// CHANGED (UX Spec BUG 1 — the WhatsApp "send nahi hota" bug):
+  /// When a contact was resolved on the DEVICE, the backend can't build a
+  /// wa.me/sms link (it never sees the real number) — instead its tool result
+  /// carries `action: "open_messaging"` + the opaque `contact_id`. We must open
+  /// the messaging app for that id using the real number we kept locally
+  /// (`_contactNumbers`), exactly like the typed `OpenMessagingMessage` path.
+  ///
+  /// Previously ONLY `action: "open_url"` was handled, so this device-contact
+  /// path (the common "WhatsApp Sara" flow) silently did nothing and WhatsApp
+  /// never opened. This routes it to the same `_handleOpenMessaging` logic.
+  void _applyOpenMessaging(ToolResultMessage msg) {
+    if (!msg.ok) return;
+    final res = msg.result;
+    if (res == null || res['action'] != 'open_messaging') return;
+    final contactId = res['contact_id'] as String?;
+    if (contactId == null || contactId.isEmpty) return;
+    final channel = (res['channel'] as String?) ?? 'whatsapp';
+    final message = (res['message'] as String?) ?? '';
+    unawaited(_handleOpenMessaging(
+      OpenMessagingMessage(
+        channel: channel,
+        contactId: contactId,
+        message: message,
+      ),
+    ));
   }
 
   Future<void> _openExternal(Uri uri) async {

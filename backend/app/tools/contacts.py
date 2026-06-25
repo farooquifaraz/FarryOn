@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.db import repo
 from app.logging_conf import get_logger
 from app.tools.base import Tool, ToolContext
+from app.tools.validators import valid_phone  # UX Spec §3.1
 from app.tools.whatsapp import mask_phone
 
 logger = get_logger(__name__)
@@ -105,7 +106,18 @@ class ResolveContactTool(Tool):
         if ctx.resolve_contact is None:
             return {"ok": True, "status": "index_unavailable", "name": name}
 
-        res = await ctx.resolve_contact(name, channel)
+        # CHANGED (UX Spec §3.3): guard the device round-trip. The callback can
+        # raise or time out, and a non-dict/None reply would crash on .get(...)
+        # with an AttributeError that reaches the model as a raw stack string.
+        # Any failure degrades to a clean "index_unavailable" so the assistant
+        # just says "one sec" and retries instead of erroring.
+        try:
+            res = await ctx.resolve_contact(name, channel)
+        except Exception as exc:  # noqa: BLE001 - device bridge is best-effort
+            logger.warning("resolve_contact.bridge_failed", error=repr(exc))
+            return {"ok": True, "status": "index_unavailable", "name": name}
+        if not isinstance(res, dict):
+            return {"ok": True, "status": "index_unavailable", "name": name}
         status = (res.get("status") or "index_unavailable").lower()
         candidates = res.get("candidates") or []
 
@@ -183,6 +195,24 @@ class SaveContactTool(Tool):
                 "ok": False,
                 "message": "Give a phone number or a Telegram @username to save.",
             }
+        # CHANGED (UX Spec §2.9 / §3.1): VALIDATE the phone before storing it, so
+        # a junk number (a single mis-heard digit) is rejected up front instead
+        # of being saved and only failing later at send time. We store the
+        # number AS THE USER GAVE IT (e.g. "+971509998888") — the send tools
+        # already normalize to plain digits via valid_phone — so the saved value
+        # stays human-readable.
+        if phone is not None:
+            ok_phone, _clean = valid_phone(
+                phone, get_settings().default_country_code
+            )
+            if not ok_phone:
+                return {
+                    "ok": False,
+                    "message": (
+                        "That number doesn't look complete — give the full "
+                        "number with country code so I can save it correctly."
+                    ),
+                }
         contact = await repo.save_contact(
             ctx.session, name=name, phone=phone,
             telegram_username=tg, user_id=ctx.user_id,

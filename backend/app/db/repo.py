@@ -164,6 +164,47 @@ async def find_note(
     return (await session.execute(stmt)).scalars().first()
 
 
+# CHANGED (UX Spec §3.5): plural finders so the manage tools can detect when a
+# fuzzy name matches MORE THAN ONE item and ask the user which, instead of
+# silently mutating/deleting the first match (which could be the wrong note/task).
+async def find_tasks(
+    session: AsyncSession,
+    *,
+    query: str,
+    user_id: int | None = None,
+    limit: int = 5,
+) -> list[Task]:
+    """Return up to ``limit`` tasks matching ``query`` (open ones first)."""
+    stmt = (
+        select(Task)
+        .where(Task.title.ilike(f"%{query.strip()}%"))
+        .order_by(Task.done.asc(), Task.created_at.desc())
+        .limit(limit)
+    )
+    if user_id is not None:
+        stmt = stmt.where(Task.user_id == user_id)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def find_notes(
+    session: AsyncSession,
+    *,
+    query: str,
+    user_id: int | None = None,
+    limit: int = 5,
+) -> list[Note]:
+    """Return up to ``limit`` notes whose text matches ``query`` (newest first)."""
+    stmt = (
+        select(Note)
+        .where(Note.text.ilike(f"%{query.strip()}%"))
+        .order_by(Note.created_at.desc())
+        .limit(limit)
+    )
+    if user_id is not None:
+        stmt = stmt.where(Note.user_id == user_id)
+    return list((await session.execute(stmt)).scalars().all())
+
+
 async def save_contact(
     session: AsyncSession,
     *,

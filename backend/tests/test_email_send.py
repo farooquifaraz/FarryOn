@@ -27,7 +27,9 @@ async def test_send_email_requires_valid_recipient(db_session) -> None:
     )
     result = await SendEmailTool().run(ctx, to="not-an-email", body="hi")
     assert result["ok"] is False
-    assert "recipient" in result["message"].lower()
+    # The hardened validator rejects an incomplete address by name.
+    msg = result["message"].lower()
+    assert "email" in msg or "address" in msg
 
 
 async def test_send_email_sends(db_session, monkeypatch) -> None:

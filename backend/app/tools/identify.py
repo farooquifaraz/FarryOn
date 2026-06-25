@@ -14,8 +14,11 @@ import time
 from typing import Any
 
 from app.config import get_settings
+from app.logging_conf import get_logger
 from app.services.vision import run_detection
 from app.tools.base import Tool, ToolContext
+
+logger = get_logger(__name__)
 
 #: Frames older than this are treated as no-frame — the camera was likely
 #: lowered/turned off, so identifying the last frame would answer about a stale
@@ -67,8 +70,24 @@ class IdentifyImageTool(Tool):
             kind = "auto"
 
         image_data = base64.b64encode(ctx.last_frame).decode("utf-8")
-        return await run_detection(
-            kind,  # type: ignore[arg-type]
-            settings=get_settings(),
-            image_data=image_data,
-        )
+        # CHANGED (UX Spec §3.3): wrap the vision call so a Vision API outage,
+        # bad credentials, or quota error becomes a friendly {ok:false,error}
+        # the model can speak — instead of a raw "GoogleAPIError: ..." stack
+        # string reaching the model via the engine's generic handler. The
+        # vision service already returns its own {ok,...} envelope on expected
+        # failures; this catch is the last-resort net for the unexpected.
+        try:
+            return await run_detection(
+                kind,  # type: ignore[arg-type]
+                settings=get_settings(),
+                image_data=image_data,
+            )
+        except Exception as exc:  # noqa: BLE001 - never surface a raw stack
+            logger.error("identify_image.detection_error", error=repr(exc))
+            return {
+                "ok": False,
+                "error": (
+                    "I couldn't scan that just now — point the camera at the "
+                    "subject and try once more."
+                ),
+            }

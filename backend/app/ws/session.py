@@ -119,11 +119,44 @@ class Session:
                     model=self._gateway.model_label,
                     error=repr(exc),
                 )
-                await self._send_error(
-                    "provider_unavailable", repr(exc), fatal=True
-                )
-                reason = "connect_failed"
-                return
+                # CHANGED (UX Spec BUG 2): if the client REQUESTED a specific
+                # provider (e.g. openai/grok) and it fails to connect — bad key,
+                # wrong model id, endpoint down — don't leave the user with a dead
+                # session. Fall back to the server's configured default provider
+                # (Gemini is the recommended default for full voice+vision) so the
+                # assistant still works. Only fall back to a DIFFERENT provider.
+                default_provider = self._settings.ai_provider
+                if self._gateway.provider != default_provider:
+                    logger.warning(
+                        "gateway.fallback",
+                        session_id=self.session_id,
+                        from_provider=self._gateway.provider,
+                        to=default_provider,
+                    )
+                    try:
+                        self._gateway = self._gateway_factory(
+                            default_provider, prompt
+                        )
+                        await self._gateway.connect()
+                    except Exception as exc2:  # noqa: BLE001
+                        await self._send_error(
+                            "provider_unavailable", repr(exc2), fatal=True
+                        )
+                        reason = "connect_failed"
+                        return
+                    # Non-fatal heads-up so the app can show which model is live.
+                    await self._send_error(
+                        "provider_fallback",
+                        f"Requested AI provider was unavailable; switched to "
+                        f"{self._gateway.model_label}.",
+                        fatal=False,
+                    )
+                else:
+                    await self._send_error(
+                        "provider_unavailable", repr(exc), fatal=True
+                    )
+                    reason = "connect_failed"
+                    return
             await self._persist_session_start()
             await self._send_json(
                 {

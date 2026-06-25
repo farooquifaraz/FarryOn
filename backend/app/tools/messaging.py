@@ -17,7 +17,7 @@ from app.config import get_settings
 from app.db import repo
 from app.logging_conf import get_logger
 from app.tools.base import Tool, ToolContext
-from app.tools.whatsapp import normalize_phone
+from app.tools.validators import valid_phone  # UX Spec §3.1: digit-count guard
 
 logger = get_logger(__name__)
 
@@ -118,9 +118,16 @@ class SendMessageTool(Tool):
                 "message": "I need a phone number or a resolved contact.",
             }
 
-        clean = normalize_phone(phone, settings.default_country_code)
-        if not clean:
-            return {"ok": False, "message": "That phone number looks invalid."}
+        # CHANGED (UX Spec §3.1): digit-count validation, see whatsapp.py.
+        ok_phone, clean = valid_phone(phone, settings.default_country_code)
+        if not ok_phone:
+            return {
+                "ok": False,
+                "message": (
+                    "That number doesn't look complete — can you give the full "
+                    "number with country code?"
+                ),
+            }
 
         url = f"sms:+{clean}?body={quote(text)}"
         logger.info("send_message.link", to=clean)
