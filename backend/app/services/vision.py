@@ -343,6 +343,67 @@ async def gemini_vision_identify(
     return None
 
 
+async def gemini_vision_answer(
+    client: httpx.AsyncClient,
+    image_b64: str,
+    question: str,
+    gemini_key: str | None,
+    lang: str | None = None,
+) -> str | None:
+    """Answer a free-form QUESTION about the image (read a clock, read text,
+    count items, describe a detail) with Gemini's multimodal model.
+
+    This is the "read/describe" path, distinct from product/landmark
+    identification — so "what time is on the clock?" reads the hands instead of
+    trying to sell a "Decorative Wall Clock". Returns a short text answer or
+    ``None`` on failure.
+    """
+    if not gemini_key or not image_b64 or not question:
+        return None
+    language = lang or "en"
+    prompt = (
+        "Look closely at the image and answer this question as directly and "
+        f'specifically as possible: "{question}".\n'
+        "- If it asks the TIME on a clock/watch, read the hour and minute hands "
+        "and state the time (e.g. \"about 8:20\").\n"
+        "- If it asks to READ text, a label, a sign, or numbers, transcribe "
+        "them exactly.\n"
+        "- Otherwise describe precisely what is asked.\n"
+        "Give a concise, factual answer in 1-2 sentences. If you truly cannot "
+        "tell from the image, say so briefly and suggest moving closer or "
+        f"steadier. Reply in the user's language (BCP-47 '{language}'); for "
+        "Hindi or Urdu use Roman (Latin) script. Plain text, no markdown."
+    )
+    body = {
+        "contents": [
+            {
+                "parts": [
+                    {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
+                    {"text": prompt},
+                ]
+            }
+        ],
+        "generationConfig": {"temperature": 0.2},
+    }
+    for model in GEMINI_MODELS:
+        try:
+            r = await client.post(
+                f"{GEMINI_BASE}/{model}:generateContent?key={gemini_key}",
+                json=body,
+                timeout=_HTTP_TIMEOUT,
+            )
+            if r.status_code in (404, 429, 500, 502, 503):
+                continue
+            if r.status_code != 200:
+                return None
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return text.strip() or None
+        except Exception as exc:  # noqa: BLE001 - best-effort
+            logger.warning("vision.gemini_answer_failed", model=model, error=str(exc))
+            continue
+    return None
+
+
 def _gem_description(gem: dict[str, Any]) -> str:
     """Compose a readable description from Gemini's fields."""
     parts: list[str] = []
@@ -512,6 +573,7 @@ async def run_detection(
     image_data: str | None = None,
     image_url: str | None = None,
     lang: str | None = None,
+    question: str | None = None,
 ) -> dict[str, Any]:
     """Run detection for ``mode`` and return the ``{ok, mode, result}`` envelope.
 
@@ -527,6 +589,40 @@ async def run_detection(
     gemini_key = settings.gemini_api_key
 
     try:
+        # READ/ANSWER path: the user asked a specific question about the view
+        # ("what time is the clock?", "read this label"). Answer it directly
+        # with Gemini vision instead of running product/landmark identification.
+        if question and question.strip():
+            if not gemini_key:
+                raise DetectionError(
+                    "Vision AI key is not set (add GEMINI_API_KEY on the server)."
+                )
+            image_req = await _build_image_req(image_url, image_data)
+            async with httpx.AsyncClient() as client:
+                img_b64 = image_req.get("content")
+                if img_b64 is None and image_url:
+                    img_b64 = await _fetch_b64(client, image_url)
+                answer = (
+                    await gemini_vision_answer(
+                        client, img_b64, question.strip(), gemini_key, lang
+                    )
+                    if img_b64
+                    else None
+                )
+            if answer:
+                return {
+                    "ok": True,
+                    "mode": "answer",
+                    "result": {"question": question.strip(), "answer": answer},
+                }
+            return {
+                "ok": False,
+                "error": (
+                    "I couldn't make that out clearly — try moving a bit closer "
+                    "or holding the camera steady, then ask again."
+                ),
+            }
+
         if mode == "web":
             if not image_url:
                 raise DetectionError("Web mode needs an image URL.")

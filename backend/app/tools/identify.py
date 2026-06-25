@@ -35,9 +35,14 @@ class IdentifyImageTool(Tool):
         "landmark/place, a product, or any ordinary object. Use whenever the "
         "user wants to know what they are looking at: 'what is this', 'what's "
         "in front of me', 'take a photo and tell me what it is', 'click a pic', "
-        "'scan this', 'identify/describe this'. No tap is needed. 'kind' picks "
-        "the type: 'landmark', 'product', or 'auto' (default — auto-detects "
-        "landmark vs product vs object). Prefer 'auto' unless clearly told."
+        "'scan this', 'identify/describe this'. No tap is needed.\n"
+        "IMPORTANT: if the user asks to READ or ANSWER something about the view "
+        "— the TIME on a clock, text on a label/sign, a number, how many of "
+        "something, or any specific question — pass that as 'question' (e.g. "
+        "question='what time does the clock show?'). That reads the image to "
+        "answer, instead of trying to identify it as a product to shop for. "
+        "Use 'kind' only for pure what-is-this: 'landmark', 'product', or "
+        "'auto' (default)."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -46,7 +51,14 @@ class IdentifyImageTool(Tool):
                 "type": "string",
                 "enum": ["landmark", "product", "auto"],
                 "description": "What to identify; default 'auto'.",
-            }
+            },
+            "question": {
+                "type": "string",
+                "description": "A specific question to READ/answer from the view "
+                "(time on a clock, text on a label, a count, etc.). When set, "
+                "the image is read to answer this instead of product/landmark "
+                "identification.",
+            },
         },
     }
 
@@ -68,6 +80,7 @@ class IdentifyImageTool(Tool):
         kind = kwargs.get("kind") or "auto"
         if kind not in ("landmark", "product", "auto"):
             kind = "auto"
+        question = (kwargs.get("question") or "").strip() or None
 
         image_data = base64.b64encode(ctx.last_frame).decode("utf-8")
         # CHANGED (UX Spec §3.3): wrap the vision call so a Vision API outage,
@@ -81,6 +94,7 @@ class IdentifyImageTool(Tool):
                 kind,  # type: ignore[arg-type]
                 settings=get_settings(),
                 image_data=image_data,
+                question=question,
             )
         except Exception as exc:  # noqa: BLE001 - never surface a raw stack
             logger.error("identify_image.detection_error", error=repr(exc))

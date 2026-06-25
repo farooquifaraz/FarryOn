@@ -35,7 +35,7 @@ async def test_fresh_frame_dispatches_to_detection(db_session, monkeypatch) -> N
     """A fresh frame is base64-encoded and passed to run_detection."""
     seen: dict[str, object] = {}
 
-    async def fake_run(mode, *, settings, image_data=None, image_url=None):
+    async def fake_run(mode, *, settings, image_data=None, image_url=None, question=None):
         seen["mode"] = mode
         seen["image_data"] = image_data
         return {"ok": True, "mode": "landmark", "result": {"count": 0, "landmarks": []}}
@@ -53,10 +53,30 @@ async def test_fresh_frame_dispatches_to_detection(db_session, monkeypatch) -> N
     assert seen["image_data"] == base64.b64encode(b"hello").decode("utf-8")
 
 
+async def test_question_is_passed_through(db_session, monkeypatch) -> None:
+    """A read/answer question reaches run_detection (the read path)."""
+    seen: dict[str, object] = {}
+
+    async def fake_run(mode, *, settings, image_data=None, image_url=None,
+                       question=None):
+        seen["question"] = question
+        return {"ok": True, "mode": "answer", "result": {"answer": "8:20"}}
+
+    monkeypatch.setattr(identify_mod, "run_detection", fake_run)
+    ctx = ToolContext(
+        session=db_session, last_frame=b"x", last_frame_at=time.monotonic(),
+    )
+    res = await IdentifyImageTool().run(
+        ctx, question="what time does the clock show?"
+    )
+    assert res["ok"] is True
+    assert seen["question"] == "what time does the clock show?"
+
+
 async def test_invalid_kind_coerces_to_auto(db_session, monkeypatch) -> None:
     seen: dict[str, object] = {}
 
-    async def fake_run(mode, *, settings, image_data=None, image_url=None):
+    async def fake_run(mode, *, settings, image_data=None, image_url=None, question=None):
         seen["mode"] = mode
         return {"ok": True, "mode": "landmark", "result": {"count": 0, "landmarks": []}}
 

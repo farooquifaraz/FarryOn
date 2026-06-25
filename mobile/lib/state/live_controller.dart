@@ -21,6 +21,9 @@ import '../protocol/protocol.dart';
 import 'live_state.dart';
 import 'permissions.dart';
 
+/// Verdict for a final user transcript from the global transcript guard.
+enum _UserVerdict { accept, replace, reject }
+
 /// Orchestrates the whole realtime session: it wires the active
 /// [CaptureSource] → [WebSocketLiveClient] → [PcmPlayer] and projects everything
 /// into an observable [LiveSessionState].
@@ -315,30 +318,36 @@ class LiveController {
     // pollutes the chat or gets treated as a real turn.
     if (msg.role == 'user' && _ttsActive) return;
 
-    // Remember the assistant's last final line so we can detect echo below.
+    // Remember the assistant's last final line (for echo detection) and log it.
     if (msg.role != 'user' && msg.isFinal) {
       _lastAssistantFinal = msg.text;
+      if (msg.text.trim().isNotEmpty) _log.info('AI  : ${msg.text.trim()}');
     }
 
-    // GLOBAL transcript guard (provider-agnostic — every AI's transcripts flow
-    // through here). Reject a FINAL user line that is empty, a duplicate of the
-    // previous one (some providers, e.g. Grok, emit the same utterance 2-3×),
-    // or an echo of what the assistant just said (its voice leaked into the
-    // mic). On reject, drop the in-progress partial so the chat stays clean.
-    if (msg.role == 'user' && msg.isFinal && !_acceptUserFinal(msg.text)) {
-      _log.info('filtered user line (echo/dup/empty): "${msg.text.trim()}"');
-      final cur = List<TranscriptEntry>.of(_state.transcripts);
-      if (cur.isNotEmpty && cur.last.role == 'user' && !cur.last.isFinal) {
-        cur.removeLast();
-        _emit(_state.copyWith(transcripts: cur));
+    // GLOBAL transcript guard (provider-agnostic — every AI's transcripts pass
+    // here). For a FINAL user line, decide: REJECT (empty / duplicate / echo of
+    // the assistant's own voice), REPLACE (a growing continuation of the same
+    // utterance — some providers, e.g. Grok, emit it 2-3× as it builds, which
+    // looked like the user "repeating"), or ACCEPT (a genuinely new line).
+    if (msg.role == 'user' && msg.isFinal) {
+      switch (_classifyUserFinal(msg.text)) {
+        case _UserVerdict.reject:
+          _dropTrailingUserPartial();
+          return;
+        case _UserVerdict.replace:
+          _lastUserFinal = msg.text;
+          _scheduleUserLog(msg.text);
+          final cur = List<TranscriptEntry>.of(_state.transcripts);
+          if (cur.isNotEmpty && cur.last.role == 'user') {
+            cur[cur.length - 1] =
+                cur.last.copyWith(text: msg.text, isFinal: true);
+            _emit(_state.copyWith(transcripts: cur));
+            return;
+          }
+        case _UserVerdict.accept:
+          _lastUserFinal = msg.text;
+          _scheduleUserLog(msg.text);
       }
-      return;
-    }
-
-    // Capture the actual conversation in the debug log (final lines only, so
-    // streaming fragments don't spam it). Stamped with the active AI.
-    if (msg.isFinal && msg.text.trim().isNotEmpty) {
-      _log.info('${msg.role == 'user' ? 'USER' : 'AI  '}: ${msg.text.trim()}');
     }
 
     final list = List<TranscriptEntry>.of(_state.transcripts);
@@ -367,21 +376,44 @@ class LiveController {
   // ---- Global transcript guard (provider-agnostic) -----------------------
   String _lastUserFinal = '';
   String _lastAssistantFinal = '';
+  Timer? _userLogTimer;
+  String _pendingUserLog = '';
 
-  /// Whether to keep a FINAL user line. Rejects empty, near-duplicate of the
-  /// previous user line, or an echo of the assistant's last line. Same logic
-  /// for every provider — it sits at the one point all transcripts pass.
-  bool _acceptUserFinal(String text) {
+  /// Classify a FINAL user line against the previous one + the assistant's last
+  /// line. One place, same logic for gemini/openai/grok.
+  _UserVerdict _classifyUserFinal(String text) {
     final norm = _normForCompare(text);
-    if (norm.isEmpty) return false;
-    if (norm == _normForCompare(_lastUserFinal)) return false; // exact repeat
-    if (_jaccard(text, _lastUserFinal) >= 0.9) return false; // near-duplicate
+    if (norm.isEmpty) return _UserVerdict.reject;
+    final last = _normForCompare(_lastUserFinal);
+    if (last.isNotEmpty) {
+      if (norm == last) return _UserVerdict.reject; // exact repeat
+      if (norm.startsWith(last)) return _UserVerdict.replace; // growing
+      if (last.startsWith(norm)) return _UserVerdict.reject; // shorter repeat
+      if (_jaccard(text, _lastUserFinal) >= 0.9) return _UserVerdict.reject;
+    }
     if (_lastAssistantFinal.isNotEmpty &&
         _jaccard(text, _lastAssistantFinal) >= 0.6) {
-      return false; // echo of the assistant's own voice
+      return _UserVerdict.reject; // echo of the assistant's own voice
     }
-    _lastUserFinal = text;
-    return true;
+    return _UserVerdict.accept;
+  }
+
+  /// Debounced log of the user's line: a growing utterance only logs ONCE — the
+  /// final, complete text — instead of every incremental step.
+  void _scheduleUserLog(String text) {
+    _pendingUserLog = text.trim();
+    _userLogTimer?.cancel();
+    _userLogTimer = Timer(const Duration(milliseconds: 700), () {
+      if (_pendingUserLog.isNotEmpty) _log.info('USER: $_pendingUserLog');
+    });
+  }
+
+  void _dropTrailingUserPartial() {
+    final cur = List<TranscriptEntry>.of(_state.transcripts);
+    if (cur.isNotEmpty && cur.last.role == 'user' && !cur.last.isFinal) {
+      cur.removeLast();
+      _emit(_state.copyWith(transcripts: cur));
+    }
   }
 
   String _normForCompare(String s) => s
@@ -872,6 +904,7 @@ class LiveController {
   Future<void> dispose() async {
     await ChatHistoryStore.saveSession(_state.transcripts);
     _ttsClear?.cancel();
+    _userLogTimer?.cancel();
     await _audioSub?.cancel();
     await _videoSub?.cancel();
     await _eventSub?.cancel();
