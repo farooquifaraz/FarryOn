@@ -9,6 +9,7 @@ import '../capture/device_registry.dart';
 import '../core/chat_history.dart';
 import '../core/config.dart';
 import '../core/location.dart';
+import '../core/log_store.dart';
 import '../core/logger.dart';
 import '../core/notifications.dart';
 import '../data/finder_api.dart';
@@ -253,6 +254,10 @@ class LiveController {
   void _onServerMessage(ServerMessage msg) {
     switch (msg) {
       case ReadyMessage():
+        // Stamp the active AI on every subsequent log line so a shared debug
+        // trail clearly shows which provider/model the user was talking to.
+        LogStore.instance.setProvider(msg.model ?? _config.provider);
+        _log.info('session ready (model: ${msg.model ?? "?"})');
         _emit(_state.copyWith(clearError: true));
       case TranscriptMessage():
         _applyTranscript(msg);
@@ -328,6 +333,7 @@ class LiveController {
   static const int _maxTools = 40;
 
   void _applyToolCall(ToolCallMessage msg) {
+    _log.info('tool → ${msg.name}(${msg.args})');
     final list = List<ToolActivity>.of(_state.tools)
       ..add(ToolActivity(
         id: msg.id,
@@ -363,6 +369,11 @@ class LiveController {
   }
 
   void _applyToolResult(ToolResultMessage msg) {
+    if (msg.ok) {
+      _log.info('tool ✓ ${msg.name} → ${msg.result ?? "ok"}');
+    } else {
+      _log.warn('tool ✗ ${msg.name} → ${msg.error ?? "failed"}');
+    }
     final list = List<ToolActivity>.of(_state.tools);
     final idx = list.indexWhere((t) => t.id == msg.id);
     if (idx >= 0) {

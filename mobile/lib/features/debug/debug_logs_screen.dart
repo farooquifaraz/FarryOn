@@ -1,0 +1,89 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
+
+import '../../core/log_store.dart';
+
+/// A live view of the in-app debug log with one-tap **Share** and **Copy**, so
+/// the user can report a problem with the full tool/usage/error trail (and the
+/// AI provider that was in use) instead of taking screenshots.
+class DebugLogsScreen extends StatelessWidget {
+  const DebugLogsScreen({super.key});
+
+  static Future<void> open(BuildContext context) => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const DebugLogsScreen()),
+      );
+
+  Color _levelColor(String level, ColorScheme cs) => switch (level) {
+        'ERROR' => cs.error,
+        'WARN' => Colors.orange,
+        'DEBUG' => cs.onSurfaceVariant,
+        _ => cs.onSurface,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final store = LogStore.instance;
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Debug logs'),
+        actions: [
+          IconButton(
+            tooltip: 'Copy all',
+            icon: const Icon(Icons.copy_all),
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: store.export()));
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Logs copied to clipboard')),
+                );
+              }
+            },
+          ),
+          IconButton(
+            tooltip: 'Share',
+            icon: const Icon(Icons.ios_share),
+            onPressed: () => Share.share(
+              store.export(),
+              subject: 'FarryOn debug log',
+            ),
+          ),
+          IconButton(
+            tooltip: 'Clear',
+            icon: const Icon(Icons.delete_outline),
+            onPressed: store.clear,
+          ),
+        ],
+      ),
+      body: ValueListenableBuilder<int>(
+        valueListenable: store.revision,
+        builder: (context, _, __) {
+          final entries = store.entries;
+          if (entries.isEmpty) {
+            return const Center(child: Text('No logs yet — use the app a bit.'));
+          }
+          return ListView.builder(
+            reverse: true, // newest at the bottom, but scrolled into view
+            padding: const EdgeInsets.all(12),
+            itemCount: entries.length,
+            itemBuilder: (context, i) {
+              final e = entries[entries.length - 1 - i];
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: SelectableText(
+                  e.format(),
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11.5,
+                    color: _levelColor(e.level, cs),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}

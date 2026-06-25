@@ -2,6 +2,8 @@ import 'dart:developer' as developer;
 
 import 'package:flutter/foundation.dart';
 
+import 'log_store.dart';
+
 /// Severity levels, ordered ascending.
 enum LogLevel { debug, info, warn, error }
 
@@ -43,6 +45,10 @@ class Logger {
       error: error,
       stackTrace: stack,
     );
+    // Mirror into the in-app log buffer so the user can share a debug trail
+    // (with the active AI provider stamped) instead of taking screenshots.
+    final suffix = error == null ? '' : ' | $error';
+    LogStore.instance.add(level.name.toUpperCase(), name, '$message$suffix');
   }
 
   // Map onto dart:developer's loosely dart:logging-compatible numeric levels.

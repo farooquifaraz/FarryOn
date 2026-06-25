@@ -13,6 +13,7 @@ import '../../state/live_state.dart';
 import '../../state/permissions.dart';
 import '../../state/providers.dart';
 import '../data/notes_tasks_screen.dart';
+import '../debug/debug_logs_screen.dart';
 import '../finder/finder_result_view.dart';
 import '../finder/finder_screen.dart';
 import 'widgets/aurora_orb.dart';
@@ -596,6 +597,19 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                       trailing: const Icon(Icons.chevron_right,
                           color: Aurora.textMuted),
                       onTap: widget.onOpenDevices,
+                    ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.bug_report_outlined,
+                          color: Aurora.textMuted),
+                      title: const Text('Debug logs'),
+                      subtitle: const Text(
+                        'View / share the tool + error trail to report issues',
+                        style: TextStyle(color: Aurora.textMuted),
+                      ),
+                      trailing: const Icon(Icons.chevron_right,
+                          color: Aurora.textMuted),
+                      onTap: () => DebugLogsScreen.open(context),
                     ),
                     const Divider(height: 28, color: Aurora.glassBorder),
                     _label('AI provider'),
