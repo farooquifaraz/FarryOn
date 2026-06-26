@@ -637,9 +637,9 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                       spacing: 8,
                       children: [
                         for (final p in const [
-                          ('Gemini', 'gemini'),
-                          ('OpenAI', 'openai'),
-                          ('Grok', 'grok'),
+                          ('Gemini ⚡', 'gemini'),
+                          ('OpenAI ⚡', 'openai'),
+                          ('Grok 🐢 slow', 'grok'),
                           ('Mock', 'mock'),
                         ])
                           ChoiceChip(
@@ -649,6 +649,13 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                                 setState(() => _provider = p.$2),
                           ),
                       ],
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Gemini & OpenAI are fast with smooth voice + vision. '
+                      'Grok (xAI) currently replies slowly and may stutter — '
+                      'use it only if you specifically need it.',
+                      style: TextStyle(color: Aurora.textMuted, fontSize: 12),
                     ),
                     const Divider(height: 28, color: Aurora.glassBorder),
                     _label('Email — your own inbox (optional)'),
