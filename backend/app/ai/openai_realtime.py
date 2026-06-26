@@ -232,10 +232,13 @@ class OpenAIRealtimeGateway(AIGateway):
                         }
                         if self._vision_items
                         else {
+                            # Grok path: end the turn sooner so the (already
+                            # slower) xAI model starts replying with less lag.
+                            # Noisy rooms are covered by tap-to-talk now.
                             "type": "server_vad",
-                            "threshold": 0.6,
+                            "threshold": 0.55,
                             "prefix_padding_ms": 300,
-                            "silence_duration_ms": 600,
+                            "silence_duration_ms": 400,
                         }
                     ),
                     # Transcribe the user's speech so their side of the
