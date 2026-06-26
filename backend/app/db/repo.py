@@ -246,7 +246,12 @@ async def find_contact(
     op = Contact.name.ilike(q) if exact else Contact.name.ilike(pattern)
     stmt = select(Contact).where(op).order_by(Contact.updated_at.desc())
     if user_id is not None:
-        stmt = stmt.where(Contact.user_id == user_id)
+        # Match the user's own contacts AND global/unowned ones (user_id NULL):
+        # Telegram contacts captured by the bot /start webhook have no user_id,
+        # so without this a session that has one would never find them.
+        stmt = stmt.where(
+            (Contact.user_id == user_id) | (Contact.user_id.is_(None))
+        )
     return (await session.execute(stmt)).scalars().first()
 
 
