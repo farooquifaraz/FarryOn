@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -544,6 +545,17 @@ class LiveController {
     if (url == null || url.isEmpty) return;
     final uri = Uri.tryParse(url);
     if (uri == null) return;
+    // Telegram links can't pre-fill text, so the backend asks us to copy the
+    // message to the clipboard — the user opens the chat then long-press →
+    // Paste → Send (one tap instead of typing it out).
+    final toCopy = res['copy_to_clipboard'] as String?;
+    if (toCopy != null && toCopy.isNotEmpty) {
+      unawaited(Clipboard.setData(ClipboardData(text: toCopy)));
+      _emit(_state.copyWith(
+        lastError: 'Message copied — in Telegram, long-press the box → Paste → '
+            'Send.',
+      ));
+    }
     unawaited(_openExternal(uri));
   }
 

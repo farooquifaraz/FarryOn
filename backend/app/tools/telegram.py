@@ -16,6 +16,7 @@ Confirm the recipient + message before calling (system-prompt rule).
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any
 
 import httpx
@@ -27,6 +28,14 @@ from app.tools.base import Tool, ToolContext
 from app.tools.idempotency import already_sent, mark_sent  # UX Spec §3.4
 
 logger = get_logger(__name__)
+
+# Telegram usernames: 5-32 chars, start with a letter, then letters/digits/_.
+_USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
+
+
+def valid_username(handle: str) -> bool:
+    """Whether ``handle`` (without @) is a syntactically valid TG username."""
+    return bool(_USERNAME_RE.match(handle or ""))
 _API = "https://api.telegram.org/bot{token}/sendMessage"
 _HTTP_TIMEOUT = 10.0
 
@@ -123,8 +132,21 @@ class SendTelegramTool(Tool):
                 return {"ok": False, "message": "They've blocked the bot."}
             # fall through to deep link
 
-        # Fallback: open the chat (user sends manually).
+        # Fallback: open the chat. Telegram (unlike WhatsApp) does NOT let a
+        # link pre-fill the text, so the only way to truly DELIVER is the Bot
+        # API above. Here we open the chat and hand the message to the app to
+        # copy to the clipboard, so the user just long-press → Paste → Send.
         if username:
+            if not valid_username(username):
+                return {
+                    "ok": False,
+                    "status": "invalid_username",
+                    "message": (
+                        f"'@{username}' doesn't look like a valid Telegram "
+                        "username (5-32 letters/digits/underscores). Could you "
+                        "confirm their exact @username?"
+                    ),
+                }
             return {
                 "ok": True,
                 "action": "open_url",
@@ -132,9 +154,14 @@ class SendTelegramTool(Tool):
                 "url": f"https://t.me/{username}",
                 "to": f"@{username}",
                 "message": message,
+                "copy_to_clipboard": message,
                 "status": "opening_telegram",
-                "note": "Opened the chat — Telegram can't pre-fill the text, so "
-                "the user pastes/types it.",
+                "delivered": False,
+                "note": (
+                    "Telegram links can't pre-fill text — opened the chat and "
+                    "copied the message to the clipboard, so the user pastes + "
+                    "sends. For true auto-send, set up the Telegram bot."
+                ),
             }
         return {
             "ok": False,

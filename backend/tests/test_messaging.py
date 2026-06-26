@@ -197,6 +197,21 @@ async def test_telegram_deeplink_without_token(db_session, monkeypatch):
     assert res["ok"] is True
     assert res["action"] == "open_url"
     assert res["url"] == "https://t.me/rahul"
+    # Honest: a deep link is NOT delivered; the message is copied to paste.
+    assert res["delivered"] is False
+    assert res["copy_to_clipboard"] == "hi"
+
+
+async def test_telegram_invalid_username_rejected(db_session, monkeypatch):
+    monkeypatch.setattr(
+        tg_mod, "get_settings",
+        lambda: SimpleNamespace(telegram_bot_token=None),
+    )
+    res = await SendTelegramTool().run(
+        ToolContext(session=db_session), message="hi", username="@x",  # too short
+    )
+    assert res["ok"] is False
+    assert res["status"] == "invalid_username"
 
 
 async def test_telegram_bot_send_with_token(db_session, monkeypatch):

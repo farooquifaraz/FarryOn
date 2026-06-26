@@ -155,11 +155,12 @@ async def test_every_registered_tool_dispatches(db_session) -> None:
         str(r),
     )
 
-    r = await run("send_telegram", {"message": "hi", "username": "@neo"})
+    r = await run("send_telegram", {"message": "hi", "username": "@neo_user"})
     ok(
         "send_telegram(deeplink)",
         r.get("ok") is True and r.get("action") == "open_url"
-        and r.get("url") == "https://t.me/neo",
+        and r.get("url") == "https://t.me/neo_user"
+        and r.get("delivered") is False,
         str(r),
     )
 
