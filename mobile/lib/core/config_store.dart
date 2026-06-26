@@ -19,11 +19,14 @@ class ConfigStore {
     final p = _prefs;
     final base = AppConfig.fromEnvironment();
     if (p == null) return base;
+    // Grok is retired from the UI (too slow); move anyone saved on it to Gemini.
+    var provider = p.getString('cfg.provider');
+    if (provider == 'grok') provider = 'gemini';
     return base.copyWith(
       host: p.getString('cfg.host'),
       port: p.getInt('cfg.port'),
       secure: p.getBool('cfg.secure'),
-      provider: p.getString('cfg.provider'),
+      provider: provider,
       webSearchProvider: p.getString('cfg.ws.provider'),
       webSearchApiKey: p.getString('cfg.ws.key'),
       webSearchFallbackProvider: p.getString('cfg.ws.fbProvider'),

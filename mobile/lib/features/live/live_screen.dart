@@ -636,10 +636,12 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     Wrap(
                       spacing: 8,
                       children: [
+                        // Grok (xAI) is intentionally omitted — its realtime
+                        // API is ~13x slower and streams choppy audio. Gemini
+                        // and OpenAI are the supported fast providers.
                         for (final p in const [
                           ('Gemini ⚡', 'gemini'),
                           ('OpenAI ⚡', 'openai'),
-                          ('Grok 🐢 slow', 'grok'),
                           ('Mock', 'mock'),
                         ])
                           ChoiceChip(
@@ -653,8 +655,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     const SizedBox(height: 6),
                     const Text(
                       'Gemini & OpenAI are fast with smooth voice + vision. '
-                      'Grok (xAI) currently replies slowly and may stutter — '
-                      'use it only if you specifically need it.',
+                      'Gemini is the best value (cheapest); OpenAI is premium.',
                       style: TextStyle(color: Aurora.textMuted, fontSize: 12),
                     ),
                     const Divider(height: 28, color: Aurora.glassBorder),
