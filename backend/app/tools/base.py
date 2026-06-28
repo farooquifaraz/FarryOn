@@ -59,6 +59,10 @@ class ToolContext:
     #: send_* tool still works if the model passed only the name (not the id).
     #: Signature: ``recall_resolved(name) -> contact_id | None``.
     recall_resolved: Callable[[str], str | None] | None = None
+    #: Recall the real phone number from a recent device resolution — used by
+    #: send_telegram (user-account / MTProto) which must dial a number
+    #: server-side. Signature: ``recall_phone(name) -> phone | None``.
+    recall_phone: Callable[[str], str | None] | None = None
 
 
 class Tool(abc.ABC):

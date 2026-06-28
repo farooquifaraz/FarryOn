@@ -86,6 +86,9 @@ class Orchestrator:
         #: send_message still work if a weaker model forgets to thread the
         #: contact_id back from resolve_contact (it passes just the name).
         self._resolved_ids: dict[str, str] = {}
+        #: Recently device-resolved names -> real phone, for send_telegram's
+        #: user-account (MTProto) path which dials the number server-side.
+        self._resolved_phones: dict[str, str] = {}
 
     async def request_contact_resolution(
         self, name: str, channel: str
@@ -115,9 +118,15 @@ class Orchestrator:
             # still find it by name if the model didn't pass the contact_id.
             cands = result.get("candidates") or []
             if result.get("status") == "found" and len(cands) == 1:
+                key = name.strip().lower()
                 cid = cands[0].get("contactId")
                 if cid:
-                    self._resolved_ids[name.strip().lower()] = cid
+                    self._resolved_ids[key] = cid
+                # The device includes the real phone for telegram (the user's
+                # own account needs it to dial); cache it for send_telegram.
+                ph = cands[0].get("phone")
+                if ph:
+                    self._resolved_phones[key] = ph
             return result
         except (asyncio.TimeoutError, Exception):  # noqa: BLE001
             return {"status": "index_unavailable"}
@@ -133,6 +142,10 @@ class Orchestrator:
     def recall_resolved(self, name: str) -> str | None:
         """Contact id from a recent device resolution of ``name``, if any."""
         return self._resolved_ids.get((name or "").strip().lower())
+
+    def recall_phone(self, name: str) -> str | None:
+        """Real phone from a recent device resolution of ``name``, if any."""
+        return self._resolved_phones.get((name or "").strip().lower())
 
     async def handle_tool_call(self, event: ToolCallEvent) -> ToolResult:
         """Execute one model-requested tool call end-to-end.
@@ -174,6 +187,7 @@ class Orchestrator:
                 last_frame_at=self.last_frame_at,
                 resolve_contact=self.request_contact_resolution,
                 recall_resolved=self.recall_resolved,
+                recall_phone=self.recall_phone,
             )
             result = await self._engine.dispatch(event.name, event.args, ctx)
             try:

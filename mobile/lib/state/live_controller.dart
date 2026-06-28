@@ -637,11 +637,17 @@ class LiveController {
         seen.add(clean);
         final id = 'c${_contactIdSeq++}';
         _contactNumbers[id] = clean;
-        candidates.add({
+        final cand = <String, dynamic>{
           'contactId': id,
           'displayName': c.displayName,
           'maskedNumber': _maskPhone(clean),
-        });
+        };
+        // Telegram sends from the user's OWN account server-side, so it needs
+        // the real number (WhatsApp/SMS stay masked — they open on-device).
+        if (req.channel == 'telegram') {
+          cand['phone'] = '+$clean';
+        }
+        candidates.add(cand);
       }
       if (candidates.isEmpty) {
         await reply(matches.isEmpty ? 'not_found' : 'no_number');

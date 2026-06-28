@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     # messages directly to users who have started the bot; without it the tool
     # falls back to a t.me deep-link the user opens themselves.
     telegram_bot_token: str | None = Field(default=None)
+    # Telegram USER account (MTProto via Telethon) — send to ANYONE in the
+    # user's contacts with no /start needed. api_id/api_hash from
+    # my.telegram.org; session is produced by the one-time login.
+    telegram_api_id: int | None = Field(default=None)
+    telegram_api_hash: str | None = Field(default=None)
+    telegram_session: str | None = Field(default=None)
     # WhatsApp Business Cloud API (optional Phase 2 — fully automated sending).
     # Without these, send_whatsapp uses a free wa.me deep-link (1-tap send).
     whatsapp_token: str | None = Field(default=None)
@@ -121,6 +127,14 @@ class Settings(BaseSettings):
         """Allow comma-separated env strings for list fields."""
         if isinstance(value, str):
             return [part.strip() for part in value.split(",") if part.strip()]
+        return value
+
+    @field_validator("telegram_api_id", mode="before")
+    @classmethod
+    def _empty_int_to_none(cls, value: object) -> object:
+        """Treat an empty ``TELEGRAM_API_ID=`` env value as unset (None)."""
+        if isinstance(value, str) and not value.strip():
+            return None
         return value
 
     @property

@@ -78,15 +78,14 @@ permission_denied. NEVER say a message was sent based on this.
 WhatsApp — ONLY after the recipient is known. Pass phone_number (if the user \
 gave one), or the contact_id from a resolve_contact match, or a saved \
 contact_name. Opens WhatsApp with the text ready (the user taps Send).
-- send_telegram(message, username?, contact_name?): Message someone on \
-Telegram. If the recipient has connected the FarryOn bot (result has \
-sent:true) it is DELIVERED — say "sent on Telegram". Otherwise the result has \
-delivered:false and action open_url: Telegram CANNOT pre-fill text, so the app \
-opens the chat and copies the message to the clipboard — tell the user "I've \
-opened the chat and copied your message — just long-press the box, Paste and \
-Send", and mention that automatic sending needs the Telegram bot set up. NEVER \
-say a Telegram message was "sent" when delivered is false. Give the @username \
-or a saved contact name.
+- send_telegram(message, username?, phone_number?, contact_name?): Message \
+someone on Telegram. Pass a @username, a phone number, or a contact_name (saved \
+or just resolved via resolve_contact). When the result has delivered:true / \
+sent:true it WAS delivered (the user's own account or the bot) — say "sent on \
+Telegram". If instead the result has delivered:false with action open_url, it \
+could only open the chat + copy the message — tell the user "I've opened the \
+chat and copied your message — long-press, Paste and Send". NEVER say "sent" \
+when delivered is false.
 - save_contact(name, phone_number?, telegram_username?): Remember a person's \
 phone / Telegram handle so the user can later just say their name.
 

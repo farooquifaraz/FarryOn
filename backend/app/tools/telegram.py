@@ -24,6 +24,7 @@ import httpx
 from app.config import get_settings
 from app.db import repo
 from app.logging_conf import get_logger
+from app.services import telegram_user
 from app.tools.base import Tool, ToolContext
 from app.tools.idempotency import already_sent, mark_sent  # UX Spec §3.4
 
@@ -55,11 +56,12 @@ class SendTelegramTool(Tool):
 
     name = "send_telegram"
     description = (
-        "Send a Telegram message to someone. Provide the message and either a "
-        "Telegram @username or a saved contact name. Use for 'Telegram karo', "
-        "'TG bhejo', 'message on Telegram'. Sends automatically if the person "
-        "has connected the bot, otherwise opens their Telegram chat. ALWAYS "
-        "confirm the recipient and message first."
+        "Send a Telegram message. Provide the message and a recipient: a "
+        "@username, a phone number, or a contact_name (saved, or one you just "
+        "resolved with resolve_contact). With the user's Telegram account set "
+        "up it DELIVERS to anyone (no /start needed); otherwise it sends via the "
+        "bot (if they started it) or opens the chat. Use for 'Telegram karo', "
+        "'TG bhejo'. ALWAYS confirm the recipient and message first."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -69,9 +71,13 @@ class SendTelegramTool(Tool):
                 "type": "string",
                 "description": "Telegram @username (with or without @).",
             },
+            "phone_number": {
+                "type": "string",
+                "description": "Recipient phone (with country code) if given.",
+            },
             "contact_name": {
                 "type": "string",
-                "description": "Name of a saved contact to look up.",
+                "description": "Name of a saved/resolved contact to look up.",
             },
         },
         "required": ["message"],
@@ -82,27 +88,66 @@ class SendTelegramTool(Tool):
         if not message:
             return {"ok": False, "message": "What should the message say?"}
 
+        settings = get_settings()
         username = (kwargs.get("username") or "").strip().lstrip("@")
+        phone = (kwargs.get("phone_number") or "").strip()
         name = (kwargs.get("contact_name") or "").strip()
         chat_id: str | None = None
 
-        if name and not username:
+        if name and not username and not phone:
             contact = await repo.find_contact(
                 ctx.session, query=name, user_id=ctx.user_id
             )
             if contact:
                 chat_id = contact.telegram_chat_id
                 username = (contact.telegram_username or "").lstrip("@")
-            if not chat_id and not username:
+                phone = contact.phone or ""
+            # A device-resolved phone (from resolve_contact) lets the user's own
+            # account message anyone in their contacts.
+            if not username and not phone and ctx.recall_phone:
+                phone = ctx.recall_phone(name) or ""
+            if not chat_id and not username and not phone:
                 return {
                     "ok": False,
+                    "status": "not_resolved",
                     "message": (
-                        f"I don't have a Telegram handle for {name}. Ask for "
-                        "their @username."
+                        f"I haven't resolved {name}'s Telegram yet — use "
+                        "resolve_contact, or give their @username or number."
                     ),
                 }
 
-        token = get_settings().telegram_bot_token
+        # 1) BEST: send from the user's OWN Telegram account (MTProto). Delivers
+        # to ANYONE (by @username or phone) — no /start, no manual paste.
+        if telegram_user.is_configured(settings) and (username or phone):
+            mt_phone = None
+            if phone:
+                d = re.sub(r"\D", "", phone)
+                mt_phone = "+" + d if d else None
+            res = await telegram_user.user_send(
+                settings, message=message,
+                username=username or None, phone=mt_phone,
+            )
+            if res.get("ok"):
+                logger.info("send_telegram.user_sent", to=res.get("to"))
+                return {
+                    "ok": True, "sent": True, "delivered": True,
+                    "platform": "telegram", "via": "account",
+                    "to": res.get("to"), "message": message,
+                }
+            reason = res.get("reason")
+            if reason in ("username_not_found", "not_on_telegram"):
+                who = f"@{username}" if username else "that number"
+                return {
+                    "ok": False, "status": reason,
+                    "message": (
+                        f"{who} doesn't seem to be on Telegram, or I can't reach "
+                        "them. Double-check the @username or number?"
+                    ),
+                }
+            # not_authorized / unexpected -> fall through to bot/deep-link.
+            logger.warning("send_telegram.user_failed", reason=reason)
+
+        token = settings.telegram_bot_token
 
         # Automatic send when we have a token + the recipient's chat_id.
         if token and chat_id:

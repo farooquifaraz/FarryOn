@@ -12,6 +12,7 @@ from typing import Any
 from app.config import get_settings
 from app.db import repo
 from app.logging_conf import get_logger
+from app.services import telegram_user
 from app.tools.base import Tool, ToolContext
 from app.tools.validators import valid_phone  # UX Spec §3.1
 from app.tools.whatsapp import mask_phone
@@ -66,10 +67,10 @@ class ResolveContactTool(Tool):
         )
 
         if channel == "telegram":
-            # Device contacts don't hold Telegram handles — saved contacts only.
+            settings = get_settings()
             if saved and (saved.telegram_chat_id or saved.telegram_username):
                 has_bot = bool(
-                    get_settings().telegram_bot_token and saved.telegram_chat_id
+                    settings.telegram_bot_token and saved.telegram_chat_id
                 )
                 return {
                     "ok": True,
@@ -79,14 +80,50 @@ class ResolveContactTool(Tool):
                     "contact_name": saved.name,
                     "via": "bot" if has_bot else "deeplink",
                 }
+            # With the user's own Telegram account (MTProto) we can message
+            # ANYONE by phone — so resolve the number from the device contacts
+            # just like WhatsApp. The orchestrator caches the real phone for
+            # send_telegram.
+            if (
+                telegram_user.is_configured(settings)
+                and ctx.resolve_contact is not None
+            ):
+                try:
+                    res = await ctx.resolve_contact(name, channel)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("resolve_contact.tg_bridge", error=repr(exc))
+                    res = None
+                if isinstance(res, dict):
+                    status = (res.get("status") or "").lower()
+                    cands = res.get("candidates") or []
+                    if status == "found" and len(cands) == 1:
+                        return {
+                            "ok": True, "status": "found",
+                            "channel": "telegram",
+                            "name": cands[0].get("displayName") or name,
+                            "contact_name": cands[0].get("displayName") or name,
+                            "masked_number": cands[0].get("maskedNumber"),
+                            "via": "account",
+                        }
+                    if status == "ambiguous" or len(cands) > 1:
+                        return {
+                            "ok": True, "status": "ambiguous",
+                            "channel": "telegram", "name": name,
+                            "options": [
+                                {"name": c.get("displayName"),
+                                 "masked_number": c.get("maskedNumber"),
+                                 "contact_id": c.get("contactId")}
+                                for c in cands
+                            ],
+                        }
             return {
                 "ok": True,
                 "status": "not_found",
                 "channel": "telegram",
                 "name": name,
                 "message": (
-                    f"No saved Telegram handle for {name}. Ask for their "
-                    "@username."
+                    f"No Telegram contact found for {name}. Give their "
+                    "@username or phone number."
                 ),
             }
 

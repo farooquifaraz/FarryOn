@@ -54,6 +54,11 @@ for _key in (
     "GROK_API_KEY",
     "WEB_SEARCH_API_KEY",
     "WEB_SEARCH_FALLBACK_API_KEY",
+    # Messaging — keep the suite offline (no real Telegram bot/account calls).
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_API_ID",
+    "TELEGRAM_API_HASH",
+    "TELEGRAM_SESSION",
 ):
     os.environ[_key] = ""
 
