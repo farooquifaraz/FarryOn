@@ -27,6 +27,7 @@ from app.logging_conf import get_logger
 from app.services import telegram_user
 from app.tools.base import Tool, ToolContext
 from app.tools.idempotency import already_sent, mark_sent  # UX Spec §3.4
+from app.tools.safety import rate_gate, sensitive_gate
 
 logger = get_logger(__name__)
 
@@ -79,6 +80,11 @@ class SendTelegramTool(Tool):
                 "type": "string",
                 "description": "Name of a saved/resolved contact to look up.",
             },
+            "confirm_sensitive": {
+                "type": "boolean",
+                "description": "True ONLY after the user explicitly confirmed "
+                "sending a message flagged sensitive (OTP, password, card).",
+            },
         },
         "required": ["message"],
     }
@@ -87,6 +93,13 @@ class SendTelegramTool(Tool):
         message = (kwargs.get("message") or "").strip()
         if not message:
             return {"ok": False, "message": "What should the message say?"}
+
+        blocked = sensitive_gate(message, bool(kwargs.get("confirm_sensitive")), ctx.session_id)
+        if blocked:
+            return blocked
+        blocked = rate_gate(ctx.session_id)
+        if blocked:
+            return blocked
 
         settings = get_settings()
         username = (kwargs.get("username") or "").strip().lstrip("@")

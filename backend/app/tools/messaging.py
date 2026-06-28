@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.db import repo
 from app.logging_conf import get_logger
 from app.tools.base import Tool, ToolContext
+from app.tools.safety import rate_gate, sensitive_gate
 from app.tools.validators import valid_phone  # UX Spec §3.1: digit-count guard
 
 logger = get_logger(__name__)
@@ -53,6 +54,11 @@ class SendMessageTool(Tool):
                 "type": "string",
                 "description": "Name of a contact the user SAVED in the app.",
             },
+            "confirm_sensitive": {
+                "type": "boolean",
+                "description": "True ONLY after the user explicitly confirmed "
+                "sending a message flagged sensitive (OTP, password, card).",
+            },
         },
         "required": ["text"],
     }
@@ -61,6 +67,13 @@ class SendMessageTool(Tool):
         text = (kwargs.get("text") or "").strip()
         if not text:
             return {"ok": False, "message": "What should the message say?"}
+
+        blocked = sensitive_gate(text, bool(kwargs.get("confirm_sensitive")), ctx.session_id)
+        if blocked:
+            return blocked
+        blocked = rate_gate(ctx.session_id)
+        if blocked:
+            return blocked
 
         settings = get_settings()
         phone = (kwargs.get("phone_number") or "").strip()

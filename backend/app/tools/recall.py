@@ -92,3 +92,42 @@ class ListTasksTool(Tool):
                 for t in tasks
             ],
         }
+
+
+class ListSentMessagesTool(Tool):
+    """Read back the user's recently sent messages (WhatsApp/Telegram/SMS)."""
+
+    name = "list_sent_messages"
+    description = (
+        "Read back the messages the user recently sent (most recent first), "
+        "with who, the text, the channel and whether it was delivered or just "
+        "opened. Use for 'what did I send', 'did I message X', 'my sent "
+        "messages'."
+    )
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "description": "Max messages to return (default 10).",
+            }
+        },
+        "required": [],
+    }
+
+    async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+        limit = int(kwargs.get("limit") or 10)
+        msgs = await repo.list_outbound_messages(
+            ctx.session, user_id=ctx.user_id, limit=limit
+        )
+        out = []
+        for m in msgs:
+            channel, _, state = (m.status or "").partition(":")
+            out.append({
+                "to": m.contact,
+                "text": m.text,
+                "channel": channel or "message",
+                "status": state or m.status,
+                "when": m.created_at.isoformat() if m.created_at else None,
+            })
+        return {"count": len(out), "messages": out}

@@ -21,7 +21,11 @@ from app.tools.identify import IdentifyImageTool
 from app.tools.location import GetLocationTool
 from app.tools.messaging import SendMessageTool
 from app.tools.notes import CreateNoteTool
-from app.tools.recall import ListNotesTool, ListTasksTool
+from app.tools.recall import (
+    ListNotesTool,
+    ListSentMessagesTool,
+    ListTasksTool,
+)
 from app.tools.telegram import SendTelegramTool
 from app.tools.whatsapp import SendWhatsAppTool
 from app.tools.task_manage import (
@@ -42,6 +46,7 @@ __all__ = [
     "EndSessionTool",
     "IdentifyImageTool",
     "ListNotesTool",
+    "ListSentMessagesTool",
     "ListTasksTool",
     "GetLocationTool",
     "MuteMicTool",
@@ -77,6 +82,7 @@ def build_default_tools() -> list[Tool]:
         SetCameraZoomTool(),
         ListNotesTool(),
         ListTasksTool(),
+        ListSentMessagesTool(),
         CompleteTaskTool(),
         UpdateTaskTool(),
         DeleteTaskTool(),

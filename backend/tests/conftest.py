@@ -75,6 +75,16 @@ def _settings_cache_reset() -> AsyncIterator[None]:
     _safe_unlink(_TMP_DB)
 
 
+@pytest.fixture(autouse=True)
+def _reset_message_state() -> None:
+    """Per-test isolation for the in-memory messaging caches."""
+    from app.tools import idempotency, ratelimit, safety
+
+    ratelimit._hits.clear()
+    idempotency._seen.clear()
+    safety._flagged.clear()
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _fresh_db() -> AsyncIterator[None]:
     """Reset the schema before each test for isolation (drop + create)."""

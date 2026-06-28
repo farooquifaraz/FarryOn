@@ -685,15 +685,33 @@ class LiveController {
     final q = name.toLowerCase().trim();
     if (q.isEmpty) return const [];
     final all = await FlutterContacts.getContacts(withProperties: true);
-    final hits = all
-        .where((c) => c.displayName.toLowerCase().contains(q))
-        .toList()
+    final hits = all.where((c) => _searchText(c).contains(q)).toList()
       ..sort((a, b) {
-        final ax = a.displayName.toLowerCase() == q ? 0 : 1;
-        final bx = b.displayName.toLowerCase() == q ? 0 : 1;
-        return ax.compareTo(bx);
+        // Exact display-name match ranks first, then a name that starts with
+        // the query, then the rest.
+        int rank(Contact c) {
+          final dn = c.displayName.toLowerCase();
+          if (dn == q) return 0;
+          if (dn.startsWith(q)) return 1;
+          return 2;
+        }
+
+        return rank(a).compareTo(rank(b));
       });
     return hits;
+  }
+
+  /// All the fields we match a spoken name against: display name, first/last,
+  /// nickname, and company — so "Ahmed Office" or a business name resolves too.
+  String _searchText(Contact c) {
+    final parts = <String>[
+      c.displayName,
+      c.name.first,
+      c.name.last,
+      c.name.nickname,
+      for (final o in c.organizations) o.company,
+    ];
+    return parts.where((s) => s.isNotEmpty).join(' ').toLowerCase();
   }
 
   String? _firstPhone(List<Contact> contacts) {

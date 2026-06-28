@@ -341,18 +341,37 @@ async def add_outbound_message(
     text: str,
     user_id: int | None = None,
     session_id: str | None = None,
+    status: str = "queued",
 ) -> OutboundMessage:
-    """Queue an :class:`OutboundMessage` for (stubbed) delivery."""
+    """Record an outbound message (audit + history). ``status`` encodes the
+    channel + outcome, e.g. ``telegram:delivered`` / ``whatsapp:opened``."""
     message = OutboundMessage(
         contact=contact,
         text=text,
         user_id=user_id,
         session_id=session_id,
-        status="queued",
+        status=status,
     )
     session.add(message)
     await session.flush()
     return message
+
+
+async def list_outbound_messages(
+    session: AsyncSession,
+    *,
+    user_id: int | None = None,
+    limit: int = 10,
+) -> list[OutboundMessage]:
+    """Most recent sent messages (for the 'what did I send' history)."""
+    stmt = select(OutboundMessage).order_by(OutboundMessage.created_at.desc())
+    if user_id is not None:
+        stmt = stmt.where(
+            (OutboundMessage.user_id == user_id)
+            | (OutboundMessage.user_id.is_(None))
+        )
+    stmt = stmt.limit(max(1, min(limit, 50)))
+    return list((await session.execute(stmt)).scalars().all())
 
 
 async def add_transcript(

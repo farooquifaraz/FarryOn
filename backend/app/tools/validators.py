@@ -115,3 +115,62 @@ def validate_iso_datetime(value: object) -> tuple[bool, str | None]:
     except (TypeError, ValueError):
         return False, None
     return True, s
+
+
+# --- Sensitive-content detection (so a mis-heard OTP/password/card isn't sent
+#     to the wrong person without an explicit extra confirmation) -------------
+
+_SENSITIVE_KEYWORDS: dict[str, re.Pattern[str]] = {
+    "an OTP / login code": re.compile(
+        r"\b(otp|one[\s-]?time\s*(pass(word|code))?|verification code|"
+        r"auth(entication)? code|login code|security code|code is|your code)\b",
+        re.I,
+    ),
+    "a password / PIN": re.compile(
+        r"\b(pass\s?word|pass\s?code|\bpwd\b|\bpin\b|p\.i\.n)\b", re.I
+    ),
+    "a CVV": re.compile(r"\b(cvv|cvc|card verification)\b", re.I),
+    "bank account details": re.compile(
+        r"\b(account\s*(number|no\.?|#)|iban|swift code|routing number|"
+        r"sort code)\b",
+        re.I,
+    ),
+}
+
+_CARD_RE = re.compile(r"(?:\d[ -]?){13,19}")
+
+
+def _luhn_ok(candidate: str) -> bool:
+    digits = [int(c) for c in candidate if c.isdigit()]
+    if not (13 <= len(digits) <= 19):
+        return False
+    total = 0
+    for i, d in enumerate(reversed(digits)):
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
+def scan_sensitive(text: object) -> list[str]:
+    """Return the kinds of sensitive data a message appears to contain.
+
+    Keyword cues (OTP, password, PIN, CVV, account/IBAN) plus a real
+    credit-card check (13-19 digits passing the Luhn checksum). Empty list means
+    nothing suspicious. Intentionally conservative — it only flags clear cues,
+    so it warns on real secrets without nagging on ordinary chat.
+    """
+    s = text if isinstance(text, str) else ""
+    if not s:
+        return []
+    found: list[str] = []
+    for label, rx in _SENSITIVE_KEYWORDS.items():
+        if rx.search(s):
+            found.append(label)
+    for m in _CARD_RE.finditer(s):
+        if _luhn_ok(m.group()):
+            found.append("a card number")
+            break
+    return sorted(set(found))

@@ -202,6 +202,7 @@ class Orchestrator:
                     duration_ms=result.duration_ms,
                     session_id=self._session_id,
                 )
+                await self._log_send_if_messaging(db, event.name, result)
                 await db.commit()
             except Exception as exc:  # noqa: BLE001 - audit must not break turn
                 await db.rollback()
@@ -233,6 +234,42 @@ class Orchestrator:
             logger.error("tool_call.feedback_failed", error=str(exc))
 
         return result
+
+    _SEND_TOOLS = {"send_whatsapp", "send_message", "send_telegram"}
+
+    async def _log_send_if_messaging(self, db, name: str, result) -> None:
+        """Record a successful messaging send to the history/audit log.
+
+        ``status`` encodes channel + outcome (``telegram:delivered`` /
+        ``whatsapp:opened`` / ``telegram:copied``) so the user can later ask
+        "what did I send" and we have a compliance trail. Best-effort — never
+        breaks the turn.
+        """
+        if name not in self._SEND_TOOLS or not result.ok:
+            return
+        res = result.result if isinstance(result.result, dict) else {}
+        text = (res.get("message") or "").strip()
+        if not text:
+            return
+        channel = (
+            res.get("channel")
+            or res.get("platform")
+            or name.replace("send_", "")
+        )
+        if res.get("sent") or res.get("delivered"):
+            state = "delivered"
+        elif res.get("copy_to_clipboard"):
+            state = "copied"
+        elif res.get("action") in ("open_url", "open_messaging"):
+            state = "opened"
+        else:
+            state = "done"
+        recipient = res.get("to") or res.get("name") or "unknown"
+        await repo.add_outbound_message(
+            db, contact=str(recipient), text=text,
+            user_id=self._user_id, session_id=self._session_id,
+            status=f"{channel}:{state}",
+        )
 
     async def _safe_notify(self, message: dict[str, Any]) -> None:
         """Send a client UI message, swallowing transport errors."""

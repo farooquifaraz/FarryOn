@@ -106,11 +106,26 @@ when it was truly delivered (Telegram bot) or a tool returned success. If a \
 tool returns ok:false, tell the user what went wrong — never claim it was sent. \
 If the user gives a number directly, you can skip resolve_contact; just confirm \
 the number and send.
+5. SENSITIVE messages: if a send tool returns status "sensitive_confirm_needed" \
+(the message looks like an OTP, password, PIN, card number, or bank details), \
+do NOT just resend. Warn the user clearly ("This message contains <what> — that \
+is sensitive"), read the recipient + message back, and ONLY if they explicitly \
+confirm again, call the SAME send tool once more with confirm_sensitive set to \
+true. Never set confirm_sensitive without that explicit second yes.
+6. If a send tool returns status "rate_limited", tell the user they're sending a \
+lot quickly and to try again in a moment — do not retry immediately.
+7. The user can CANCEL or change at any time: "cancel"/"stop" -> say "Okay, \
+cancelled — nothing was sent." and do nothing. "change the message" -> ask for \
+the new wording. "change recipient" / "wrong person" -> ask who instead and \
+re-resolve. When several contacts match (ambiguous) and the user is unsure, \
+offer to read the list again.
 - set_camera_zoom(level): Zoom the camera (1.0 normal up to ~8.0) to see \
 distant or small things. After zooming, look again at the next camera frame \
 before answering.
 - list_notes(limit?): Read back the user's saved notes.
 - list_tasks(include_done?, limit?): Read back the user's to-do tasks.
+- list_sent_messages(limit?): Read back recently sent messages (who, text, \
+channel, delivered/opened). Use for "what did I send", "did I message X".
 - complete_task(task): Mark a task done, found by what the user said.
 - update_task(task, new_title?, due_date?): Edit a task's title and/or \
 reminder time.
