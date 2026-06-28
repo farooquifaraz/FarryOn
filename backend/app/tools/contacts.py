@@ -116,6 +116,31 @@ class ResolveContactTool(Tool):
                                 for c in cands
                             ],
                         }
+            # P2: not in the phone's contacts — search the user's OWN Telegram
+            # contacts by name (someone added on Telegram but not in the phone).
+            if telegram_user.is_configured(settings):
+                tg = await telegram_user.find_contacts(settings, name)
+                if len(tg) == 1:
+                    c = tg[0]
+                    if c.get("phone") and ctx.note_phone:
+                        ctx.note_phone(name, c["phone"])  # send_telegram uses it
+                    return {
+                        "ok": True, "status": "found", "channel": "telegram",
+                        "name": c.get("display") or name,
+                        "contact_name": c.get("display") or name,
+                        "username": c.get("username"),
+                        "via": "account",
+                    }
+                if len(tg) > 1:
+                    return {
+                        "ok": True, "status": "ambiguous",
+                        "channel": "telegram", "name": name,
+                        "options": [
+                            {"name": c.get("display"),
+                             "username": c.get("username")}
+                            for c in tg
+                        ],
+                    }
             return {
                 "ok": True,
                 "status": "not_found",

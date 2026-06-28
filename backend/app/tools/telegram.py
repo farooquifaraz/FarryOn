@@ -137,6 +137,16 @@ class SendTelegramTool(Tool):
                     "message": message,
                 }
             reason = res.get("reason")
+            if reason == "group_ambiguous":
+                opts = res.get("options") or []
+                return {
+                    "ok": False, "status": "group_ambiguous",
+                    "options": opts,
+                    "message": (
+                        "You're in several groups matching that — which one: "
+                        + ", ".join(opts) + "?"
+                    ),
+                }
             msg = {
                 "group_not_found": (
                     f"I couldn't find a group or channel called '{group}' that "

@@ -63,6 +63,10 @@ class ToolContext:
     #: send_telegram (user-account / MTProto) which must dial a number
     #: server-side. Signature: ``recall_phone(name) -> phone | None``.
     recall_phone: Callable[[str], str | None] | None = None
+    #: Cache a phone resolved server-side (e.g. a Telegram-contact search) so a
+    #: later send_telegram by name can use it. Signature:
+    #: ``note_phone(name, phone) -> None``.
+    note_phone: Callable[[str, str], None] | None = None
 
 
 class Tool(abc.ABC):

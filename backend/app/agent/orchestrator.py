@@ -147,6 +147,12 @@ class Orchestrator:
         """Real phone from a recent device resolution of ``name``, if any."""
         return self._resolved_phones.get((name or "").strip().lower())
 
+    def note_phone(self, name: str, phone: str) -> None:
+        """Cache a phone resolved server-side (e.g. a Telegram-contact search)
+        so a follow-up send_telegram by name can use it."""
+        if name and phone:
+            self._resolved_phones[name.strip().lower()] = phone
+
     async def handle_tool_call(self, event: ToolCallEvent) -> ToolResult:
         """Execute one model-requested tool call end-to-end.
 
@@ -188,6 +194,7 @@ class Orchestrator:
                 resolve_contact=self.request_contact_resolution,
                 recall_resolved=self.recall_resolved,
                 recall_phone=self.recall_phone,
+                note_phone=self.note_phone,
             )
             result = await self._engine.dispatch(event.name, event.args, ctx)
             try:

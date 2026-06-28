@@ -78,6 +78,47 @@ async def test_whatsapp_recalls_resolved_id(db_session):
     assert res["contact_id"] == "c_recalled"
 
 
+async def test_resolve_telegram_account_contact(db_session, monkeypatch):
+    """P2: a Telegram-only contact (not in phone) is found by name + cached."""
+    import app.tools.contacts as contacts_mod
+
+    monkeypatch.setattr(
+        contacts_mod.telegram_user, "is_configured", lambda s: True
+    )
+
+    async def fake_find(settings, name):
+        return [{"display": "Zaheer Abbas", "username": "zulu", "phone": "+9715"}]
+
+    monkeypatch.setattr(contacts_mod.telegram_user, "find_contacts", fake_find)
+    cached: dict[str, str] = {}
+    ctx = ToolContext(
+        session=db_session, note_phone=lambda n, p: cached.__setitem__(n, p)
+    )
+    res = await ResolveContactTool().run(ctx, name="Zaheer", channel="telegram")
+    assert res["status"] == "found" and res["via"] == "account"
+    assert cached == {"Zaheer": "+9715"}  # cached for send_telegram
+
+
+async def test_resolve_telegram_account_ambiguous(db_session, monkeypatch):
+    import app.tools.contacts as contacts_mod
+
+    monkeypatch.setattr(
+        contacts_mod.telegram_user, "is_configured", lambda s: True
+    )
+
+    async def fake_find(settings, name):
+        return [
+            {"display": "Ali A", "username": "alia", "phone": "+1"},
+            {"display": "Ali B", "username": "alib", "phone": "+2"},
+        ]
+
+    monkeypatch.setattr(contacts_mod.telegram_user, "find_contacts", fake_find)
+    res = await ResolveContactTool().run(
+        ToolContext(session=db_session), name="Ali", channel="telegram"
+    )
+    assert res["status"] == "ambiguous" and len(res["options"]) == 2
+
+
 async def test_resolve_telegram_not_found(db_session):
     res = await ResolveContactTool().run(
         ToolContext(session=db_session), name="Nobody", channel="telegram",
