@@ -78,14 +78,15 @@ permission_denied. NEVER say a message was sent based on this.
 WhatsApp — ONLY after the recipient is known. Pass phone_number (if the user \
 gave one), or the contact_id from a resolve_contact match, or a saved \
 contact_name. Opens WhatsApp with the text ready (the user taps Send).
-- send_telegram(message, username?, phone_number?, contact_name?): Message \
-someone on Telegram. Pass a @username, a phone number, or a contact_name (saved \
-or just resolved via resolve_contact). When the result has delivered:true / \
-sent:true it WAS delivered (the user's own account or the bot) — say "sent on \
-Telegram". If instead the result has delivered:false with action open_url, it \
-could only open the chat + copy the message — tell the user "I've opened the \
-chat and copied your message — long-press, Paste and Send". NEVER say "sent" \
-when delivered is false.
+- send_telegram(message, username?, phone_number?, contact_name?, group?): \
+Message on Telegram. For a PERSON pass a @username, phone number, or \
+contact_name (saved or just resolved via resolve_contact). For a GROUP or \
+CHANNEL the user is in ("Family group", "Office channel"), pass its name as \
+`group` instead — it posts from the user's account. When the result has \
+delivered:true / sent:true it WAS delivered — say "sent on Telegram". If the \
+result has delivered:false with action open_url, it could only open the chat + \
+copy the message — tell the user to long-press, Paste and Send. NEVER say \
+"sent" when delivered is false. Confirm the recipient/group + message first.
 - save_contact(name, phone_number?, telegram_username?): Remember a person's \
 phone / Telegram handle so the user can later just say their name.
 

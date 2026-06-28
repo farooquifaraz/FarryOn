@@ -29,21 +29,49 @@ def is_configured(settings: Settings) -> bool:
     )
 
 
+async def _resolve_chat(client: Any, name: str) -> Any | None:
+    """Resolve a GROUP or CHANNEL the user is IN, by title or @username.
+
+    Only an EXPLICIT ``@handle`` is looked up directly (it may be a public
+    channel). A plain name is matched against the user's OWN dialogs only — so
+    "Software" finds the user's Software group, never a random public @software.
+    """
+    handle = name.strip()
+    if handle.startswith("@"):
+        try:
+            return await client.get_entity(handle)
+        except Exception:  # noqa: BLE001 - no such public handle
+            pass
+    want = handle.lstrip("@").lower()
+    best = None
+    async for dialog in client.iter_dialogs():
+        if not (dialog.is_group or dialog.is_channel):
+            continue
+        title = (dialog.title or "").lower()
+        if title == want:
+            return dialog.entity  # exact title match wins
+        if best is None and want in title:
+            best = dialog.entity
+    return best
+
+
 async def user_send(
     settings: Settings,
     *,
     message: str,
     phone: str | None = None,
     username: str | None = None,
+    group: str | None = None,
 ) -> dict[str, Any]:
     """Send ``message`` from the user's own Telegram account.
 
-    Resolve the recipient by ``username`` (preferred when given) or ``phone``
-    (a saved contact, else imported on the fly). Returns ``{ok, ...}``; ``ok``
-    is False with a ``reason`` for the expected failures so the tool can speak a
-    friendly message.
+    Recipient resolution order: ``group`` (a group/channel the user is in),
+    then ``username``, then ``phone`` (a saved contact, else imported on the
+    fly). Returns ``{ok, ...}``; ``ok`` is False with a ``reason`` for expected
+    failures so the tool can speak a friendly message.
     """
     from telethon import TelegramClient
+    from telethon.errors import ChatWriteForbiddenError
     from telethon.sessions import StringSession
     from telethon.tl.functions.contacts import ImportContactsRequest
     from telethon.tl.types import InputPhoneContact
@@ -59,7 +87,11 @@ async def user_send(
             return {"ok": False, "reason": "not_authorized"}
 
         entity = None
-        if username:
+        if group:
+            entity = await _resolve_chat(client, group)
+            if entity is None:
+                return {"ok": False, "reason": "group_not_found"}
+        elif username:
             handle = username if username.startswith("@") else "@" + username
             try:
                 entity = await client.get_entity(handle)
@@ -85,10 +117,16 @@ async def user_send(
         if entity is None:
             return {"ok": False, "reason": "no_recipient"}
 
-        await client.send_message(entity, message)
-        name = getattr(entity, "first_name", None) or getattr(
-            entity, "username", None
-        ) or "them"
+        try:
+            await client.send_message(entity, message)
+        except ChatWriteForbiddenError:
+            return {"ok": False, "reason": "cannot_post"}
+        name = (
+            getattr(entity, "title", None)
+            or getattr(entity, "first_name", None)
+            or getattr(entity, "username", None)
+            or "them"
+        )
         logger.info("telegram_user.sent", to=name)
         return {"ok": True, "to": name}
     finally:

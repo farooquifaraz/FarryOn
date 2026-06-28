@@ -80,6 +80,12 @@ class SendTelegramTool(Tool):
                 "type": "string",
                 "description": "Name of a saved/resolved contact to look up.",
             },
+            "group": {
+                "type": "string",
+                "description": "Name or @username of a Telegram GROUP or CHANNEL "
+                "to post to (the user must be a member). Use this instead of a "
+                "person when the user says 'group' or 'channel'.",
+            },
             "confirm_sensitive": {
                 "type": "boolean",
                 "description": "True ONLY after the user explicitly confirmed "
@@ -105,7 +111,43 @@ class SendTelegramTool(Tool):
         username = (kwargs.get("username") or "").strip().lstrip("@")
         phone = (kwargs.get("phone_number") or "").strip()
         name = (kwargs.get("contact_name") or "").strip()
+        group = (kwargs.get("group") or "").strip()
         chat_id: str | None = None
+
+        # GROUP / CHANNEL: only the user's own account (MTProto) can post to a
+        # group/channel they're a member of.
+        if group:
+            if not telegram_user.is_configured(settings):
+                return {
+                    "ok": False, "status": "account_needed",
+                    "message": (
+                        "Posting to a Telegram group/channel needs your "
+                        "Telegram account connected. Set that up first."
+                    ),
+                }
+            res = await telegram_user.user_send(
+                settings, message=message, group=group
+            )
+            if res.get("ok"):
+                logger.info("send_telegram.group_sent", to=res.get("to"))
+                return {
+                    "ok": True, "sent": True, "delivered": True,
+                    "platform": "telegram", "via": "account",
+                    "channel": "telegram", "to": res.get("to"),
+                    "message": message,
+                }
+            reason = res.get("reason")
+            msg = {
+                "group_not_found": (
+                    f"I couldn't find a group or channel called '{group}' that "
+                    "you're in. What's its exact name?"
+                ),
+                "cannot_post": (
+                    f"You don't have permission to post in '{group}'."
+                ),
+            }.get(reason, "I couldn't post to that group just now.")
+            return {"ok": False, "status": reason or "group_failed",
+                    "message": msg}
 
         if name and not username and not phone:
             contact = await repo.find_contact(

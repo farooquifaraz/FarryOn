@@ -202,6 +202,41 @@ async def test_telegram_deeplink_without_token(db_session, monkeypatch):
     assert res["copy_to_clipboard"] == "hi"
 
 
+async def test_telegram_group_send(db_session, monkeypatch):
+    """A group name routes to the user-account group send (delivered)."""
+    monkeypatch.setattr(tg_mod.telegram_user, "is_configured", lambda s: True)
+
+    async def fake_user_send(settings, *, message, group=None, **kw):
+        assert group == "Family"
+        return {"ok": True, "to": "Family Group"}
+
+    monkeypatch.setattr(tg_mod.telegram_user, "user_send", fake_user_send)
+    monkeypatch.setattr(
+        tg_mod, "get_settings", lambda: SimpleNamespace(telegram_bot_token=None)
+    )
+    res = await SendTelegramTool().run(
+        ToolContext(session=db_session), message="hi all", group="Family",
+    )
+    assert res["ok"] is True and res["sent"] is True
+    assert res["via"] == "account" and res["to"] == "Family Group"
+
+
+async def test_telegram_group_not_found(db_session, monkeypatch):
+    monkeypatch.setattr(tg_mod.telegram_user, "is_configured", lambda s: True)
+
+    async def fake_user_send(settings, *, message, group=None, **kw):
+        return {"ok": False, "reason": "group_not_found"}
+
+    monkeypatch.setattr(tg_mod.telegram_user, "user_send", fake_user_send)
+    monkeypatch.setattr(
+        tg_mod, "get_settings", lambda: SimpleNamespace(telegram_bot_token=None)
+    )
+    res = await SendTelegramTool().run(
+        ToolContext(session=db_session), message="hi", group="Nope",
+    )
+    assert res["ok"] is False and res["status"] == "group_not_found"
+
+
 async def test_telegram_invalid_username_rejected(db_session, monkeypatch):
     monkeypatch.setattr(
         tg_mod, "get_settings",
