@@ -58,6 +58,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      */
     private var lastConnectionState: String? = null
 
+    /**
+     * True between a user-initiated disconnect and the next connect(). The
+     * SDK's periodic service-discovered re-broadcast can land AFTER
+     * unBindDevice (34 ms after, measured 2026-07-05) and would otherwise
+     * resurrect a phantom "connected" in the Lab.
+     */
+    private var userDisconnected = false
+
     private fun emit(type: String, data: Map<String, Any?>) {
         Log.i(TAG, "event $type $data")
         main.post { listener?.onEvent(type, data) }
@@ -132,6 +140,13 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
 
         override fun onServiceDiscovered() {
+            if (userDisconnected) {
+                // Stale broadcast (or the link survived unBind) after the
+                // user chose disconnect — kill it again, emit nothing.
+                Log.i(TAG, "service-discovered after user disconnect — re-unbinding")
+                BleOperateManager.getInstance().unBindDevice()
+                return
+            }
             LargeDataHandler.getInstance().initEnable()
             BleOperateManager.getInstance().isReady = true
             val wasConnected = lastConnectionState == "connected"
@@ -212,6 +227,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         // Reset the dedupe so this attempt emits a fresh "connected"
         // transition even if the previous link never reported disconnected.
         lastConnectionState = null
+        userDisconnected = false
         pendingMac = mac
         op.connectDirectly(mac)
     }
@@ -222,6 +238,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         // is NOT enough — the SDK re-attaches within seconds. unBindDevice()
         // (the sample's disconnect button and the PDF's mapping) is the real
         // teardown.
+        userDisconnected = true
         BleOperateManager.getInstance().setNeedConnect(false)
         BleOperateManager.getInstance().unBindDevice()
         pendingMac = null

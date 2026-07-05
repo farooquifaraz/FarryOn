@@ -44,10 +44,13 @@
       L801 — naming surprise), MAC `C0:97:B9:6D:2B:1D`, RSSI −45 dBm at desk
       distance. Scan also surfaces every named BLE device around (e.g. a Sony
       TV) — no vendor-prefix filter in the Lab, by design.
-- [ ] Connect time (10 attempts): measured so far: 2.3 s and 3.1 s
-      (connect command → connected event, logcat timestamps, 2 cycles).
-      Disconnect via unBindDevice verified: stayed disconnected 23 s until
-      the next manual connect — no self-reconnect. 10-cycle stress pending.
+- [x] Connect time (10 attempts): **11/11 success** (2026-07-05, logcat
+      timestamps, connect cmd → connected event):
+      2.3, 3.1, 2.06, 3.06, 1.85, 5.05, 2.51, 2.34, 2.01, 2.84, 3.75 s →
+      **median 2.51 s, worst 5.05 s** — all well under the 10 s target.
+      Disconnect via unBindDevice sticks (23 s observed, no self-reconnect).
+      One phantom "connected" 34 ms after a disconnect (SDK's re-broadcast
+      raced unBind) → fixed with a userDisconnected guard + re-unbind.
 - [x] Battery event codes observed: `addBatteryCallBack` fires periodically on
       its own (~every few s alongside the SDK heartbeat), pct=100 charging=false.
       Notify 0x05 path not yet seen in the wild (battery arrived via callback).
@@ -56,12 +59,18 @@
 - [ ] HFP recording quality (8k narrowband ya 16k wideband?):
 - [ ] TTS on glasses speaker: clarity / volume:
 - [ ] WiFi sync speed (kB/s), pairing UX:
-- [ ] Gesture events: kaunsa gesture → kaunsa event code: first captures
-      (2026-07-05, glasses touch during test):
-      `0x03` loadData=`bc 73 02 00 c0 80 03 01` → mic-on/start-speaking
-      (doc-mapped); `0x0a` loadData=`bc 73 02 00 c6 d0 0a 01` → **NOT in the
-      vendor doc** — needs gesture↔code mapping session to identify.
-- [ ] Wear detection events:
+- [ ] Gesture events: kaunsa gesture → kaunsa event code (2026-07-05 session):
+      - slide on temple → `0x12` volumeChange (music 0/16 curr 15, call 0/15
+        curr 15, system 0/16 curr 10, mode 03) — slides ARE the volume control
+      - long press (earlier session) → `0x03` mic-on/start-speaking
+      - `0x0a` loadData=`bc 73 02 00 c6 d0 0a 01` → **NOT in the vendor doc**,
+        seen once, not yet reproduced — still unmapped
+      - **single tap / double tap → NO event reaches the app** (67 s window,
+        nothing logged) — taps are likely handled on-device only
+- [ ] Wear detection events: **wear on/off emitted NOTHING by default.**
+      Hypothesis: reporting must be enabled first via
+      `LargeDataHandler.wearCheck(enable, ...)` (API exists in the .aar) —
+      test in a follow-up session; matters for Stage B auto-sleep.
 - [ ] Surprises / vendor doc se alag behaviour:
   - 2026-07-05 (first hardware session, Task 2.3):
     - Device info: btFirmware `AM01L2_2.00.00_260114`, btHardware `AM01L2_V2.0`,
