@@ -9,9 +9,12 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        // Glasses Lab bridge (debug test bench; stub SDK unless the vendor
-        // .aar is wired in — see glasses/GlassesChannels.createSdk()).
-        glasses = GlassesChannels.register(flutterEngine.dartExecutor.binaryMessenger)
+        // Glasses Lab bridge (debug test bench; real HeyCyan SDK when the
+        // vendor .aar is present, stub otherwise — GlassesChannels.createSdk()).
+        glasses = GlassesChannels.register(
+            flutterEngine.dartExecutor.binaryMessenger,
+            applicationContext,
+        )
     }
 
     override fun onDestroy() {
