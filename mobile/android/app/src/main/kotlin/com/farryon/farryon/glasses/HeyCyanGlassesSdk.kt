@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.IntentFilter
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import com.oudmon.ble.base.bluetooth.BleAction
 import com.oudmon.ble.base.bluetooth.BleBaseControl
@@ -65,6 +66,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      * resurrect a phantom "connected" in the Lab.
      */
     private var userDisconnected = false
+
+    /** In-flight AI photo: request id + t0 for the capture→thumbnail latency. */
+    private var photoRequestId: String? = null
+    private var photoStartMs: Long = 0
 
     private fun emit(type: String, data: Map<String, Any?>) {
         Log.i(TAG, "event $type $data")
@@ -156,7 +161,17 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             )
             // Populate the Device info card without an extra Refresh tap —
             // once per transition, not on every re-broadcast.
-            if (!wasConnected) requestBattery()
+            if (!wasConnected) {
+                requestBattery()
+                // Wear reporting is OFF by default (verified 2026-07-05: wear
+                // on/off emitted nothing) — enable it on every fresh link.
+                LargeDataHandler.getInstance().wearCheck(true, true) { _, rsp ->
+                    emit(
+                        "deviceEvent",
+                        mapOf("hex" to "wearCheck enabled, open=${rsp?.isOpen}")
+                    )
+                }
+            }
         }
     }
 
@@ -191,6 +206,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     null
                 }
                 if (device == null || name.isNullOrEmpty()) return
+                // Faraz (2026-07-05): only the glasses in the connect list —
+                // a nearby TV got tapped by mistake. L80x covers the
+                // L801/L802 naming seen on hardware; everything else stays
+                // visible in logcat for Stage A truth-keeping.
+                if (!name.startsWith("L80")) {
+                    Log.i(TAG, "scan filtered out: $name ${device.address} $rssi dBm")
+                    return
+                }
                 hits[device.address] = mapOf(
                     "name" to name,
                     "mac" to device.address,
@@ -294,9 +317,26 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                             "charging" to (load.getOrNull(8)?.toInt() == 1),
                         )
                     )
+                    0x02 -> {
+                        // AI photo captured on the glasses → pull thumbnail.
+                        emit(
+                            "deviceEvent",
+                            mapOf("hex" to "aiPhotoTaken ${load.toHex()}")
+                        )
+                        fetchThumbnail()
+                    }
+                    0x0a -> {
+                        // Tentative wear mapping: 0x0a is undocumented; seen
+                        // while handling the glasses on 2026-07-05. Raw hex
+                        // stays in logcat until hardware confirms.
+                        Log.i(TAG, "0x0a raw ${load.toHex()}")
+                        emit(
+                            "wearState",
+                            mapOf("worn" to (load.getOrNull(7)?.toInt() == 1))
+                        )
+                    }
                     else -> {
                         val label = when (load[6].toInt()) {
-                            0x02 -> "aiPhotoTaken"
                             0x03 -> "micStateChange"
                             0x04 -> "otaProgress"
                             0x0c -> "voicePauseEvent"
@@ -321,11 +361,87 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     private fun ByteArray.toHex(): String =
         joinToString(" ") { "%02x".format(it) }
 
-    // -- Not yet wired (Tasks 2.4–2.6) — visible in the console, never crash. ----
+    // -- Camera (Task 2.4) -------------------------------------------------------
 
-    override fun takePhoto() = notWired("takePhoto", "2.4")
+    /**
+     * The glasses ack every control command with their current work mode;
+     * anything except idle/photo means the command was ignored — surface it.
+     */
+    private fun describeWorkType(t: Int): String = when (t) {
+        1, 6 -> "photoMode"
+        2 -> "recordingVideo"
+        4 -> "transferMode"
+        5 -> "otaMode"
+        7 -> "aiConversation"
+        8 -> "audioRecording"
+        else -> "workType=$t"
+    }
 
-    override fun takeAiPhoto(requestId: String) = notWired("takeAiPhoto", "2.4")
+    override fun takePhoto() {
+        Log.i(TAG, "takePhoto")
+        LargeDataHandler.getInstance().glassesControl(
+            byteArrayOf(0x02, 0x01, 0x01)
+        ) { _, rsp ->
+            if (rsp != null) {
+                emit(
+                    "deviceEvent",
+                    mapOf(
+                        "hex" to "takePhoto ack err=${rsp.errorCode} " +
+                            describeWorkType(rsp.workTypeIng)
+                    )
+                )
+            }
+        }
+    }
+
+    override fun takeAiPhoto(requestId: String) {
+        Log.i(TAG, "takeAiPhoto $requestId")
+        photoRequestId = requestId
+        photoStartMs = SystemClock.elapsedRealtime()
+        // Sample's btnThumbnail payload; thumbnailSize range is 0..6 — 0x02
+        // is the sample's default (resolution measured on hardware).
+        val size: Byte = 0x02
+        LargeDataHandler.getInstance().glassesControl(
+            byteArrayOf(0x02, 0x01, 0x06, size, size, 0x02)
+        ) { _, rsp ->
+            if (rsp != null && rsp.errorCode != 0) {
+                emit(
+                    "deviceEvent",
+                    mapOf(
+                        "hex" to "takeAiPhoto REJECTED err=${rsp.errorCode} " +
+                            describeWorkType(rsp.workTypeIng)
+                    )
+                )
+            }
+        }
+    }
+
+    /** Notify 0x02 = AI photo captured → pull the JPEG thumbnail over BLE. */
+    private fun fetchThumbnail() {
+        LargeDataHandler.getInstance().getPictureThumbnails { _, success, data ->
+            val elapsed = (SystemClock.elapsedRealtime() - photoStartMs).toInt()
+            if (success && data != null && data.isNotEmpty()) {
+                emit(
+                    "thumbnail",
+                    mapOf(
+                        // Device-initiated captures (gesture) have no request.
+                        "requestId" to (photoRequestId ?: "device-initiated"),
+                        "jpeg" to data,
+                        "elapsedMs" to if (photoRequestId != null) elapsed else -1,
+                    )
+                )
+            } else {
+                emit(
+                    "deviceEvent",
+                    mapOf("hex" to "thumbnail fetch FAILED success=$success " +
+                        "bytes=${data?.size ?: 0}")
+                )
+            }
+            photoRequestId = null
+        }
+    }
+
+    // -- Not yet wired (Tasks 2.5–2.6) — visible in the console, never crash. ----
 
     override fun pairClassicBt() = notWired("pairClassicBt", "2.5")
 
