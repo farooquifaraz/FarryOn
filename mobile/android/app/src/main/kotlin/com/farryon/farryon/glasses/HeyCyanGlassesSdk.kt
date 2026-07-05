@@ -1,9 +1,12 @@
 package com.farryon.farryon.glasses
 
 import android.app.Application
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
 import android.content.IntentFilter
 import android.os.Handler
 import android.os.Looper
@@ -176,6 +179,28 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     }
 
     override fun scan(timeoutMs: Long, onResult: (List<Map<String, Any?>>) -> Unit) {
+        // Bluetooth off → scanning silently finds nothing (seen 2026-07-05).
+        // Surface it in the console and pop the system enable dialog instead.
+        val adapter =
+            (app.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+        if (adapter?.isEnabled != true) {
+            emit(
+                "deviceEvent",
+                mapOf("hex" to "Bluetooth is OFF — asking Android to enable it")
+            )
+            try {
+                app.startActivity(
+                    Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (e: Exception) {
+                // BLUETOOTH_CONNECT revoked or no dialog available — the
+                // console line above still tells the user what to do.
+                Log.i(TAG, "enable-BT dialog failed: $e")
+            }
+            main.post { onResult(emptyList()) }
+            return
+        }
         val hits = LinkedHashMap<String, Map<String, Any?>>()
         var finished = false
 
