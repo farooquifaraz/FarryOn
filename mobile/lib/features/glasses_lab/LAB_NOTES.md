@@ -40,9 +40,15 @@
 - [x] `.aar` version used: LIB_GLASSES_SDK-release_3.aar (HeyCyan Android SDK
       1.0.2, 2025-08-16, 1.9 MB) — dropped into app/libs/ 2026-07-05, debug
       build still green, stays git-ignored as intended.
-- [ ] Scan: L801 दिखा? नाम/MAC format:
-- [ ] Connect time (10 attempts):
-- [ ] Battery event codes observed:
+- [x] Scan: L801 दिखा? नाम/MAC format: **"L802_2B1D"** (model prefix L802, not
+      L801 — naming surprise), MAC `C0:97:B9:6D:2B:1D`, RSSI −45 dBm at desk
+      distance. Scan also surfaces every named BLE device around (e.g. a Sony
+      TV) — no vendor-prefix filter in the Lab, by design.
+- [ ] Connect time (10 attempts): first hardware session: connect+services
+      ≈ 3 s (2 samples, event-console timestamps); 10-cycle stress = Sprint 3.
+- [x] Battery event codes observed: `addBatteryCallBack` fires periodically on
+      its own (~every few s alongside the SDK heartbeat), pct=100 charging=false.
+      Notify 0x05 path not yet seen in the wild (battery arrived via callback).
 - [ ] Thumbnail: resolution / bytes / measured latency (5 samples):
 - [ ] `voiceFromGlasses` PCM: sample rate / bit depth / channels / kis mode me:
 - [ ] HFP recording quality (8k narrowband ya 16k wideband?):
@@ -51,3 +57,13 @@
 - [ ] Gesture events: kaunsa gesture → kaunsa event code:
 - [ ] Wear detection events:
 - [ ] Surprises / vendor doc se alag behaviour:
+  - 2026-07-05 (first hardware session, Task 2.3):
+    - Device info: btFirmware `AM01L2_2.00.00_260114`, btHardware `AM01L2_V2.0`,
+      **wifiFirmware/wifiHardware come back EMPTY** — likely the WiFi chip
+      sleeps until a WiFi operation; re-check during Task 2.6.
+    - `setNeedConnect(false)` + `disconnect()` does NOT disconnect — the SDK
+      re-attaches within ~4 s. The real teardown is `unBindDevice()` (matches
+      the sample's disconnect button). Fixed in HeyCyanGlassesSdk.
+    - The SDK re-broadcasts service-discovered every ~2.5 s on a live link →
+      "connected" spam in the console. Now deduped to transitions only (raw
+      callbacks still in logcat, tag `GlassesLab`).

@@ -74,6 +74,7 @@ class GlassesChannels private constructor(
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        android.util.Log.i("GlassesLab", "cmd ${call.method} ${call.arguments ?: ""}")
         try {
             when (call.method) {
                 "bridgeInfo" -> result.success(

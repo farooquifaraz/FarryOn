@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.IntentFilter
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import com.oudmon.ble.base.bluetooth.BleAction
 import com.oudmon.ble.base.bluetooth.BleBaseControl
 import com.oudmon.ble.base.bluetooth.BleOperateManager
@@ -34,6 +35,11 @@ import com.oudmon.ble.base.scan.ScanWrapperCallback
  * `Class.forName` guard, so machines without the .aar keep the stub.
  */
 class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
+    companion object {
+        /** `adb logcat -s GlassesLab` follows the whole bridge remotely. */
+        const val TAG = "GlassesLab"
+    }
+
     override val implementationName = "heycyan"
     override val sdkVersion = "1.0.2"
 
@@ -44,8 +50,30 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     private var pendingMac: String? = null
     private var receiverRegistered = false
 
+    /**
+     * Last connectionState forwarded to Dart. The SDK re-broadcasts
+     * service-discovered every ~2.5 s on a live link (measured on the L801,
+     * 2026-07-05), so transitions are deduped for the Lab console while the
+     * raw callbacks stay visible in logcat.
+     */
+    private var lastConnectionState: String? = null
+
     private fun emit(type: String, data: Map<String, Any?>) {
+        Log.i(TAG, "event $type $data")
         main.post { listener?.onEvent(type, data) }
+    }
+
+    private fun emitConnectionState(state: String, mac: String? = null) {
+        if (state == lastConnectionState) {
+            Log.i(TAG, "connectionState $state (repeat, not forwarded)")
+            return
+        }
+        lastConnectionState = state
+        emit(
+            "connectionState",
+            if (mac != null) mapOf("state" to state, "mac" to mac)
+            else mapOf("state" to state),
+        )
     }
 
     /**
@@ -99,23 +127,21 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 if (name != null) DeviceManager.getInstance().deviceName = name
                 // Link is up but services aren't — wait for onServiceDiscovered.
             } else {
-                emit("connectionState", mapOf("state" to "disconnected"))
+                emitConnectionState("disconnected")
             }
         }
 
         override fun onServiceDiscovered() {
             LargeDataHandler.getInstance().initEnable()
             BleOperateManager.getInstance().isReady = true
-            emit(
-                "connectionState",
-                mapOf(
-                    "state" to "connected",
-                    "mac" to (pendingMac
-                        ?: DeviceManager.getInstance().deviceAddress),
-                )
+            val wasConnected = lastConnectionState == "connected"
+            emitConnectionState(
+                "connected",
+                pendingMac ?: DeviceManager.getInstance().deviceAddress,
             )
-            // Populate the Device info card without an extra Refresh tap.
-            requestBattery()
+            // Populate the Device info card without an extra Refresh tap —
+            // once per transition, not on every re-broadcast.
+            if (!wasConnected) requestBattery()
         }
     }
 
@@ -173,14 +199,19 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     }
 
     override fun connect(mac: String) {
+        Log.i(TAG, "connect $mac")
         pendingMac = mac
         BleOperateManager.getInstance().connectDirectly(mac)
     }
 
     override fun disconnect() {
-        // Stop the SDK's auto-reconnect first or it re-attaches immediately.
+        Log.i(TAG, "disconnect (unBindDevice)")
+        // Verified on hardware 2026-07-05: setNeedConnect(false)+disconnect()
+        // is NOT enough — the SDK re-attaches within seconds. unBindDevice()
+        // (the sample's disconnect button and the PDF's mapping) is the real
+        // teardown.
         BleOperateManager.getInstance().setNeedConnect(false)
-        BleOperateManager.getInstance().disconnect()
+        BleOperateManager.getInstance().unBindDevice()
         pendingMac = null
     }
 
