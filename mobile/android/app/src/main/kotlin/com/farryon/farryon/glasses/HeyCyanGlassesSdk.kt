@@ -70,6 +70,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      */
     private var userDisconnected = false
 
+    /** Lab toggle state, applied to the SDK on every fresh link (guide §3). */
+    private var autoReconnectEnabled = true
+
     /** In-flight AI photo: request id + t0 for the capture→thumbnail latency. */
     private var photoRequestId: String? = null
     private var photoStartMs: Long = 0
@@ -162,9 +165,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 "connected",
                 pendingMac ?: DeviceManager.getInstance().deviceAddress,
             )
-            // Populate the Device info card without an extra Refresh tap —
-            // once per transition, not on every re-broadcast.
+            // Post-connect sequence per the integration guide (§2.3/§3):
+            // listener + time sync + auto-reconnect only AFTER services are
+            // discovered — once per transition, not on every re-broadcast.
             if (!wasConnected) {
+                LargeDataHandler.getInstance()
+                    .addOutDeviceListener(100, notifyListener)
+                LargeDataHandler.getInstance().syncTime { _, _ -> }
+                BleOperateManager.getInstance().setNeedConnect(autoReconnectEnabled)
                 requestBattery()
                 // Wear reporting is OFF by default (verified 2026-07-05: wear
                 // on/off emitted nothing) — enable it on every fresh link.
@@ -309,6 +317,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     }
 
     override fun setAutoReconnect(enabled: Boolean) {
+        autoReconnectEnabled = enabled
         BleOperateManager.getInstance().setNeedConnect(enabled)
         emit("deviceEvent", mapOf("hex" to "autoReconnect=$enabled"))
     }
@@ -527,8 +536,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         BleBaseControl.getInstance(app).setmContext(app)
         localBroadcast(register = true, bleReceiver, BleAction.getIntentFilter())
         receiverRegistered = true
-        // 100 mirrors the sample's listener slot for glasses notify reports.
-        LargeDataHandler.getInstance().addOutDeviceListener(100, notifyListener)
+        // Guide §2.3: the notify listener (slot 100) registers AFTER
+        // onServiceDiscovered, not here. Battery callback is a passive map
+        // entry — safe to add up front.
         LargeDataHandler.getInstance().addBatteryCallBack("glasses_lab") { _, resp ->
             if (resp != null) {
                 emit(

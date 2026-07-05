@@ -58,10 +58,17 @@
       Transport: `getPictureThumbnails` STREAMS the JPEG in ~1013-byte BLE
       chunks (boolean=false per chunk, true on the final one) — must
       accumulate; the PDF never mentions chunking.
-      Sample 1 (2026-07-05): 22 865 bytes, **4564 ms** end-to-end
-      (command → aiPhotoTaken notify 2261 ms + chunk transfer ~2300 ms).
-      Above the 3 s target — more samples pending, thumbnailSize tuning
-      (0..6) is the lever if this holds.
+      5 samples (2026-07-05, thumbnailSize=0x02):
+      | bytes  | total ms | (capture ≈2.2–2.4 s + BLE transfer rest) |
+      | 22 865 | 4564 |
+      | 17 263 | 4082 |
+      | 18 898 | 4095 |
+      | 24 368 | 4520 |
+      | 15 850 | 3650 |
+      **Median 4095 ms, range 3650–4564 ms** — above the 3 s card target but
+      inside the Integration Assessment's 3–5 s Camera-to-Action budget.
+      Transfer ≈10 kB/s ⇒ thumbnailSize 0x00/0x01 could shave ~1 s; capture
+      time (~2.2 s) is firmware-fixed. Verdict: Photo-Trigger Vision viable.
 - [ ] Wear/touch support probe (`wearFunctionSupport`, model=21):
       **wear=true**, translation=true, **volume=false** (yet volume-slide
       0x12 events DO arrive — support flag vs behaviour mismatch, noted).
