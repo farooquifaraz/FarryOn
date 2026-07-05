@@ -44,8 +44,10 @@
       L801 — naming surprise), MAC `C0:97:B9:6D:2B:1D`, RSSI −45 dBm at desk
       distance. Scan also surfaces every named BLE device around (e.g. a Sony
       TV) — no vendor-prefix filter in the Lab, by design.
-- [ ] Connect time (10 attempts): first hardware session: connect+services
-      ≈ 3 s (2 samples, event-console timestamps); 10-cycle stress = Sprint 3.
+- [ ] Connect time (10 attempts): measured so far: 2.3 s and 3.1 s
+      (connect command → connected event, logcat timestamps, 2 cycles).
+      Disconnect via unBindDevice verified: stayed disconnected 23 s until
+      the next manual connect — no self-reconnect. 10-cycle stress pending.
 - [x] Battery event codes observed: `addBatteryCallBack` fires periodically on
       its own (~every few s alongside the SDK heartbeat), pct=100 charging=false.
       Notify 0x05 path not yet seen in the wild (battery arrived via callback).
@@ -54,7 +56,11 @@
 - [ ] HFP recording quality (8k narrowband ya 16k wideband?):
 - [ ] TTS on glasses speaker: clarity / volume:
 - [ ] WiFi sync speed (kB/s), pairing UX:
-- [ ] Gesture events: kaunsa gesture → kaunsa event code:
+- [ ] Gesture events: kaunsa gesture → kaunsa event code: first captures
+      (2026-07-05, glasses touch during test):
+      `0x03` loadData=`bc 73 02 00 c0 80 03 01` → mic-on/start-speaking
+      (doc-mapped); `0x0a` loadData=`bc 73 02 00 c6 d0 0a 01` → **NOT in the
+      vendor doc** — needs gesture↔code mapping session to identify.
 - [ ] Wear detection events:
 - [ ] Surprises / vendor doc se alag behaviour:
   - 2026-07-05 (first hardware session, Task 2.3):
