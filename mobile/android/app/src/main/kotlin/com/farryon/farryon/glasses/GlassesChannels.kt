@@ -1,5 +1,7 @@
 package com.farryon.farryon.glasses
 
+import android.app.Application
+import android.content.Context
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -22,8 +24,16 @@ class GlassesChannels private constructor(
 ) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
 
     companion object {
-        fun register(messenger: BinaryMessenger): GlassesChannels {
-            val channels = GlassesChannels(createSdk())
+        /**
+         * [appContext] unlocks the real SDK (it needs an Application for BLE
+         * setup); the old context-less call keeps compiling and yields the
+         * stub, so nothing outside this folder is forced to change.
+         */
+        fun register(
+            messenger: BinaryMessenger,
+            appContext: Context? = null,
+        ): GlassesChannels {
+            val channels = GlassesChannels(createSdk(appContext))
             MethodChannel(messenger, "com.farryon/glasses")
                 .setMethodCallHandler(channels)
             EventChannel(messenger, "com.farryon/glasses/events")
@@ -32,11 +42,26 @@ class GlassesChannels private constructor(
         }
 
         /**
-         * SDK selection point. Sprint 2: when `app/libs/` contains the HeyCyan
-         * .aar and HeyCyanGlassesSdk.kt exists, return it here (feature-flag or
-         * BuildConfig switch), keeping the stub for emulators/CI.
+         * SDK selection: HeyCyan when the vendor .aar is on the classpath
+         * (dev machines with `app/libs/` populated) and a context is
+         * available; the stub otherwise, so emulators and machines without
+         * the .aar keep working. Any vendor init failure also falls back —
+         * the Lab must never break the app.
          */
-        private fun createSdk(): GlassesSdk = StubGlassesSdk()
+        private fun createSdk(appContext: Context?): GlassesSdk {
+            val app = appContext?.applicationContext as? Application
+            if (app != null) {
+                try {
+                    Class.forName("com.oudmon.ble.base.bluetooth.BleOperateManager")
+                    return HeyCyanGlassesSdk(app)
+                } catch (e: ClassNotFoundException) {
+                    // No vendor .aar in this build — stub mode.
+                } catch (e: Throwable) {
+                    // Vendor SDK present but failed to boot — stub mode.
+                }
+            }
+            return StubGlassesSdk()
+        }
     }
 
     private var eventSink: EventChannel.EventSink? = null
