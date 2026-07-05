@@ -8,10 +8,20 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.speech.tts.TextToSpeech
 import android.util.Log
+import com.oudmon.wifi.GlassesControl
+import java.io.File
+import java.io.FileOutputStream
+import java.util.Locale
 import com.oudmon.ble.base.bluetooth.BleAction
 import com.oudmon.ble.base.bluetooth.BleBaseControl
 import com.oudmon.ble.base.bluetooth.BleOperateManager
@@ -76,6 +86,25 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     /** In-flight AI photo: request id + t0 for the capture→thumbnail latency. */
     private var photoRequestId: String? = null
     private var photoStartMs: Long = 0
+
+    // -- Audio test state (Task 2.5) ------------------------------------------
+    /** null | hfp | pcm | tts — which lab audio mode is armed. */
+    @Volatile private var audioMode: String? = null
+
+    /** Glasses-mic PCM measurement (voiceFromGlasses). */
+    private var pcmBytesTotal = 0L
+    private var pcmChunks = 0
+    private var pcmStartMs = 0L
+    private var pcmOut: FileOutputStream? = null
+
+    @Volatile private var hfpRecording = false
+    private var tts: TextToSpeech? = null
+    private var classicBtReceiverRegistered = false
+
+    /** Same folder the vendor sample uses ('DCIM_1') — synced media + PCM. */
+    private val albumDir: File by lazy {
+        File(app.getExternalFilesDir(null), "DCIM_1").apply { mkdirs() }
+    }
 
     private fun emit(type: String, data: Map<String, Any?>) {
         Log.i(TAG, "event $type $data")
@@ -414,6 +443,294 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     private fun ByteArray.toHex(): String =
         joinToString(" ") { "%02x".format(it) }
 
+    // -- Audio paths (Task 2.5) ---------------------------------------------
+
+    /**
+     * The vendor routes the LIVE glasses-mic PCM through the WiFi listener
+     * (of all places): voiceFromGlasses(bytes) + voiceFromGlassesStatus(1/2).
+     * The PCM format is Stage A's single most important unknown, so every
+     * session is measured (bytes/sec) AND written to a .pcm file in DCIM_1
+     * for offline analysis (adb pull → inspect/listen).
+     */
+    private val wifiListener = object : GlassesControl.WifiFilesDownloadListener {
+        override fun voiceFromGlassesStatus(status: Int) {
+            when (status) {
+                1 -> {
+                    pcmBytesTotal = 0
+                    pcmChunks = 0
+                    pcmStartMs = SystemClock.elapsedRealtime()
+                    val f = File(albumDir, "lab_${System.currentTimeMillis()}.pcm")
+                    pcmOut = FileOutputStream(f)
+                    emit("audio", mapOf("status" to "glasses mic ON → ${f.name}"))
+                }
+                2 -> {
+                    val secs =
+                        (SystemClock.elapsedRealtime() - pcmStartMs) / 1000.0
+                    val bytesPerSec =
+                        if (secs > 0.2) (pcmBytesTotal / secs).toInt() else 0
+                    // 16-bit mono assumption → rate = bytes/sec ÷ 2.
+                    val estRate = bytesPerSec / 2
+                    try {
+                        pcmOut?.close()
+                    } catch (e: Exception) {
+                        Log.i(TAG, "pcm close: $e")
+                    }
+                    pcmOut = null
+                    emit(
+                        "audio",
+                        mapOf(
+                            "status" to "glasses mic OFF — $pcmBytesTotal B in " +
+                                "${"%.1f".format(secs)}s = $bytesPerSec B/s " +
+                                "(≈$estRate Hz if 16-bit mono)"
+                        )
+                    )
+                }
+                else -> emit("audio", mapOf("status" to "voiceStatus=$status"))
+            }
+        }
+
+        override fun voiceFromGlasses(pcmData: ByteArray) {
+            pcmBytesTotal += pcmData.size
+            pcmChunks++
+            try {
+                pcmOut?.write(pcmData)
+            } catch (e: Exception) {
+                Log.i(TAG, "pcm write: $e")
+            }
+            if (audioMode == "pcm") {
+                emit("pcmChunk", mapOf("bytes" to pcmData.size))
+            }
+        }
+
+        // WiFi sync callbacks — wired properly in Task 2.6; keep them visible.
+        override fun onGlassesControlSuccess() =
+            emit("audio", mapOf("status" to "wifi control OK"))
+
+        override fun onGlassesFail(errorCode: Int) =
+            emit("deviceEvent", mapOf("hex" to "wifi glassesFail err=$errorCode"))
+
+        override fun wifiSpeed(wifiSpeed: String) {
+            Log.i(TAG, "wifiSpeed $wifiSpeed")
+        }
+
+        override fun fileProgress(fileName: String, progress: Int) =
+            emit("syncProgress", mapOf("file" to fileName, "pct" to progress))
+
+        override fun fileWasDownloadSuccessfully(
+            entity: com.oudmon.wifi.bean.GlassAlbumEntity,
+        ) = emit("deviceEvent", mapOf("hex" to "downloaded $entity"))
+
+        override fun fileCount(index: Int, total: Int) =
+            emit("deviceEvent", mapOf("hex" to "sync file $index/$total"))
+
+        override fun fileDownloadComplete() =
+            emit("deviceEvent", mapOf("hex" to "sync complete"))
+
+        override fun fileDownloadError(fileType: Int, errorType: Int) =
+            emit("deviceEvent", mapOf("hex" to "sync error type=$fileType err=$errorType"))
+
+        override fun eisEnd(fileName: String, filePath: String) =
+            emit("deviceEvent", mapOf("hex" to "eis done $fileName"))
+
+        override fun eisError(fileName: String, sourcePath: String, errorInfo: String) =
+            emit("deviceEvent", mapOf("hex" to "eis error $fileName $errorInfo"))
+
+        override fun recordingToPcm(fileName: String, filePath: String, duration: Int) =
+            emit("deviceEvent", mapOf("hex" to "recordingToPcm $fileName ${duration}s"))
+
+        override fun recordingToPcmError(fileName: String, errorInfo: String) =
+            emit("deviceEvent", mapOf("hex" to "recordingToPcm error $errorInfo"))
+    }
+
+    /**
+     * Classic-BT pairing per the integration guide (§3, sample-confirmed):
+     * openBT() → classicBluetoothStartScan() → createBondBluetoothJieLi on
+     * EVERY found device (the SDK matches the address itself).
+     */
+    private val classicBtReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                BluetoothDevice.ACTION_FOUND -> {
+                    @Suppress("DEPRECATION")
+                    val device = intent.getParcelableExtra<BluetoothDevice>(
+                        BluetoothDevice.EXTRA_DEVICE
+                    ) ?: return
+                    try {
+                        BleOperateManager.getInstance().createBondBluetoothJieLi(device)
+                    } catch (e: Exception) {
+                        Log.i(TAG, "createBond: $e")
+                    }
+                }
+                BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
+                    val state = intent.getIntExtra(
+                        BluetoothDevice.EXTRA_BOND_STATE, -1
+                    )
+                    if (state == BluetoothDevice.BOND_BONDED) {
+                        try {
+                            BleOperateManager.getInstance().classicBluetoothStopScan()
+                        } catch (e: Exception) {
+                            Log.i(TAG, "stop classic scan: $e")
+                        }
+                        emit("audio", mapOf("status" to "classic BT bonded ✓"))
+                    } else {
+                        emit("audio", mapOf("status" to "classic BT bondState=$state"))
+                    }
+                }
+            }
+        }
+    }
+
+    override fun pairClassicBt() {
+        Log.i(TAG, "pairClassicBt")
+        if (!classicBtReceiverRegistered) {
+            val filter = IntentFilter().apply {
+                addAction(BluetoothDevice.ACTION_FOUND)
+                addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                app.registerReceiver(classicBtReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                app.registerReceiver(classicBtReceiver, filter)
+            }
+            classicBtReceiverRegistered = true
+        }
+        LargeDataHandler.getInstance().openBT()
+        BleOperateManager.getInstance().classicBluetoothStartScan()
+        emit("audio", mapOf("status" to "classic BT scanning…"))
+    }
+
+    override fun startAudioTest(mode: String) {
+        Log.i(TAG, "startAudioTest $mode")
+        audioMode = mode
+        when (mode) {
+            "pcm" -> emit(
+                "audio",
+                mapOf("status" to "PCM armed — long-press the glasses to talk")
+            )
+            "hfp" -> startHfpRecording()
+            "tts" -> startTtsSample()
+        }
+    }
+
+    /**
+     * 10 s recording from the phone's input while the HFP/SCO route is up —
+     * if the glasses are classic-BT bonded, the SCO mic IS the glasses mic.
+     * Tries 16 kHz (wideband/mSBC) first, falls back to 8 kHz (narrowband).
+     */
+    private fun startHfpRecording() {
+        val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        @Suppress("DEPRECATION")
+        am.startBluetoothSco()
+        @Suppress("DEPRECATION")
+        am.isBluetoothScoOn = true
+        emit("audio", mapOf("status" to "SCO route requested, recording in 1 s…"))
+        main.postDelayed({ recordHfp(am) }, 1000L)
+    }
+
+    private fun recordHfp(am: AudioManager) {
+        val rate = intArrayOf(16000, 8000).firstOrNull {
+            AudioRecord.getMinBufferSize(
+                it, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+            ) > 0
+        } ?: run {
+            emit("audio", mapOf("status" to "hfp: no usable sample rate"))
+            return
+        }
+        val bufSize = AudioRecord.getMinBufferSize(
+            rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        ) * 4
+        val recorder = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                rate, AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, bufSize,
+            )
+        } catch (e: SecurityException) {
+            emit("audio", mapOf("status" to "hfp: RECORD_AUDIO permission missing"))
+            return
+        }
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            emit("audio", mapOf("status" to "hfp: AudioRecord init failed @$rate Hz"))
+            recorder.release()
+            return
+        }
+        hfpRecording = true
+        emit("audio", mapOf("status" to "hfp recording 10 s @$rate Hz…"))
+        Thread {
+            val f = File(albumDir, "lab_hfp_${System.currentTimeMillis()}_$rate.pcm")
+            val out = FileOutputStream(f)
+            val buf = ByteArray(4096)
+            var total = 0L
+            val end = SystemClock.elapsedRealtime() + 10_000
+            recorder.startRecording()
+            while (hfpRecording && SystemClock.elapsedRealtime() < end) {
+                val n = recorder.read(buf, 0, buf.size)
+                if (n > 0) {
+                    out.write(buf, 0, n)
+                    total += n
+                }
+            }
+            recorder.stop()
+            recorder.release()
+            out.close()
+            @Suppress("DEPRECATION")
+            am.stopBluetoothSco()
+            emit(
+                "audio",
+                mapOf("status" to "hfp done: $total B @$rate Hz → ${f.name}")
+            )
+        }.start()
+    }
+
+    /** Real speech to the glasses speaker over the A2DP media route. */
+    private fun startTtsSample() {
+        val engine = tts
+        if (engine != null) {
+            speakSample(engine)
+            return
+        }
+        tts = TextToSpeech(app) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale.US
+                tts?.let { speakSample(it) }
+            } else {
+                emit("audio", mapOf("status" to "tts engine init failed ($status)"))
+            }
+        }
+    }
+
+    private fun speakSample(engine: TextToSpeech) {
+        val spoken = engine.speak(
+            "Hello Faraz. This is FarryOn speaking through your smart glasses. " +
+                "If you can hear this clearly, the audio output path works.",
+            TextToSpeech.QUEUE_FLUSH, null, "glasses_lab_tts",
+        )
+        emit(
+            "audio",
+            mapOf(
+                "status" to if (spoken == TextToSpeech.SUCCESS)
+                    "tts playing on the media route (A2DP → glasses if bonded)"
+                else "tts speak failed ($spoken)"
+            )
+        )
+    }
+
+    override fun stopAudioTest() {
+        Log.i(TAG, "stopAudioTest (was $audioMode)")
+        val was = audioMode
+        audioMode = null
+        hfpRecording = false
+        tts?.stop()
+        if (was == "pcm") {
+            try {
+                GlassesControl.getInstance(app)?.stopGlassesVoice()
+            } catch (e: Exception) {
+                Log.i(TAG, "stopGlassesVoice: $e")
+            }
+        }
+        emit("audio", mapOf("status" to "audio_test_stopped"))
+    }
+
     // -- Camera (Task 2.4) -------------------------------------------------------
 
     /**
@@ -504,20 +821,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
     }
 
-    // -- Not yet wired (Tasks 2.5–2.6) — visible in the console, never crash. ----
-
-    override fun pairClassicBt() = notWired("pairClassicBt", "2.5")
-
-    override fun startAudioTest(mode: String) = notWired("startAudioTest:$mode", "2.5")
-
-    override fun stopAudioTest() = notWired("stopAudioTest", "2.5")
+    // -- Not yet wired (Task 2.6) — visible in the console, never crash. ---------
 
     override fun startWifiSync() = notWired("startWifiSync", "2.6")
 
     override fun stopWifiSync() = notWired("stopWifiSync", "2.6")
 
     override fun setVolume(type: String, level: Int) =
-        notWired("setVolume:$type=$level", "2.5")
+        notWired("setVolume:$type=$level", "2.5b")
 
     private fun notWired(command: String, task: String) {
         emit("deviceEvent", mapOf("hex" to "$command → not wired yet (Task $task)"))
@@ -547,9 +858,24 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 )
             }
         }
+        // Guide §2.3 (sample's MainActivity.initListener): GlassesControl owns
+        // the WiFi P2P path AND the live glasses-mic PCM stream.
+        GlassesControl.getInstance(app)?.initGlasses(albumDir.absolutePath)
+        GlassesControl.getInstance(app)?.setWifiDownloadListener(wifiListener)
     }
 
     override fun dispose() {
+        stopAudioTest()
+        tts?.shutdown()
+        tts = null
+        if (classicBtReceiverRegistered) {
+            try {
+                app.unregisterReceiver(classicBtReceiver)
+            } catch (e: Exception) {
+                Log.i(TAG, "unregister classicBtReceiver: $e")
+            }
+            classicBtReceiverRegistered = false
+        }
         try {
             BleScannerHelper.getInstance().stopScan(app)
         } catch (e: Exception) {
