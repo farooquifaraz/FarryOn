@@ -82,17 +82,26 @@
       → PCM chunks → status(2) on release. Works over BLE alone — NO classic
       BT pairing needed. Whisper-ready with zero resampling. Files:
       lab_1783280376381.pcm (+ WAV copies sent to Faraz).
-- [~] HFP recording quality: AudioRecord @16 kHz wideband worked (319 488 B
-      / 10.0 s exact), real audio — BUT classic-BT bond never confirmed
-      (no BOND_BONDED event in 5 pair attempts), so the SCO source may have
-      been the PHONE mic. Verdict pending bond confirmation.
-- [ ] TTS on glasses speaker: TTS played on the media route; whether it came
-      out of the glasses or the phone speaker needs Faraz's ear-witness
-      (classic BT bond unconfirmed).
-- **Audio A/B verdict (Stage B input path): SDK PCM WINS.** 16 kHz/16-bit/
-  mono raw stream over plain BLE, no pairing ceremony, gesture-triggered
-  start/stop signals included. HFP stays as fallback only if TTS output also
-  needs classic BT anyway.
+- [x] HFP recording quality: **16 kHz wideband, works, and Faraz rates it
+      BETTER than the SDK PCM** ("thodi behtar"). 319 488 B / 10.0 s exact.
+      Classic BT was in fact bonded (no BOND_BONDED broadcast caught — the
+      glasses were already system-paired), proven by TTS coming out of the
+      glasses. HFP = the literal phone-call path (SCO + phone-side AEC/noise
+      suppression via VOICE_COMMUNICATION source) — that DSP is why it sounds
+      cleaner than the raw BLE PCM.
+- [x] TTS on glasses speaker: **✓ confirmed by Faraz — audio came from the
+      glasses speaker** (A2DP media route). Output path works.
+- **Audio A/B verdict (Stage B): BOTH input paths usable at 16 kHz.**
+  - SDK PCM: 16 kHz/16-bit/mono over plain BLE, gesture start/stop signals,
+    no SCO/audio-focus management — simplest pipeline; raw (no DSP), so add
+    backend noise-reduction/AGC before Whisper for clarity.
+  - HFP: subjectively cleaner (phone-call DSP), but needs classic bond + SCO
+    juggling and collides with real phone calls.
+  - Recommendation: **PCM primary** (simplicity + triggers; Whisper tolerates
+    raw audio well), HFP as the quality fallback. TTS out via A2DP: ✓.
+  - Clarity note (Faraz: "jaise phone par baat karte hain"): that reference
+    quality IS the HFP/SCO path; for the PCM path match it in Stage B with
+    server-side denoise + AGC (e.g. RNNoise) before STT.
 - [ ] WiFi sync speed (kB/s), pairing UX:
 - [ ] Gesture events: kaunsa gesture → kaunsa event code (2026-07-05 session):
       - slide on temple → `0x12` volumeChange (music 0/16 curr 15, call 0/15
