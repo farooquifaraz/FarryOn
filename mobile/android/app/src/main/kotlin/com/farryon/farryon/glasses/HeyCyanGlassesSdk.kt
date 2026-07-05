@@ -168,6 +168,19 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 requestBattery()
                 // Wear reporting is OFF by default (verified 2026-07-05: wear
                 // on/off emitted nothing) — enable it on every fresh link.
+                // First session: wearCheck's callback never fired — query
+                // whether this unit supports wear detection at all.
+                LargeDataHandler.getInstance().wearFunctionSupport { _, rsp ->
+                    emit(
+                        "deviceEvent",
+                        mapOf(
+                            "hex" to "support: wear=${rsp?.isWearCheckSupport} " +
+                                "volume=${rsp?.isVolumeControl} " +
+                                "translation=${rsp?.isTranslationSupport} " +
+                                "model=${rsp?.glassesModel}"
+                        )
+                    )
+                }
                 LargeDataHandler.getInstance().wearCheck(true, true) { _, rsp ->
                     emit(
                         "deviceEvent",
@@ -202,6 +215,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             return
         }
         val hits = LinkedHashMap<String, Map<String, Any?>>()
+        val filteredLogged = HashSet<String>()
         var finished = false
 
         fun finish() {
@@ -236,7 +250,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 // L801/L802 naming seen on hardware; everything else stays
                 // visible in logcat for Stage A truth-keeping.
                 if (!name.startsWith("L80")) {
-                    Log.i(TAG, "scan filtered out: $name ${device.address} $rssi dBm")
+                    if (filteredLogged.add(device.address)) {
+                        Log.i(TAG, "scan filtered out: $name ${device.address} $rssi dBm")
+                    }
                     return
                 }
                 hits[device.address] = mapOf(
@@ -362,6 +378,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     }
                     else -> {
                         val label = when (load[6].toInt()) {
+                            // Seen on hardware: fires after each photo lands
+                            // on the glasses' storage; load[7] = photo count.
+                            0x01 -> "photoStored count=${load.getOrNull(7)?.toInt()}"
                             0x03 -> "micStateChange"
                             0x04 -> "otaProgress"
                             0x0c -> "voicePauseEvent"
@@ -407,11 +426,13 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         LargeDataHandler.getInstance().glassesControl(
             byteArrayOf(0x02, 0x01, 0x01)
         ) { _, rsp ->
-            if (rsp != null) {
+            // err=-1/workType=0 is the SDK's neutral "command sent" ack
+            // (hardware-verified) — only a positive errorCode is a refusal.
+            if (rsp != null && rsp.errorCode > 0) {
                 emit(
                     "deviceEvent",
                     mapOf(
-                        "hex" to "takePhoto ack err=${rsp.errorCode} " +
+                        "hex" to "takePhoto refused err=${rsp.errorCode} " +
                             describeWorkType(rsp.workTypeIng)
                     )
                 )
@@ -429,11 +450,12 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         LargeDataHandler.getInstance().glassesControl(
             byteArrayOf(0x02, 0x01, 0x06, size, size, 0x02)
         ) { _, rsp ->
-            if (rsp != null && rsp.errorCode != 0) {
+            // See takePhoto: err=-1 is the send ack, not a rejection.
+            if (rsp != null && rsp.errorCode > 0) {
                 emit(
                     "deviceEvent",
                     mapOf(
-                        "hex" to "takeAiPhoto REJECTED err=${rsp.errorCode} " +
+                        "hex" to "takeAiPhoto refused err=${rsp.errorCode} " +
                             describeWorkType(rsp.workTypeIng)
                     )
                 )
@@ -441,26 +463,33 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
     }
 
-    /** Notify 0x02 = AI photo captured → pull the JPEG thumbnail over BLE. */
+    /**
+     * Notify 0x02 = AI photo captured → pull the JPEG thumbnail over BLE.
+     *
+     * Hardware-verified 2026-07-05: the callback STREAMS the JPEG in ~1013-
+     * byte BLE chunks with the boolean=false, then fires one final time with
+     * boolean=true carrying the remainder — accumulate everything, emit once.
+     */
     private fun fetchThumbnail() {
-        LargeDataHandler.getInstance().getPictureThumbnails { _, success, data ->
+        val buffer = java.io.ByteArrayOutputStream()
+        LargeDataHandler.getInstance().getPictureThumbnails { _, done, data ->
+            if (data != null && data.isNotEmpty()) buffer.write(data)
+            if (!done) return@getPictureThumbnails
+            val jpeg = buffer.toByteArray()
             val elapsed = (SystemClock.elapsedRealtime() - photoStartMs).toInt()
-            if (success && data != null && data.isNotEmpty()) {
+            Log.i(TAG, "thumbnail complete: ${jpeg.size} bytes in $elapsed ms")
+            if (jpeg.isNotEmpty()) {
                 emit(
                     "thumbnail",
                     mapOf(
                         // Device-initiated captures (gesture) have no request.
                         "requestId" to (photoRequestId ?: "device-initiated"),
-                        "jpeg" to data,
+                        "jpeg" to jpeg,
                         "elapsedMs" to if (photoRequestId != null) elapsed else -1,
                     )
                 )
             } else {
-                emit(
-                    "deviceEvent",
-                    mapOf("hex" to "thumbnail fetch FAILED success=$success " +
-                        "bytes=${data?.size ?: 0}")
-                )
+                emit("deviceEvent", mapOf("hex" to "thumbnail fetch: 0 bytes"))
             }
             photoRequestId = null
         }
