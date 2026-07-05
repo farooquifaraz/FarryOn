@@ -37,7 +37,9 @@
 
 ## Sprint 2 (real SDK wiring) — भरना बाकी
 
-- [ ] `.aar` version used:
+- [x] `.aar` version used: LIB_GLASSES_SDK-release_3.aar (HeyCyan Android SDK
+      1.0.2, 2025-08-16, 1.9 MB) — dropped into app/libs/ 2026-07-05, debug
+      build still green, stays git-ignored as intended.
 - [ ] Scan: L801 दिखा? नाम/MAC format:
 - [ ] Connect time (10 attempts):
 - [ ] Battery event codes observed:
