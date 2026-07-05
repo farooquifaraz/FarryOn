@@ -28,6 +28,24 @@ class ConnectionCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (c.blePermissionDenied) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Aurora.danger.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                    color: Aurora.danger.withValues(alpha: 0.5)),
+              ),
+              child: const Text(
+                'Bluetooth permission denied — allow "Nearby devices" in '
+                'system settings, then tap Scan again.',
+                style: TextStyle(color: Aurora.danger, fontSize: 12.5),
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
           Wrap(
             spacing: 8,
             runSpacing: 8,

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/logger.dart';
 import 'bridge/glasses_channel.dart';
+import 'glasses_permissions.dart';
 
 /// One received thumbnail (AI-photo result) with its measured latency.
 class LabThumbnail {
@@ -25,7 +26,10 @@ class LabThumbnail {
 /// is wrapped so a missing/broken native side degrades to a visible status
 /// line instead of a crash (the Lab must never destabilise the app).
 class GlassesLabController extends ChangeNotifier {
-  GlassesLabController(this._bridge) {
+  GlassesLabController(this._bridge,
+      {Future<bool> Function()? ensureBlePermissions})
+      : _ensureBlePermissions =
+            ensureBlePermissions ?? requestGlassesBlePermissions {
     _sub = _bridge.events().listen(_onEvent, onError: (Object e) {
       _logEvent(GlassesLabEvent(type: 'error', data: {'message': '$e'}));
     });
@@ -41,7 +45,12 @@ class GlassesLabController extends ChangeNotifier {
   static const int maxThumbnails = 5;
 
   final GlassesBridgeApi _bridge;
+  final Future<bool> Function() _ensureBlePermissions;
   StreamSubscription<GlassesLabEvent>? _sub;
+
+  /// True after the user refused the Bluetooth runtime permissions — the
+  /// Connection card shows a red banner until a later Scan tap succeeds.
+  bool blePermissionDenied = false;
 
   // -- Bridge / connection state -------------------------------------------
   String bridgeImplementation = '…';
@@ -89,6 +98,15 @@ class GlassesLabController extends ChangeNotifier {
   // -- Actions ----------------------------------------------------------------
 
   Future<void> startScan() => _guard('scan', () async {
+        final granted = await _ensureBlePermissions();
+        blePermissionDenied = !granted;
+        if (!granted) {
+          _logEvent(GlassesLabEvent(
+            type: 'error',
+            data: {'message': 'Bluetooth permissions denied — scan skipped'},
+          ));
+          return;
+        }
         scanning = true;
         devices = const [];
         notifyListeners();

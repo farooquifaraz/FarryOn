@@ -8,9 +8,25 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Location: answer "where am I?" with the device's GPS position. -->
+    <!-- Location: answer "where am I?" with the device's GPS position.
+         (No maxSdkVersion cap: the GPS feature needs it on every Android
+         version; it also satisfies the legacy BLE-scan requirement on
+         Android 11 and below.) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Glasses Lab: BLE link to the L801 glasses (Android 12+ runtime pair). -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Legacy Bluetooth for Android 11 and below. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
 
     <!-- Reminders: post notifications + schedule exact alarms at the due time. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

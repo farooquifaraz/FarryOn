@@ -192,6 +192,36 @@ void main() {
     expect(controller.events.last.type, 'error');
   });
 
+  test('denied BLE permissions block the scan and raise the banner flag',
+      () async {
+    final denied = GlassesLabController(
+      bridge,
+      ensureBlePermissions: () async => false,
+    );
+    await denied.startScan();
+    expect(denied.blePermissionDenied, isTrue);
+    expect(denied.scanning, isFalse);
+    expect(bridge.calls.where((c) => c == 'scan'), isEmpty);
+    expect(denied.events.last.type, 'error');
+    denied.dispose();
+  });
+
+  test('granted BLE permissions clear a previous denial and scan runs',
+      () async {
+    var granted = false;
+    final flaky = GlassesLabController(
+      bridge,
+      ensureBlePermissions: () async => granted,
+    );
+    await flaky.startScan();
+    expect(flaky.blePermissionDenied, isTrue);
+    granted = true;
+    await flaky.startScan();
+    expect(flaky.blePermissionDenied, isFalse);
+    expect(flaky.devices, hasLength(1));
+    flaky.dispose();
+  });
+
   test('sync progress updates and completes', () async {
     await controller.startWifiSync();
     expect(controller.syncing, isTrue);
