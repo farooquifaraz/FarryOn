@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -15,6 +16,7 @@ import '../../state/providers.dart';
 import '../data/notes_tasks_screen.dart';
 import '../debug/debug_logs_screen.dart';
 import '../finder/finder_result_view.dart';
+import '../glasses_lab/glasses_lab_screen.dart';
 import '../finder/finder_screen.dart';
 import 'widgets/aurora_orb.dart';
 import 'widgets/camera_preview_view.dart';
@@ -613,6 +615,22 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                           color: Aurora.textMuted),
                       onTap: () => DebugLogsScreen.open(context),
                     ),
+                    // Hardware test bench for the L801 smart glasses. Debug
+                    // builds only — never visible in a release build.
+                    if (kDebugMode)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.science_outlined,
+                            color: Aurora.textMuted),
+                        title: const Text('Glasses Lab'),
+                        subtitle: const Text(
+                          'L801 hardware test bench (debug builds only)',
+                          style: TextStyle(color: Aurora.textMuted),
+                        ),
+                        trailing: const Icon(Icons.chevron_right,
+                            color: Aurora.textMuted),
+                        onTap: () => GlassesLabScreen.open(context),
+                      ),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       secondary: Icon(
