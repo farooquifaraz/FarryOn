@@ -374,6 +374,17 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
             ref.read(liveProvider),
           );
         },
+        onOpenGlassesLab: () async {
+          // The Lab owns the mic + Bluetooth while open: tear the live
+          // session down first so FarryOn doesn't keep listening/answering
+          // mid-hardware-test, then restore it when the Lab closes.
+          await ref.read(liveProvider.notifier).disconnect();
+          if (!mounted) return;
+          await GlassesLabScreen.open(context);
+          if (!mounted) return;
+          _connectRequested = false;
+          await _connect();
+        },
       ),
     );
   }
@@ -405,11 +416,13 @@ class _SettingsSheet extends StatefulWidget {
     required this.current,
     required this.onSave,
     required this.onOpenDevices,
+    required this.onOpenGlassesLab,
   });
 
   final AppConfig current;
   final ValueChanged<AppConfig> onSave;
   final VoidCallback onOpenDevices;
+  final VoidCallback onOpenGlassesLab;
 
   @override
   State<_SettingsSheet> createState() => _SettingsSheetState();
@@ -629,7 +642,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                         ),
                         trailing: const Icon(Icons.chevron_right,
                             color: Aurora.textMuted),
-                        onTap: () => GlassesLabScreen.open(context),
+                        onTap: widget.onOpenGlassesLab,
                       ),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,

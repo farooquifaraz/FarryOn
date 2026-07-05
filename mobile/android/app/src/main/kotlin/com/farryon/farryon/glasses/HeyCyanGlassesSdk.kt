@@ -200,8 +200,20 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
     override fun connect(mac: String) {
         Log.i(TAG, "connect $mac")
+        val op = BleOperateManager.getInstance()
+        if (op.isConnected && pendingMac != null && pendingMac != mac) {
+            // Switching devices (seen on hardware: user connected to a TV,
+            // then tapped the glasses): tear the old link down first or
+            // connectDirectly silently goes nowhere.
+            Log.i(TAG, "switching device: unbinding $pendingMac first")
+            op.setNeedConnect(false)
+            op.unBindDevice()
+        }
+        // Reset the dedupe so this attempt emits a fresh "connected"
+        // transition even if the previous link never reported disconnected.
+        lastConnectionState = null
         pendingMac = mac
-        BleOperateManager.getInstance().connectDirectly(mac)
+        op.connectDirectly(mac)
     }
 
     override fun disconnect() {
