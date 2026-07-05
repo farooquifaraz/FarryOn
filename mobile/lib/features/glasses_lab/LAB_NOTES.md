@@ -55,6 +55,18 @@
       its own (~every few s alongside the SDK heartbeat), pct=100 charging=false.
       Notify 0x05 path not yet seen in the wild (battery arrived via callback).
 - [ ] Thumbnail: resolution / bytes / measured latency (5 samples):
+      Transport: `getPictureThumbnails` STREAMS the JPEG in ~1013-byte BLE
+      chunks (boolean=false per chunk, true on the final one) — must
+      accumulate; the PDF never mentions chunking.
+      Sample 1 (2026-07-05): 22 865 bytes, **4564 ms** end-to-end
+      (command → aiPhotoTaken notify 2261 ms + chunk transfer ~2300 ms).
+      Above the 3 s target — more samples pending, thumbnailSize tuning
+      (0..6) is the lever if this holds.
+- [ ] Wear/touch support probe (`wearFunctionSupport`, model=21):
+      **wear=true**, translation=true, **volume=false** (yet volume-slide
+      0x12 events DO arrive — support flag vs behaviour mismatch, noted).
+      `wearCheck(true, true)` → open=true — wear reporting now enabled;
+      which notify code wear on/off uses is still unconfirmed (0x0a suspect).
 - [ ] `voiceFromGlasses` PCM: sample rate / bit depth / channels / kis mode me:
 - [ ] HFP recording quality (8k narrowband ya 16k wideband?):
 - [ ] TTS on glasses speaker: clarity / volume:
