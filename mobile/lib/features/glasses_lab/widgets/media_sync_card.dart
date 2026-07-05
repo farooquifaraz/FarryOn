@@ -22,14 +22,15 @@ class MediaSyncCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
               FilledButton.icon(
                 onPressed: connected && !c.syncing ? c.startWifiSync : null,
                 icon: const Icon(Icons.download, size: 18),
                 label: const Text('Start sync'),
               ),
-              const SizedBox(width: 8),
               if (c.syncing)
                 OutlinedButton.icon(
                   onPressed: c.stopWifiSync,

@@ -28,7 +28,9 @@ class ConnectionCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
               FilledButton.icon(
                 onPressed: c.scanning ? null : c.startScan,
@@ -41,7 +43,6 @@ class ConnectionCard extends StatelessWidget {
                     : const Icon(Icons.radar, size: 18),
                 label: Text(c.scanning ? 'Scanning…' : 'Scan'),
               ),
-              const SizedBox(width: 8),
               if (c.connectionState != 'disconnected')
                 OutlinedButton.icon(
                   onPressed: c.disconnect,

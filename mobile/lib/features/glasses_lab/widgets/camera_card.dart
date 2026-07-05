@@ -25,7 +25,9 @@ class CameraCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
               FilledButton.icon(
                 onPressed:
@@ -33,7 +35,6 @@ class CameraCard extends StatelessWidget {
                 icon: const Icon(Icons.center_focus_strong, size: 18),
                 label: const Text('AI photo + thumbnail'),
               ),
-              const SizedBox(width: 8),
               OutlinedButton.icon(
                 onPressed: connected ? c.takePhoto : null,
                 icon: const Icon(Icons.photo_camera, size: 18),
