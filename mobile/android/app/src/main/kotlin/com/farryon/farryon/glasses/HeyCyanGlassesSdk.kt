@@ -100,6 +100,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     @Volatile private var hfpRecording = false
     private var tts: TextToSpeech? = null
     private var classicBtReceiverRegistered = false
+    private var lastWifiSpeedKbps = 0.0
 
     /** Same folder the vendor sample uses ('DCIM_1') — synced media + PCM. */
     private val albumDir: File by lazy {
@@ -122,6 +123,17 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             if (mac != null) mapOf("state" to state, "mac" to mac)
             else mapOf("state" to state),
         )
+        // Task 2.6b: the BLE link must survive backgrounding while connected.
+        try {
+            when (state) {
+                "connected" -> GlassesForegroundService.start(
+                    app, DeviceManager.getInstance().deviceName ?: "L801"
+                )
+                "disconnected" -> GlassesForegroundService.stop(app)
+            }
+        } catch (e: Exception) {
+            Log.i(TAG, "foreground service: $e")
+        }
     }
 
     /**
@@ -415,17 +427,28 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                         )
                     }
                     else -> {
+                        // Human-readable touch/gesture labels (Faraz request:
+                        // "pata nahi chalta kya hua") — taps never reach the
+                        // app (on-device only, no report API in the .aar);
+                        // these are ALL the touches the SDK exposes.
                         val label = when (load[6].toInt()) {
                             // Seen on hardware: fires after each photo lands
                             // on the glasses' storage; load[7] = photo count.
                             0x01 -> "photoStored count=${load.getOrNull(7)?.toInt()}"
-                            0x03 -> "micStateChange"
+                            0x03 ->
+                                if (load.getOrNull(7)?.toInt() == 1)
+                                    "TOUCH long-press → glasses mic ON"
+                                else "glasses mic state=${load.getOrNull(7)?.toInt()}"
                             0x04 -> "otaProgress"
-                            0x0c -> "voicePauseEvent"
+                            0x0c -> "TOUCH pause gesture (voice broadcast paused)"
                             0x0d -> "unbindApp"
-                            0x0e -> "lowMemory"
+                            0x0e -> "glasses storage FULL"
                             0x10 -> "translationPause"
-                            0x12 -> "volumeChange"
+                            0x12 -> "TOUCH slide → volume " +
+                                "music=${load.getOrNull(10)?.toInt()}/" +
+                                "${load.getOrNull(9)?.toInt()} " +
+                                "system=${load.getOrNull(18)?.toInt()}/" +
+                                "${load.getOrNull(17)?.toInt()}"
                             else -> "unknown"
                         }
                         emit(
@@ -502,29 +525,44 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             }
         }
 
-        // WiFi sync callbacks — wired properly in Task 2.6; keep them visible.
+        // WiFi sync callbacks (Task 2.6a).
         override fun onGlassesControlSuccess() =
-            emit("audio", mapOf("status" to "wifi control OK"))
+            emit("syncProgress", mapOf("file" to "WiFi sync started", "pct" to 0))
 
         override fun onGlassesFail(errorCode: Int) =
             emit("deviceEvent", mapOf("hex" to "wifi glassesFail err=$errorCode"))
 
         override fun wifiSpeed(wifiSpeed: String) {
             Log.i(TAG, "wifiSpeed $wifiSpeed")
+            lastWifiSpeedKbps =
+                Regex("[0-9]+(\\.[0-9]+)?").find(wifiSpeed)
+                    ?.value?.toDoubleOrNull() ?: lastWifiSpeedKbps
         }
 
-        override fun fileProgress(fileName: String, progress: Int) =
-            emit("syncProgress", mapOf("file" to fileName, "pct" to progress))
+        override fun fileProgress(fileName: String, progress: Int) = emit(
+            "syncProgress",
+            mapOf(
+                "file" to fileName,
+                "pct" to progress,
+                "speedKbps" to lastWifiSpeedKbps,
+            )
+        )
 
         override fun fileWasDownloadSuccessfully(
             entity: com.oudmon.wifi.bean.GlassAlbumEntity,
-        ) = emit("deviceEvent", mapOf("hex" to "downloaded $entity"))
+        ) = emit("deviceEvent", mapOf("hex" to "downloaded → $entity"))
 
         override fun fileCount(index: Int, total: Int) =
             emit("deviceEvent", mapOf("hex" to "sync file $index/$total"))
 
-        override fun fileDownloadComplete() =
-            emit("deviceEvent", mapOf("hex" to "sync complete"))
+        override fun fileDownloadComplete() = emit(
+            "syncProgress",
+            mapOf(
+                "file" to "all files done ✓",
+                "pct" to 100,
+                "speedKbps" to lastWifiSpeedKbps,
+            )
+        )
 
         override fun fileDownloadError(fileType: Int, errorType: Int) =
             emit("deviceEvent", mapOf("hex" to "sync error type=$fileType err=$errorType"))
@@ -821,11 +859,25 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
     }
 
-    // -- Not yet wired (Task 2.6) — visible in the console, never crash. ---------
+    // -- WiFi media sync (Task 2.6a) ------------------------------------------
 
-    override fun startWifiSync() = notWired("startWifiSync", "2.6")
+    override fun startWifiSync() {
+        Log.i(TAG, "startWifiSync (importAlbum)")
+        emit(
+            "syncProgress",
+            mapOf("file" to "WiFi-P2P pairing…", "pct" to 0, "speedKbps" to 0.0)
+        )
+        GlassesControl.getInstance(app)?.importAlbum()
+    }
 
-    override fun stopWifiSync() = notWired("stopWifiSync", "2.6")
+    override fun stopWifiSync() {
+        // Verified against the .aar: the vendor exposes no cancel/stop for a
+        // running importAlbum — the sync runs to completion.
+        emit(
+            "deviceEvent",
+            mapOf("hex" to "stopWifiSync: vendor SDK has no cancel — sync runs to completion")
+        )
+    }
 
     override fun setVolume(type: String, level: Int) =
         notWired("setVolume:$type=$level", "2.5b")

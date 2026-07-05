@@ -28,6 +28,18 @@
         android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
 
+    <!-- Glasses Lab: WiFi-P2P media sync from the glasses (Task 2.6a). -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+
+    <!-- Glasses Lab: keep the BLE link alive in the background (Task 2.6b). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
     <!-- Reminders: post notifications + schedule exact alarms at the due time. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
@@ -66,6 +78,12 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Glasses Lab: BLE link survives backgrounding (Task 2.6b). -->
+        <service
+            android:name="com.farryon.farryon.glasses.GlassesForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- flutter_local_notifications: fire scheduled reminders + reschedule
              after a reboot. -->

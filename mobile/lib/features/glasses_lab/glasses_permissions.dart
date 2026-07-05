@@ -18,3 +18,12 @@ Future<bool> requestGlassesBlePermissions() async {
   ].request();
   return statuses.values.every((s) => s.isGranted);
 }
+
+/// WiFi-P2P media sync needs NEARBY_WIFI_DEVICES on Android 13+; on older
+/// versions the manifest entries are enough (permission_handler reports
+/// granted there without prompting).
+Future<bool> requestGlassesWifiPermissions() async {
+  if (kIsWeb || !Platform.isAndroid) return true;
+  final status = await Permission.nearbyWifiDevices.request();
+  return status.isGranted;
+}

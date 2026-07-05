@@ -27,9 +27,12 @@ class LabThumbnail {
 /// line instead of a crash (the Lab must never destabilise the app).
 class GlassesLabController extends ChangeNotifier {
   GlassesLabController(this._bridge,
-      {Future<bool> Function()? ensureBlePermissions})
+      {Future<bool> Function()? ensureBlePermissions,
+      Future<bool> Function()? ensureWifiPermissions})
       : _ensureBlePermissions =
-            ensureBlePermissions ?? requestGlassesBlePermissions {
+            ensureBlePermissions ?? requestGlassesBlePermissions,
+        _ensureWifiPermissions =
+            ensureWifiPermissions ?? requestGlassesWifiPermissions {
     _sub = _bridge.events().listen(_onEvent, onError: (Object e) {
       _logEvent(GlassesLabEvent(type: 'error', data: {'message': '$e'}));
     });
@@ -46,6 +49,7 @@ class GlassesLabController extends ChangeNotifier {
 
   final GlassesBridgeApi _bridge;
   final Future<bool> Function() _ensureBlePermissions;
+  final Future<bool> Function() _ensureWifiPermissions;
   StreamSubscription<GlassesLabEvent>? _sub;
 
   /// True after the user refused the Bluetooth runtime permissions — the
@@ -159,6 +163,14 @@ class GlassesLabController extends ChangeNotifier {
       });
 
   Future<void> startWifiSync() => _guard('startWifiSync', () async {
+        final granted = await _ensureWifiPermissions();
+        if (!granted) {
+          _logEvent(GlassesLabEvent(
+            type: 'error',
+            data: {'message': 'Nearby-WiFi permission denied — sync skipped'},
+          ));
+          return;
+        }
         syncing = true;
         syncPct = 0;
         await _bridge.startWifiSync();

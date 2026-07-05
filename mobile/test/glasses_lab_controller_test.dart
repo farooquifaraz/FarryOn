@@ -222,6 +222,19 @@ void main() {
     flaky.dispose();
   });
 
+  test('denied WiFi permissions block the sync, bridge never called',
+      () async {
+    final denied = GlassesLabController(
+      bridge,
+      ensureWifiPermissions: () async => false,
+    );
+    await denied.startWifiSync();
+    expect(denied.syncing, isFalse);
+    expect(bridge.calls.where((c) => c == 'startWifiSync'), isEmpty);
+    expect(denied.events.last.type, 'error');
+    denied.dispose();
+  });
+
   test('sync progress updates and completes', () async {
     await controller.startWifiSync();
     expect(controller.syncing, isTrue);
