@@ -102,7 +102,22 @@
   - Clarity note (Faraz: "jaise phone par baat karte hain"): that reference
     quality IS the HFP/SCO path; for the PCM path match it in Stage B with
     server-side denoise + AGC (e.g. RNNoise) before STT.
-- [ ] WiFi sync speed (kB/s), pairing UX:
+- [x] WiFi sync speed (kB/s), pairing UX: **WORKS (2026-07-06).**
+      6 full-res photos (11.5 MB total, each ~1.8–2.0 MB, **6560×4928**) in
+      ≈2.7 s once the P2P group is up ⇒ **≈4.2 MB/s effective**. P2P group
+      forms in ~4 s. Full-res path is MORE than viable for Stage B
+      receipts/documents.
+      Pairing/UX quirks (the sprint asked for these — there are plenty):
+      1. Glasses' WiFi stays OFF while charging → P2P peer never appears,
+         SDK retries silently forever. Watchdog + console message added.
+      2. After an interrupted session (app crash mid-download) the glasses
+         hold the stale P2P session — nothing advertises until a glasses
+         POWER CYCLE.
+      3. Vendor .aar needs okhttp3 (+gson, guide §2.1) at runtime or the
+         download engine crashes with NoClassDefFoundError — added to gradle
+         (Faraz-approved).
+      4. New notify codes seen during WiFi bring-up: 0x0b (wifi starting?)
+         and 0x08 carrying the glasses' P2P IP (bytes = 192.168.49.136).
       First attempt (2026-07-06, glasses ON CHARGER): importAlbum sent the
       BLE command + phone started P2P peer discovery, but the glasses' P2P
       device NEVER advertised — SDK retried discovery silently forever, zero
