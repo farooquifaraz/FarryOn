@@ -201,6 +201,9 @@
 - [x] 3.8 Live-screen regression (2026-07-07): voice + camera + text all
       normal after all glasses changes; 68/68 tests green. PASS.
 
+> **STAGE A SIGNED OFF by Faraz — 2026-07-07.** Lab bench retires to
+> maintenance mode; Stage B plan: `docs/GLASSES_STAGE_B_PLAN.md`.
+
 ### Stage B GO/NO-GO recommendation (Stage A exit)
 
 **GO.** Audio input: SDK PCM confirmed 16 kHz/16-bit/mono over plain BLE
