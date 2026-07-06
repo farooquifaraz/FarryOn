@@ -170,7 +170,11 @@ class StubGlassesSdk : GlassesSdk {
                     override fun run() {
                         emit(
                             "pcmChunk",
-                            mapOf("bytes" to 320, "sampleRate" to 16000)
+                            mapOf(
+                                "bytes" to 320,
+                                "sampleRate" to 16000,
+                                "data" to ByteArray(320),
+                            )
                         )
                         main.postDelayed(this, 100L)
                     }

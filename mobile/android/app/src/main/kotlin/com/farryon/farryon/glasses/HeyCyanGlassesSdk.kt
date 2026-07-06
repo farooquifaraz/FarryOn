@@ -659,7 +659,13 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 Log.i(TAG, "pcm write: $e")
             }
             if (audioMode == "pcm" || audioMode == "wake") {
-                emit("pcmChunk", mapOf("bytes" to pcmData.size))
+                // B0: carry the actual audio — Stage B's voice pipeline
+                // streams these bytes Dart → backend → Whisper. The Lab
+                // keeps using only the count.
+                emit(
+                    "pcmChunk",
+                    mapOf("bytes" to pcmData.size, "data" to pcmData)
+                )
             }
         }
 
