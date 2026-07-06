@@ -235,6 +235,18 @@ void main() {
     denied.dispose();
   });
 
+  test('mediaCount event fills the glasses-memory counters', () async {
+    bridge.emit('mediaCount', {'img': 6, 'vid': 2, 'rec': 1});
+    await pump();
+    expect(controller.mediaImg, 6);
+    expect(controller.mediaVid, 2);
+    expect(controller.mediaRec, 1);
+    expect(controller.mediaTotal, 9);
+    bridge.emit('mediaCount', {'img': 0, 'vid': 0, 'rec': 0});
+    await pump();
+    expect(controller.mediaTotal, 0);
+  });
+
   test('sync progress updates and completes', () async {
     await controller.startWifiSync();
     expect(controller.syncing, isTrue);

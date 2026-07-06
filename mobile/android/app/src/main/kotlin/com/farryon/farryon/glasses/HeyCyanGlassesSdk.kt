@@ -679,6 +679,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     "speedKbps" to lastWifiSpeedKbps,
                 )
             )
+            // Show the fresh glasses-memory state (normally 0) — small delay
+            // so the SDK's own glassesControl callback slot is free again.
+            main.postDelayed({ refreshMediaCount() }, 1500L)
         }
 
         override fun fileDownloadError(fileType: Int, errorType: Int) {
@@ -1073,13 +1076,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
         LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x04)) { _, rsp ->
             if (rsp != null && rsp.dataType == 4) {
-                emit(
-                    "deviceEvent",
-                    mapOf(
-                        "hex" to "glasses media pending: img=${rsp.imageCount} " +
-                            "vid=${rsp.videoCount} rec=${rsp.recordCount}"
-                    )
-                )
+                emitMediaCount(rsp.imageCount, rsp.videoCount, rsp.recordCount)
                 val total = rsp.imageCount + rsp.videoCount + rsp.recordCount
                 if (total == 0) {
                     // Verified 2026-07-06: a 0-file importAlbum still spins up
@@ -1108,6 +1105,23 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 proceed()
             }
         }, 3000L)
+    }
+
+    /** Typed count for the Media sync card (also visible in the console). */
+    private fun emitMediaCount(img: Int, vid: Int, rec: Int) {
+        emit(
+            "mediaCount",
+            mapOf("img" to img, "vid" to vid, "rec" to rec)
+        )
+    }
+
+    /** Re-query the glasses' pending-media count (e.g. right after a sync). */
+    private fun refreshMediaCount() {
+        LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x04)) { _, rsp ->
+            if (rsp != null && rsp.dataType == 4) {
+                emitMediaCount(rsp.imageCount, rsp.videoCount, rsp.recordCount)
+            }
+        }
     }
 
     private fun armSyncWatchdog() {

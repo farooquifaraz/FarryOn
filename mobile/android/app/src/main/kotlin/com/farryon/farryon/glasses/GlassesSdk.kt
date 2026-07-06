@@ -191,6 +191,7 @@ class StubGlassesSdk : GlassesSdk {
     }
 
     override fun startWifiSync() {
+        emit("mediaCount", mapOf("img" to 1, "vid" to 0, "rec" to 0))
         var pct = 0
         val tick = object : Runnable {
             override fun run() {
@@ -203,7 +204,11 @@ class StubGlassesSdk : GlassesSdk {
                         "speedKbps" to 420.0,
                     )
                 )
-                if (pct < 100) main.postDelayed(this, 300L)
+                if (pct < 100) {
+                    main.postDelayed(this, 300L)
+                } else {
+                    emit("mediaCount", mapOf("img" to 0, "vid" to 0, "rec" to 0))
+                }
             }
         }
         syncTask = tick

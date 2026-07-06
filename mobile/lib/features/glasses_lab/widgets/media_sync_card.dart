@@ -40,6 +40,15 @@ class MediaSyncCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
+          if (c.mediaTotal != null) ...[
+            LabKv(
+              'Glasses memory',
+              '📷 ${c.mediaImg}  ·  🎥 ${c.mediaVid}  ·  🎙 ${c.mediaRec}'
+              '  ·  total ${c.mediaTotal}'
+              '${c.mediaTotal == 0 ? '  (empty ✓)' : ''}',
+            ),
+            const SizedBox(height: 6),
+          ],
           if (c.syncing || c.syncPct > 0) ...[
             LinearProgressIndicator(
               value: c.syncPct / 100,

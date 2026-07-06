@@ -89,6 +89,13 @@ class GlassesLabController extends ChangeNotifier {
   int syncPct = 0;
   double syncSpeedKbps = 0;
 
+  /// Glasses-memory pending media (null until the glasses report it).
+  int? mediaImg;
+  int? mediaVid;
+  int? mediaRec;
+  int? get mediaTotal =>
+      mediaImg == null ? null : mediaImg! + (mediaVid ?? 0) + (mediaRec ?? 0);
+
   // -- Event console -----------------------------------------------------------
   final List<GlassesLabEvent> events = [];
   String? lastError;
@@ -236,6 +243,10 @@ class GlassesLabController extends ChangeNotifier {
           notifyListeners();
           return;
         }
+      case 'mediaCount':
+        mediaImg = (event.data['img'] as num?)?.toInt();
+        mediaVid = (event.data['vid'] as num?)?.toInt();
+        mediaRec = (event.data['rec'] as num?)?.toInt();
       case 'syncProgress':
         syncFile = event.data['file'] as String?;
         syncPct = (event.data['pct'] as num?)?.toInt() ?? syncPct;
