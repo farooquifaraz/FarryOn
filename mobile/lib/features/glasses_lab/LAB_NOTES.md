@@ -118,6 +118,15 @@
          (Faraz-approved).
       4. New notify codes seen during WiFi bring-up: 0x0b (wifi starting?)
          and 0x08 carrying the glasses' P2P IP (bytes = 192.168.49.136).
+         0x0b also repeats periodically on a live link — wifi-status
+         heartbeat suspected.
+      5. **Post-sync memory behaviour (verified 2026-07-06 20:47):** after
+         the 6-photo sync, the pending count dropped to only the 1 NEW photo
+         (img=1) — the glasses mark synced media as done, so re-syncs never
+         re-download. No duplicate problem for Stage B.
+      6. Auto gallery export verified on hardware: `gallery ←
+         20260706203620220.jpg` — synced media lands in DCIM/FarryOn
+         (MediaStore) with zero user action.
       First attempt (2026-07-06, glasses ON CHARGER): importAlbum sent the
       BLE command + phone started P2P peer discovery, but the glasses' P2P
       device NEVER advertised — SDK retried discovery silently forever, zero
