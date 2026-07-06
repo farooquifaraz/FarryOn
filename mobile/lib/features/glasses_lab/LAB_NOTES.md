@@ -103,6 +103,14 @@
     quality IS the HFP/SCO path; for the PCM path match it in Stage B with
     server-side denoise + AGC (e.g. RNNoise) before STT.
 - [ ] WiFi sync speed (kB/s), pairing UX:
+      First attempt (2026-07-06, glasses ON CHARGER): importAlbum sent the
+      BLE command + phone started P2P peer discovery, but the glasses' P2P
+      device NEVER advertised — SDK retried discovery silently forever, zero
+      listener callbacks (SDK-internal tag `WifiP2pManager` showed
+      "P2P组网不可用" + endless 内部扫描重试). Suspected cause: WiFi chip stays
+      off while charging (matches wifiFirmware reading empty). Bridge now:
+      media-count probe before import + 60 s stall watchdog with an
+      actionable console message. Retest OFF the charger.
 - [ ] Gesture events: kaunsa gesture → kaunsa event code (2026-07-05 session):
       - slide on temple → `0x12` volumeChange (music 0/16 curr 15, call 0/15
         curr 15, system 0/16 curr 10, mode 03) — slides ARE the volume control
