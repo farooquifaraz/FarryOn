@@ -180,6 +180,7 @@ class StubGlassesSdk : GlassesSdk {
             }
             "hfp" -> emit("audio", mapOf("status" to "hfp_route_active (simulated)"))
             "tts" -> emit("audio", mapOf("status" to "tts_played_on_glasses (simulated)"))
+            "wake" -> emit("audio", mapOf("status" to "aiVoiceWake_ack (simulated)"))
         }
     }
 

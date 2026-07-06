@@ -378,7 +378,13 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
           // The Lab owns the mic + Bluetooth while open: tear the live
           // session down first so FarryOn doesn't keep listening/answering
           // mid-hardware-test, then restore it when the Lab closes.
-          await ref.read(liveProvider.notifier).disconnect();
+          // Timeout guard: a session stuck in backend connect-retry never
+          // resolves disconnect() and must not block the Lab from opening
+          // (hit on-device 2026-07-06).
+          await ref
+              .read(liveProvider.notifier)
+              .disconnect()
+              .timeout(const Duration(seconds: 2), onTimeout: () {});
           if (!mounted) return;
           await GlassesLabScreen.open(context);
           if (!mounted) return;

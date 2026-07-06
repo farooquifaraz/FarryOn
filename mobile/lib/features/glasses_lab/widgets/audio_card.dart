@@ -55,6 +55,15 @@ class AudioCard extends StatelessWidget {
                 icon: const Icon(Icons.volume_up, size: 18),
                 label: const Text('Play TTS sample'),
               ),
+              // Undocumented aiVoiceWake() probe: can the APP open the
+              // glasses mic with no touch? Huge for hands-free Stage B.
+              OutlinedButton.icon(
+                onPressed: connected && !testing
+                    ? () => c.startAudioTest('wake')
+                    : null,
+                icon: const Icon(Icons.record_voice_over, size: 18),
+                label: const Text('Wake glasses mic'),
+              ),
               if (testing)
                 OutlinedButton.icon(
                   onPressed: c.stopAudioTest,

@@ -520,7 +520,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             } catch (e: Exception) {
                 Log.i(TAG, "pcm write: $e")
             }
-            if (audioMode == "pcm") {
+            if (audioMode == "pcm" || audioMode == "wake") {
                 emit("pcmChunk", mapOf("bytes" to pcmData.size))
             }
         }
@@ -647,6 +647,15 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             )
             "hfp" -> startHfpRecording()
             "tts" -> startTtsSample()
+            "wake" -> {
+                // Undocumented probe: aiVoiceWake exists in the .aar but not
+                // the PDF. If it remotely opens the glasses mic we should see
+                // voiceFromGlassesStatus(1) + PCM without any touch.
+                emit("audio", mapOf("status" to "aiVoiceWake(true,true) sent — watching for mic…"))
+                LargeDataHandler.getInstance().aiVoiceWake(true, true) { _, rsp ->
+                    emit("audio", mapOf("status" to "aiVoiceWake ack: $rsp"))
+                }
+            }
         }
     }
 
