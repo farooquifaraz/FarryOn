@@ -679,9 +679,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     "speedKbps" to lastWifiSpeedKbps,
                 )
             )
-            // Show the fresh glasses-memory state (normally 0) — small delay
-            // so the SDK's own glassesControl callback slot is free again.
-            main.postDelayed({ refreshMediaCount() }, 1500L)
+            // Show the fresh glasses-memory state (normally 0). The glasses
+            // mark media as synced LAZILY (measured: still stale 1.5 s after
+            // completion), so query twice — the later one wins in the card.
+            main.postDelayed({ refreshMediaCount() }, 3000L)
+            main.postDelayed({ refreshMediaCount() }, 10_000L)
         }
 
         override fun fileDownloadError(fileType: Int, errorType: Int) {
