@@ -65,4 +65,10 @@ dependencies {
     // present the Glasses Lab runs on its built-in stub SDK, so clean clones
     // and CI build fine without the vendor binary.
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
+    // The vendor .aar downloads media via androidnetworking, which needs
+    // OkHttp (+ gson per the vendor integration guide §2.1) at runtime but
+    // bundles neither — without these, WiFi sync crashes with
+    // NoClassDefFoundError: okhttp3.MediaType (hit on-device 2026-07-06).
+    implementation("com.squareup.okhttp3:okhttp:4.9.3")
+    implementation("com.google.code.gson:gson:2.8.9")
 }
