@@ -88,6 +88,12 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     /** In-flight AI photo: request id + t0 for the capture→thumbnail latency. */
     private var photoRequestId: String? = null
     private var photoStartMs: Long = 0
+    private var photoWatchdog: Runnable? = null
+
+    private fun cancelPhotoWatchdog() {
+        photoWatchdog?.let(main::removeCallbacks)
+        photoWatchdog = null
+    }
 
     // -- Audio test state (Task 2.5) ------------------------------------------
     /** null | hfp | pcm | tts — which lab audio mode is armed. */
@@ -1033,6 +1039,28 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         Log.i(TAG, "takeAiPhoto $requestId")
         photoRequestId = requestId
         photoStartMs = SystemClock.elapsedRealtime()
+        // Busy glasses (e.g. stuck in WiFi/transfer mode) silently ignore the
+        // command — without this the Lab shows "capturing…" forever
+        // (hit on-device 2026-07-06 23:38).
+        cancelPhotoWatchdog()
+        val watchdog = Runnable {
+            if (photoRequestId != requestId) return@Runnable
+            photoRequestId = null
+            emit(
+                "deviceEvent",
+                mapOf(
+                    "hex" to "AI photo timeout (12 s) — glasses busy " +
+                        "(WiFi/transfer/recording mode?). Try again in a few seconds."
+                )
+            )
+            // Empty thumbnail clears the Lab's capturing spinner.
+            emit(
+                "thumbnail",
+                mapOf("requestId" to requestId, "jpeg" to ByteArray(0), "elapsedMs" to -1)
+            )
+        }
+        photoWatchdog = watchdog
+        main.postDelayed(watchdog, 12_000L)
         // Sample's btnThumbnail payload; thumbnailSize range is 0..6 — 0x02
         // is the sample's default (resolution measured on hardware).
         val size: Byte = 0x02
@@ -1060,6 +1088,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      * boolean=true carrying the remainder — accumulate everything, emit once.
      */
     private fun fetchThumbnail() {
+        cancelPhotoWatchdog()
         val buffer = java.io.ByteArrayOutputStream()
         LargeDataHandler.getInstance().getPictureThumbnails { _, done, data ->
             if (data != null && data.isNotEmpty()) buffer.write(data)
