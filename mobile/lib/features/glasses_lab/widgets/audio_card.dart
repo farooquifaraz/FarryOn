@@ -44,14 +44,14 @@ class _AudioCardState extends State<AudioCard> {
                 icon: const Icon(Icons.headset, size: 18),
                 label: const Text('Pair Classic BT'),
               ),
-              FilledButton.icon(
+              OutlinedButton.icon(
                 onPressed: connected && !testing
                     ? () => c.startAudioTest('hfp')
                     : null,
                 icon: const Icon(Icons.mic, size: 18),
                 label: const Text('Mic via HFP'),
               ),
-              FilledButton.icon(
+              OutlinedButton.icon(
                 onPressed: connected && !testing
                     ? () => c.startAudioTest('pcm')
                     : null,
