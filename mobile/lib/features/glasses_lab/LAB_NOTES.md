@@ -166,8 +166,16 @@
       touch-slide needs many swipes; added an app-side volume slider
       (setVolumeControl) — pending hardware verify — which is also the
       Stage B voice-command volume path.
-- [ ] 3.6 edge cases: BT-off ✅ / permission deny / battery die / incoming
-      call / 10-min background:
+- [~] 3.6 edge cases: BT-off ✅ / permission deny ✅ (red banner, no crash) /
+      battery die ⬜ / incoming call ⬜ / 10-min background ⬜.
+      **IMPORTANT finding (2026-07-06):** when the glasses are classic-BT
+      bonded (A2DP, from the TTS/HFP test), a long-press ALSO sends Android a
+      voice-assistant key → the "Complete action using Bixby/Google" chooser
+      pops up, competing with FarryOn's mic. Root cause: the glasses act as a
+      BT-headset assistant button over classic BT. **Stage B fix is free** —
+      the PCM mic path works over BLE ALONE (Task 2.5), so simply DON'T
+      classic-BT bond for input; bond only when TTS output is needed. Or set
+      FarryOn as the default assistant to capture the key.
 - [ ] 3.7 battery drain 15-min heavy:
 - [ ] 3.8 Live-screen regression:
 
