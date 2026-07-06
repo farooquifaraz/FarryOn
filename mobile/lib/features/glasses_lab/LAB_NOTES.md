@@ -143,10 +143,11 @@
         seen once, not yet reproduced — still unmapped
       - **single tap / double tap → NO event reaches the app** (67 s window,
         nothing logged) — taps are likely handled on-device only
-- [ ] Wear detection events: **wear on/off emitted NOTHING by default.**
-      Hypothesis: reporting must be enabled first via
-      `LargeDataHandler.wearCheck(enable, ...)` (API exists in the .aar) —
-      test in a follow-up session; matters for Stage B auto-sleep.
+- [x] Wear detection events: **CONFIRMED WORKING (2026-07-06 23:23).**
+      Needs `wearCheck(true, true)` enable (default OFF); wear reports then
+      arrive as notify **0x0a** with loadData[7]=1 (worn) — Lab emits
+      `wearState {worn}`. The "mystery 0x0a" from 07-05 was a wear event all
+      along. Stage B auto-sleep path is available.
 ## Sprint 3 (hardware verification)
 
 - [x] 3.2 Thumbnail latency benchmark (2026-07-06): **21 samples, 21/21
@@ -179,7 +180,12 @@
       the PCM mic path works over BLE ALONE (Task 2.5), so simply DON'T
       classic-BT bond for input; bond only when TTS output is needed. Or set
       FarryOn as the default assistant to capture the key.
-- [ ] 3.7 battery drain 15-min heavy:
+- [x] 3.7 battery drain (2026-07-06, 23:18–23:39 off-charger, ~21 min:
+      PCM session, photos, wear events, WiFi attempt, 10-min background):
+      **85% → 85% — no measurable drop at the 1% reporting resolution.**
+      Standby+BLE is effectively free; heavier continuous use (video, long
+      PCM) still untested. 10-min background survival ✅ (link + battery
+      events flowed throughout) → 3.6 background item done.
 - [ ] 3.8 Live-screen regression:
 
 - [ ] Surprises / vendor doc se alag behaviour:
