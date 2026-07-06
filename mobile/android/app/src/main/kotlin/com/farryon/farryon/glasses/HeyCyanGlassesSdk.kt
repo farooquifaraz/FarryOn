@@ -617,12 +617,22 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             }
         }
 
-        // WiFi sync callbacks (Task 2.6a).
-        override fun onGlassesControlSuccess() =
+        // WiFi sync callbacks (Task 2.6a). Every sign of life pushes the
+        // stall watchdog forward; terminal callbacks clear it.
+        override fun onGlassesControlSuccess() {
+            armSyncWatchdog()
             emit("syncProgress", mapOf("file" to "WiFi sync started", "pct" to 0))
+        }
 
-        override fun onGlassesFail(errorCode: Int) =
+        override fun onGlassesFail(errorCode: Int) {
+            cancelSyncWatchdog()
+            syncActive = false
             emit("deviceEvent", mapOf("hex" to "wifi glassesFail err=$errorCode"))
+            emit(
+                "syncProgress",
+                mapOf("file" to "sync failed (err=$errorCode)", "pct" to 100, "speedKbps" to 0.0)
+            )
+        }
 
         override fun wifiSpeed(wifiSpeed: String) {
             Log.i(TAG, "wifiSpeed $wifiSpeed")
@@ -631,33 +641,44 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     ?.value?.toDoubleOrNull() ?: lastWifiSpeedKbps
         }
 
-        override fun fileProgress(fileName: String, progress: Int) = emit(
-            "syncProgress",
-            mapOf(
-                "file" to fileName,
-                "pct" to progress,
-                "speedKbps" to lastWifiSpeedKbps,
+        override fun fileProgress(fileName: String, progress: Int) {
+            armSyncWatchdog()
+            emit(
+                "syncProgress",
+                mapOf(
+                    "file" to fileName,
+                    "pct" to progress,
+                    "speedKbps" to lastWifiSpeedKbps,
+                )
             )
-        )
+        }
 
         override fun fileWasDownloadSuccessfully(
             entity: com.oudmon.wifi.bean.GlassAlbumEntity,
         ) = emit("deviceEvent", mapOf("hex" to "downloaded → $entity"))
 
-        override fun fileCount(index: Int, total: Int) =
+        override fun fileCount(index: Int, total: Int) {
+            armSyncWatchdog()
             emit("deviceEvent", mapOf("hex" to "sync file $index/$total"))
+        }
 
-        override fun fileDownloadComplete() = emit(
-            "syncProgress",
-            mapOf(
-                "file" to "all files done ✓",
-                "pct" to 100,
-                "speedKbps" to lastWifiSpeedKbps,
+        override fun fileDownloadComplete() {
+            cancelSyncWatchdog()
+            syncActive = false
+            emit(
+                "syncProgress",
+                mapOf(
+                    "file" to "all files done ✓",
+                    "pct" to 100,
+                    "speedKbps" to lastWifiSpeedKbps,
+                )
             )
-        )
+        }
 
-        override fun fileDownloadError(fileType: Int, errorType: Int) =
+        override fun fileDownloadError(fileType: Int, errorType: Int) {
+            armSyncWatchdog()
             emit("deviceEvent", mapOf("hex" to "sync error type=$fileType err=$errorType"))
+        }
 
         override fun eisEnd(fileName: String, filePath: String) =
             emit("deviceEvent", mapOf("hex" to "eis done $fileName"))
@@ -962,16 +983,88 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
     // -- WiFi media sync (Task 2.6a) ------------------------------------------
 
+    /** Watchdog: importAlbum fails SILENTLY when the glasses never raise
+     *  their WiFi-P2P (observed 2026-07-06: SDK retried peer discovery
+     *  forever with zero listener callbacks — Lab froze at 0%). */
+    private var syncWatchdog: Runnable? = null
+    @Volatile private var syncActive = false
+
     override fun startWifiSync() {
-        Log.i(TAG, "startWifiSync (importAlbum)")
+        Log.i(TAG, "startWifiSync")
+        syncActive = true
         emit(
             "syncProgress",
-            mapOf("file" to "WiFi-P2P pairing…", "pct" to 0, "speedKbps" to 0.0)
+            mapOf("file" to "checking glasses media…", "pct" to 0, "speedKbps" to 0.0)
         )
-        GlassesControl.getInstance(app)?.importAlbum()
+        // Diagnostic probe first (documented 0x02/0x04 media-count command):
+        // proves the BLE control channel is alive and shows what's pending.
+        // Sequential — glassesControl has a single callback slot, so the
+        // probe must finish before importAlbum installs its own callback.
+        var proceeded = false
+        fun proceed() {
+            if (proceeded || !syncActive) return
+            proceeded = true
+            emit(
+                "syncProgress",
+                mapOf("file" to "WiFi-P2P pairing…", "pct" to 0, "speedKbps" to 0.0)
+            )
+            GlassesControl.getInstance(app)?.importAlbum()
+            armSyncWatchdog()
+        }
+        LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x04)) { _, rsp ->
+            if (rsp != null && rsp.dataType == 4) {
+                emit(
+                    "deviceEvent",
+                    mapOf(
+                        "hex" to "glasses media pending: img=${rsp.imageCount} " +
+                            "vid=${rsp.videoCount} rec=${rsp.recordCount}"
+                    )
+                )
+                main.post { proceed() }
+            }
+        }
+        main.postDelayed({
+            if (!proceeded) {
+                emit(
+                    "deviceEvent",
+                    mapOf("hex" to "media-count probe: no reply in 3 s — trying import anyway")
+                )
+                proceed()
+            }
+        }, 3000L)
+    }
+
+    private fun armSyncWatchdog() {
+        cancelSyncWatchdog()
+        val r = Runnable {
+            if (!syncActive) return@Runnable
+            syncActive = false
+            emit(
+                "deviceEvent",
+                mapOf(
+                    "hex" to "WiFi sync STALLED (60 s) — glasses' WiFi-P2P never " +
+                        "appeared. Try: take the glasses OFF the charger, keep them " +
+                        "next to the phone, then Start sync again."
+                )
+            )
+            // pct=100 releases the Lab's syncing spinner; the file text says why.
+            emit(
+                "syncProgress",
+                mapOf("file" to "sync failed — see console", "pct" to 100, "speedKbps" to 0.0)
+            )
+        }
+        syncWatchdog = r
+        main.postDelayed(r, 60_000L)
+    }
+
+    private fun cancelSyncWatchdog() {
+        syncWatchdog?.let(main::removeCallbacks)
+        syncWatchdog = null
     }
 
     override fun stopWifiSync() {
+        cancelSyncWatchdog()
+        syncActive = false
         // Verified against the .aar: the vendor exposes no cancel/stop for a
         // running importAlbum — the sync runs to completion.
         emit(
@@ -1038,6 +1131,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
     override fun dispose() {
         cancelConnectWatchdog()
+        cancelSyncWatchdog()
         stopAudioTest()
         tts?.shutdown()
         tts = null
