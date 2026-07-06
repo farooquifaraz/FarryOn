@@ -33,14 +33,24 @@ the existing `CaptureSource` seam.
   P2P reset). Design fallbacks assuming NO vendor fixes.
 - Exit: Lab regression green on refactored bridge.
 
-### B1 — GlassesCaptureSource (1 wk)
-- Implement `lib/capture/glasses_capture_source.dart` against the existing
-  `CaptureSource` seam; Settings → Capture device → **Smart glasses**.
+### B1 — Split capture seam + GlassesCaptureSource (1.5 wk)
+- **Design change (Faraz, 2026-07-07): "capture device" is not one device.**
+  Split the seam into three independent selectors, mix-and-match:
+  - **Audio in:** Phone mic / BT earbuds (system route — works through the
+    existing phone path already) / Glasses PCM
+  - **Vision:** Phone camera (continuous 1 fps) / Glasses photo-trigger
+  - **Audio out (TTS):** system route (phone/earbuds) / Glasses speaker
+    (explicit A2DP opt-in)
+- Flagship combos: **all-glasses** (long-press-to-talk) and
+  **earbuds-voice + glasses-camera** (hands-free listening via existing
+  mode; glasses stay unbonded → no assistant-chooser, camera-only battery).
+- Implement `lib/capture/glasses_capture_source.dart` providing the
+  glasses-backed options; Live screen in glasses-vision mode shows a status
+  card (connected/worn/battery + last AI photo) instead of a preview.
 - Audio: PCM stream → existing 16 kHz pipeline (zero resampling).
-  Video: no continuous frames — source reports photo-trigger capability;
-  Live screen shows "glasses mode" placeholder instead of preview.
 - Auto-connect on selection (saved MAC, no scan), foreground service on.
-- Exit: live session runs end-to-end with glasses mic; phone mode untouched.
+- Exit: live session runs with each combo (all-phone, all-glasses,
+  earbuds+glasses); phone-only mode untouched.
 
 ### B2 — Voice pipeline (1.5 wk)
 - Long-press gesture (0x03) = talk trigger: mic-on event → stream PCM to
@@ -65,7 +75,11 @@ the existing `CaptureSource` seam.
 - Exit: 8 Camera-to-Action tools work by voice on glasses.
 
 ### B4 — Ambient UX (1 wk)
-- Wear events: take-off → pause listening/session; put-on → resume.
+- Wear events: take-off → pause listening/session; put-on → resume — and
+  **auto device-switch**: wear-on flips audio/vision to glasses, wear-off
+  falls back to phone/earbuds (silent mode change, one-line status toast).
+- Voice mode-switch intent: "Farry, glasses mode / phone mode" → backend
+  tool → hot-swap the selectors at runtime.
 - Volume voice-commands ("volume badhao") → cached setVolumeControl path.
 - Auto-sync policy: on connect + on memory-full (0x0e) + nightly; synced
   media → gallery (already built).
