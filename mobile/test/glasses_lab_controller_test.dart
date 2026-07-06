@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 class _FakeBridge implements GlassesBridgeApi {
   final calls = <String>[];
   final eventController = StreamController<GlassesLabEvent>.broadcast();
+  Map<String, Object?> bridgeInfoExtra = const {};
   List<GlassesDeviceHit> scanResult = const [
     GlassesDeviceHit(name: 'L801-TEST', mac: 'AA:BB', rssi: -50),
   ];
@@ -29,7 +30,11 @@ class _FakeBridge implements GlassesBridgeApi {
   @override
   Future<Map<String, Object?>> bridgeInfo() async {
     await _maybeFail('bridgeInfo');
-    return {'implementation': 'stub', 'sdkVersion': 'sim-1.0'};
+    return {
+      'implementation': 'stub',
+      'sdkVersion': 'sim-1.0',
+      ...bridgeInfoExtra,
+    };
   }
 
   @override
@@ -233,6 +238,19 @@ void main() {
     expect(bridge.calls.where((c) => c == 'startWifiSync'), isEmpty);
     expect(denied.events.last.type, 'error');
     denied.dispose();
+  });
+
+  test('bridgeInfo lastMac seeds the device list for instant connect',
+      () async {
+    final remembering = _FakeBridge()
+      ..bridgeInfoExtra = {'lastMac': 'C0:97', 'lastName': 'L802_2B1D'};
+    final c = GlassesLabController(remembering);
+    await pump();
+    expect(c.devices, hasLength(1));
+    expect(c.devices.first.mac, 'C0:97');
+    expect(c.devices.first.name, 'L802_2B1D (saved)');
+    c.dispose();
+    await remembering.eventController.close();
   });
 
   test('mediaCount event fills the glasses-memory counters', () async {

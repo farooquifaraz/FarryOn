@@ -21,6 +21,7 @@ import java.util.UUID
  */
 class GlassesChannels private constructor(
     private val sdk: GlassesSdk,
+    private val appContext: Context?,
 ) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
 
     companion object {
@@ -33,7 +34,7 @@ class GlassesChannels private constructor(
             messenger: BinaryMessenger,
             appContext: Context? = null,
         ): GlassesChannels {
-            val channels = GlassesChannels(createSdk(appContext))
+            val channels = GlassesChannels(createSdk(appContext), appContext)
             MethodChannel(messenger, "com.farryon/glasses")
                 .setMethodCallHandler(channels)
             EventChannel(messenger, "com.farryon/glasses/events")
@@ -77,12 +78,21 @@ class GlassesChannels private constructor(
         android.util.Log.i("GlassesLab", "cmd ${call.method} ${call.arguments ?: ""}")
         try {
             when (call.method) {
-                "bridgeInfo" -> result.success(
-                    mapOf(
-                        "implementation" to sdk.implementationName,
-                        "sdkVersion" to sdk.sdkVersion,
+                "bridgeInfo" -> {
+                    // Last-connected device → the Lab can offer instant
+                    // Connect without a scan.
+                    val prefs = appContext?.getSharedPreferences(
+                        "glasses_lab", Context.MODE_PRIVATE
                     )
-                )
+                    result.success(
+                        mapOf(
+                            "implementation" to sdk.implementationName,
+                            "sdkVersion" to sdk.sdkVersion,
+                            "lastMac" to prefs?.getString("last_mac", null),
+                            "lastName" to prefs?.getString("last_name", null),
+                        )
+                    )
+                }
                 "scan" -> {
                     val timeoutMs = (call.argument<Number>("timeoutMs") ?: 8000).toLong()
                     sdk.scan(timeoutMs) { hits -> result.success(hits) }

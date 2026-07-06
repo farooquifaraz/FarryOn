@@ -104,6 +104,18 @@ class GlassesLabController extends ChangeNotifier {
         final info = await _bridge.bridgeInfo();
         bridgeImplementation = (info['implementation'] as String?) ?? 'unknown';
         sdkVersion = (info['sdkVersion'] as String?) ?? '';
+        // Last-connected device: list it instantly so Connect works without
+        // waiting out an 8 s scan (a scan replaces this with live results).
+        final lastMac = info['lastMac'] as String?;
+        if (lastMac != null && devices.isEmpty) {
+          devices = [
+            GlassesDeviceHit(
+              name: '${info['lastName'] ?? 'L801'} (saved)',
+              mac: lastMac,
+              rssi: 0,
+            ),
+          ];
+        }
       });
 
   // -- Actions ----------------------------------------------------------------

@@ -291,6 +291,20 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             // listener + time sync + auto-reconnect only AFTER services are
             // discovered — once per transition, not on every re-broadcast.
             if (!wasConnected) {
+                // Remember the device: the Lab lists it instantly on next
+                // open so Connect works without an 8 s scan (guide §3:
+                // saved MAC + connectDirectly).
+                app.getSharedPreferences("glasses_lab", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(
+                        "last_mac",
+                        pendingMac ?: DeviceManager.getInstance().deviceAddress,
+                    )
+                    .putString(
+                        "last_name",
+                        DeviceManager.getInstance().deviceName ?: "L801",
+                    )
+                    .apply()
                 LargeDataHandler.getInstance()
                     .addOutDeviceListener(100, notifyListener)
                 LargeDataHandler.getInstance().syncTime { _, _ -> }
