@@ -161,7 +161,11 @@
       range out→in: 40 s (incl. walk-back). With 10-cycle stress (11/11,
       median 2.5 s) → **3.1 PASS**.
 - [ ] 3.3 thumbnails → Gemini recognition:
-- [ ] 3.5 TTS at volume min/mid/max:
+- [x] 3.5 TTS at volume min/mid/max (2026-07-06): **clear at all three
+      levels** (Faraz's ear-verdict) — no distortion at max. UX note: the
+      touch-slide needs many swipes; added an app-side volume slider
+      (setVolumeControl) — pending hardware verify — which is also the
+      Stage B voice-command volume path.
 - [ ] 3.6 edge cases: BT-off ✅ / permission deny / battery die / incoming
       call / 10-min background:
 - [ ] 3.7 battery drain 15-min heavy:
