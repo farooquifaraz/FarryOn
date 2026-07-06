@@ -161,7 +161,19 @@
       action. Glasses off→on: 46 s end-to-end (incl. glasses boot);
       range out→in: 40 s (incl. walk-back). With 10-cycle stress (11/11,
       median 2.5 s) → **3.1 PASS**.
-- [ ] 3.3 thumbnails → Gemini recognition:
+- [x] 3.3 thumbnails → AI recognition (2026-07-07, 5 real thumbnails
+      512×384, 15–33 KB, vision-model identification): **5/5 recognized.**
+      1. Desk monitor showing a dark-theme coding UI + wall switch — scene ✓
+      2. Laptop w/ code editor, steel tumbler, Logitech mouse, remote,
+         marble-print table, teal curtains — every object ✓
+      3. "SMART GLASSES" retail box — **printed text read verbatim** ✓,
+         glasses + phone (Glasses Lab on screen!) also identified
+      4. Split-AC unit over curtains + ceiling light ✓
+      5. Living room: boy in red #7 jersey, TV, wall clock, plants, bed ✓
+      Verdict: object/scene/product recognition EXCELLENT at thumbnail
+      quality; large printed text readable; FINE print (receipt lines) will
+      need the full-res WiFi path — matches the Stage B two-tier design
+      (thumbnail = fast answers, full-res = documents).
 - [x] 3.5 TTS at volume min/mid/max (2026-07-06): **clear at all three
       levels** (Faraz's ear-verdict) — no distortion at max. UX note: the
       touch-slide needs many swipes; added an app-side volume slider
@@ -186,7 +198,23 @@
       Standby+BLE is effectively free; heavier continuous use (video, long
       PCM) still untested. 10-min background survival ✅ (link + battery
       events flowed throughout) → 3.6 background item done.
-- [ ] 3.8 Live-screen regression:
+- [x] 3.8 Live-screen regression (2026-07-07): voice + camera + text all
+      normal after all glasses changes; 68/68 tests green. PASS.
+
+### Stage B GO/NO-GO recommendation (Stage A exit)
+
+**GO.** Audio input: SDK PCM confirmed 16 kHz/16-bit/mono over plain BLE
+(Whisper-ready, gesture start/stop signals included; HFP as quality
+fallback; TTS out via A2DP works). Vision: capture→thumbnail median
+3.8 s (21/21), thumbnail quality recognizes objects/scenes/products and
+large text (5/5); full-res via WiFi (~4 MB/s, 6560×4928) for documents.
+Connection: 13/13 reconnects incl. power-cycle/range/BT-toggle, all
+automatic; battery ≈free on BLE. Risks (managed): glasses WiFi off while
+charging + stale-P2P-needs-power-cycle (watchdogs + UX messages in place,
+vendor asked); taps not exposed (long-press+slide only); classic-BT bond
+triggers Android assistant chooser (Stage B: don't bond for input);
+remote mic open (aiVoiceWake) unanswered — vendor question. Nothing
+blocks Stage B; glasses-as-dumb-I/O architecture validated end-to-end.
 
 - [ ] Surprises / vendor doc se alag behaviour:
   - 2026-07-05 (first hardware session, Task 2.3):
