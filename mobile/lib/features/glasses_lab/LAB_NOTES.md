@@ -156,7 +156,10 @@
       inside the 3–5 s Camera-to-Action budget ⇒ **Photo-Trigger Vision
       viable**. Thumbnails 14.7–33.5 KB (scene-dependent).
       Optional lever if Stage B wants speed: thumbnailSize 0x02→0x01.
-- [ ] 3.1 variants (glasses off→on, range out→in):
+- [x] 3.1 variants (2026-07-06): both auto-reconnected with ZERO user
+      action. Glasses off→on: 46 s end-to-end (incl. glasses boot);
+      range out→in: 40 s (incl. walk-back). With 10-cycle stress (11/11,
+      median 2.5 s) → **3.1 PASS**.
 - [ ] 3.3 thumbnails → Gemini recognition:
 - [ ] 3.5 TTS at volume min/mid/max:
 - [ ] 3.6 edge cases: BT-off ✅ / permission deny / battery die / incoming
