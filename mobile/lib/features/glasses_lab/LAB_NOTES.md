@@ -167,7 +167,10 @@
       (setVolumeControl) — pending hardware verify — which is also the
       Stage B voice-command volume path.
 - [~] 3.6 edge cases: BT-off ✅ / permission deny ✅ (red banner, no crash) /
-      battery die ⬜ / incoming call ⬜ / 10-min background ⬜.
+      incoming call ✅ (PCM session through a call: no crash, link survived,
+      clean stop — 2026-07-06 23:03) / battery die ⬜ (note when natural) /
+      10-min background ⬜ (folds into 3.7).
+      Quick-connect verified live: saved device → connected in 6 s, no scan.
       **IMPORTANT finding (2026-07-06):** when the glasses are classic-BT
       bonded (A2DP, from the TTS/HFP test), a long-press ALSO sends Android a
       voice-assistant key → the "Complete action using Bixby/Google" chooser
