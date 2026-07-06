@@ -1179,8 +1179,43 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         )
     }
 
-    override fun setVolume(type: String, level: Int) =
-        notWired("setVolume:$type=$level", "2.5b")
+    /**
+     * App-side volume (0–100 %) — reads the current control block, rewrites
+     * only the requested channel, sends it back. This is also the Stage B
+     * "Farry, volume badhao" voice-command path.
+     * Param order follows getVolumeControl's field order (music/call/system
+     * min-max-curr + mode) — hardware-verify.
+     */
+    override fun setVolume(type: String, level: Int) {
+        Log.i(TAG, "setVolume $type=$level")
+        LargeDataHandler.getInstance().getVolumeControl { _, rsp ->
+            if (rsp == null) {
+                emit("deviceEvent", mapOf("hex" to "setVolume: no volume block from glasses"))
+                return@getVolumeControl
+            }
+            fun scaled(min: Int, max: Int) =
+                min + ((max - min) * level.coerceIn(0, 100)) / 100
+            val music =
+                if (type == "music") scaled(rsp.minVolumeMusic, rsp.maxVolumeMusic)
+                else rsp.currVolumeMusic
+            val call =
+                if (type == "call") scaled(rsp.minVolumeCall, rsp.maxVolumeCall)
+                else rsp.currVolumeCall
+            val system =
+                if (type == "system") scaled(rsp.minVolumeSystem, rsp.maxVolumeSystem)
+                else rsp.currVolumeSystem
+            LargeDataHandler.getInstance().setVolumeControl(
+                rsp.minVolumeMusic, rsp.maxVolumeMusic, music,
+                rsp.minVolumeCall, rsp.maxVolumeCall, call,
+                rsp.minVolumeSystem, rsp.maxVolumeSystem, system,
+                rsp.currVolumeType,
+            )
+            emit(
+                "deviceEvent",
+                mapOf("hex" to "setVolume $type=$level% → music=$music call=$call system=$system")
+            )
+        }
+    }
 
     private fun notWired(command: String, task: String) {
         emit("deviceEvent", mapOf("hex" to "$command → not wired yet (Task $task)"))

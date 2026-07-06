@@ -8,10 +8,20 @@ import 'lab_card.dart';
 /// which input path (Classic-BT HFP vs SDK `voiceFromGlasses` PCM) gives
 /// usable 16 kHz speech for the live pipeline, and does TTS play cleanly on
 /// the glasses speaker.
-class AudioCard extends StatelessWidget {
+class AudioCard extends StatefulWidget {
   const AudioCard(this.c, {super.key});
 
   final GlassesLabController c;
+
+  @override
+  State<AudioCard> createState() => _AudioCardState();
+}
+
+class _AudioCardState extends State<AudioCard> {
+  /// Local slider position (0–100 %); sent to the glasses on release.
+  double _volume = 50;
+
+  GlassesLabController get c => widget.c;
 
   @override
   Widget build(BuildContext context) {
@@ -72,7 +82,28 @@ class AudioCard extends StatelessWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Icon(Icons.volume_down, size: 18, color: Aurora.textMuted),
+              Expanded(
+                child: Slider(
+                  value: _volume,
+                  min: 0,
+                  max: 100,
+                  divisions: 10,
+                  label: '${_volume.round()}%',
+                  onChanged:
+                      connected ? (v) => setState(() => _volume = v) : null,
+                  onChangeEnd: connected
+                      ? (v) => c.setVolume('music', v.round())
+                      : null,
+                ),
+              ),
+              const Icon(Icons.volume_up, size: 18, color: Aurora.textMuted),
+            ],
+          ),
+          const SizedBox(height: 6),
           if (c.audioMode == 'pcm' || c.pcmChunks > 0)
             LabKv(
               'PCM stream',
