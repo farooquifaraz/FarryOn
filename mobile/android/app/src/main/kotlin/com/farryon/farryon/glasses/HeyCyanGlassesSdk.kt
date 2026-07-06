@@ -102,6 +102,84 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     private var classicBtReceiverRegistered = false
     private var lastWifiSpeedKbps = 0.0
 
+    /** Pending "still connecting?" check — cleared on connect/disconnect. */
+    private var connectWatchdog: Runnable? = null
+
+    private fun bluetoothEnabled(): Boolean =
+        (app.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)
+            ?.adapter?.isEnabled == true
+
+    private fun requestEnableBluetooth() {
+        try {
+            app.startActivity(
+                Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (e: Exception) {
+            // BLUETOOTH_CONNECT revoked or no dialog available — the console
+            // message already tells the user what to do.
+            Log.i(TAG, "enable-BT dialog failed: $e")
+        }
+    }
+
+    private fun armConnectWatchdog() {
+        cancelConnectWatchdog()
+        val r = Runnable {
+            if (lastConnectionState != "connected") {
+                emit(
+                    "deviceEvent",
+                    mapOf("hex" to "connect timeout (20 s) — glasses off / out of range?")
+                )
+                emitConnectionState("disconnected")
+            }
+        }
+        connectWatchdog = r
+        main.postDelayed(r, 20_000L)
+    }
+
+    private fun cancelConnectWatchdog() {
+        connectWatchdog?.let(main::removeCallbacks)
+        connectWatchdog = null
+    }
+
+    /**
+     * Phone-Bluetooth toggles mid-session (hit on-device 2026-07-06: user
+     * turned BT off right after Connect → UI hung on "connecting" silently).
+     * Sample/guide mapping: OFF → setBluetoothTurnOff(false); ON →
+     * setBluetoothTurnOff(true) + connectDirectly for auto-reattach.
+     */
+    private val btStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)) {
+                BluetoothAdapter.STATE_OFF -> {
+                    emit("deviceEvent", mapOf("hex" to "phone Bluetooth turned OFF"))
+                    cancelConnectWatchdog()
+                    try {
+                        BleOperateManager.getInstance().setBluetoothTurnOff(false)
+                    } catch (e: Exception) {
+                        Log.i(TAG, "setBluetoothTurnOff(false): $e")
+                    }
+                    emitConnectionState("disconnected")
+                }
+                BluetoothAdapter.STATE_ON -> {
+                    emit("deviceEvent", mapOf("hex" to "phone Bluetooth back ON"))
+                    try {
+                        BleOperateManager.getInstance().setBluetoothTurnOff(true)
+                    } catch (e: Exception) {
+                        Log.i(TAG, "setBluetoothTurnOff(true): $e")
+                    }
+                    val mac = pendingMac
+                    if (autoReconnectEnabled && !userDisconnected && mac != null) {
+                        emit("deviceEvent", mapOf("hex" to "auto-reconnecting to $mac"))
+                        BleOperateManager.getInstance().connectDirectly(mac)
+                        armConnectWatchdog()
+                    }
+                }
+            }
+        }
+    }
+
     /** Same folder the vendor sample uses ('DCIM_1') — synced media + PCM. */
     private val albumDir: File by lazy {
         File(app.getExternalFilesDir(null), "DCIM_1").apply { mkdirs() }
@@ -192,6 +270,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
 
         override fun onServiceDiscovered() {
+            cancelConnectWatchdog()
             if (userDisconnected) {
                 // Stale broadcast (or the link survived unBind) after the
                 // user chose disconnect — kill it again, emit nothing.
@@ -243,23 +322,12 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     override fun scan(timeoutMs: Long, onResult: (List<Map<String, Any?>>) -> Unit) {
         // Bluetooth off → scanning silently finds nothing (seen 2026-07-05).
         // Surface it in the console and pop the system enable dialog instead.
-        val adapter =
-            (app.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-        if (adapter?.isEnabled != true) {
+        if (!bluetoothEnabled()) {
             emit(
                 "deviceEvent",
                 mapOf("hex" to "Bluetooth is OFF — asking Android to enable it")
             )
-            try {
-                app.startActivity(
-                    Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            } catch (e: Exception) {
-                // BLUETOOTH_CONNECT revoked or no dialog available — the
-                // console line above still tells the user what to do.
-                Log.i(TAG, "enable-BT dialog failed: $e")
-            }
+            requestEnableBluetooth()
             main.post { onResult(emptyList()) }
             return
         }
@@ -328,6 +396,20 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
     override fun connect(mac: String) {
         Log.i(TAG, "connect $mac")
+        if (!bluetoothEnabled()) {
+            emit(
+                "deviceEvent",
+                mapOf("hex" to "Bluetooth is OFF — cannot connect; asking Android to enable")
+            )
+            requestEnableBluetooth()
+            // Reset the Lab's optimistic "connecting…" and remember the MAC —
+            // the BT-on broadcast auto-reconnects to it.
+            lastConnectionState = null
+            emitConnectionState("disconnected")
+            userDisconnected = false
+            pendingMac = mac
+            return
+        }
         val op = BleOperateManager.getInstance()
         if (op.isConnected && pendingMac != null && pendingMac != mac) {
             // Switching devices (seen on hardware: user connected to a TV,
@@ -343,10 +425,12 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         userDisconnected = false
         pendingMac = mac
         op.connectDirectly(mac)
+        armConnectWatchdog()
     }
 
     override fun disconnect() {
         Log.i(TAG, "disconnect (unBindDevice)")
+        cancelConnectWatchdog()
         // Verified on hardware 2026-07-05: setNeedConnect(false)+disconnect()
         // is NOT enough — the SDK re-attaches within seconds. unBindDevice()
         // (the sample's disconnect button and the PDF's mapping) is the real
@@ -908,6 +992,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         BleBaseControl.getInstance(app).setmContext(app)
         localBroadcast(register = true, bleReceiver, BleAction.getIntentFilter())
         receiverRegistered = true
+        // Adapter on/off is a protected system broadcast (mirrors the
+        // sample's BluetoothReceiver registration).
+        val btFilter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            app.registerReceiver(btStateReceiver, btFilter, Context.RECEIVER_EXPORTED)
+        } else {
+            app.registerReceiver(btStateReceiver, btFilter)
+        }
         // Guide §2.3: the notify listener (slot 100) registers AFTER
         // onServiceDiscovered, not here. Battery callback is a passive map
         // entry — safe to add up front.
@@ -926,9 +1018,15 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     }
 
     override fun dispose() {
+        cancelConnectWatchdog()
         stopAudioTest()
         tts?.shutdown()
         tts = null
+        try {
+            app.unregisterReceiver(btStateReceiver)
+        } catch (e: Exception) {
+            Log.i(TAG, "unregister btStateReceiver: $e")
+        }
         if (classicBtReceiverRegistered) {
             try {
                 app.unregisterReceiver(classicBtReceiver)
