@@ -1097,6 +1097,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             val elapsed = (SystemClock.elapsedRealtime() - photoStartMs).toInt()
             Log.i(TAG, "thumbnail complete: ${jpeg.size} bytes in $elapsed ms")
             if (jpeg.isNotEmpty()) {
+                // Persist for test 3.3 (thumbnail → AI recognition offline):
+                // exactly the bytes Stage B would send to Gemini Vision.
+                try {
+                    File(albumDir, "thumb_${System.currentTimeMillis()}.jpg")
+                        .writeBytes(jpeg)
+                } catch (e: Exception) {
+                    Log.i(TAG, "thumb save: $e")
+                }
                 emit(
                     "thumbnail",
                     mapOf(
