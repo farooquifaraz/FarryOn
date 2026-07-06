@@ -1080,7 +1080,23 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                             "vid=${rsp.videoCount} rec=${rsp.recordCount}"
                     )
                 )
-                main.post { proceed() }
+                val total = rsp.imageCount + rsp.videoCount + rsp.recordCount
+                if (total == 0) {
+                    // Verified 2026-07-06: a 0-file importAlbum still spins up
+                    // P2P, then errors out — skip the whole ceremony.
+                    proceeded = true
+                    syncActive = false
+                    emit(
+                        "syncProgress",
+                        mapOf(
+                            "file" to "nothing to sync — glasses empty ✓",
+                            "pct" to 100,
+                            "speedKbps" to 0.0,
+                        )
+                    )
+                } else {
+                    main.post { proceed() }
+                }
             }
         }
         main.postDelayed({
