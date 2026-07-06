@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -16,6 +17,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.MediaStore
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import com.oudmon.wifi.GlassesControl
@@ -655,7 +657,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
         override fun fileWasDownloadSuccessfully(
             entity: com.oudmon.wifi.bean.GlassAlbumEntity,
-        ) = emit("deviceEvent", mapOf("hex" to "downloaded → $entity"))
+        ) {
+            armSyncWatchdog()
+            emit("deviceEvent", mapOf("hex" to "downloaded ${entity.fileName}"))
+            exportToGallery(entity.filePath, entity.fileName)
+        }
 
         override fun fileCount(index: Int, total: Int) {
             armSyncWatchdog()
@@ -691,6 +697,60 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
         override fun recordingToPcmError(fileName: String, errorInfo: String) =
             emit("deviceEvent", mapOf("hex" to "recordingToPcm error $errorInfo"))
+    }
+
+    /**
+     * Every synced file is COPIED into the user's gallery automatically
+     * (MediaStore insert → DCIM/FarryOn) the moment its download completes.
+     * The SDK's private DCIM_1 copy stays untouched — it is the vendor's
+     * working set (media.config bookkeeping), so no cut/move.
+     */
+    private fun exportToGallery(path: String?, name: String?) {
+        if (path.isNullOrEmpty() || name.isNullOrEmpty()) return
+        Thread {
+            try {
+                val src = File(path)
+                if (!src.exists()) {
+                    Log.i(TAG, "gallery export: missing $path")
+                    return@Thread
+                }
+                val ext = name.substringAfterLast('.', "").lowercase()
+                val isVideo = ext in listOf("mp4", "avi", "mov")
+                val mime = when (ext) {
+                    "jpg", "jpeg" -> "image/jpeg"
+                    "png" -> "image/png"
+                    "mp4" -> "video/mp4"
+                    "avi" -> "video/x-msvideo"
+                    "mov" -> "video/quicktime"
+                    else -> {
+                        Log.i(TAG, "gallery export: skipping non-media $name")
+                        return@Thread
+                    }
+                }
+                val collection =
+                    if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                    else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, "DCIM/FarryOn")
+                    }
+                }
+                val uri = app.contentResolver.insert(collection, values)
+                    ?: return@Thread
+                app.contentResolver.openOutputStream(uri)?.use { out ->
+                    src.inputStream().use { it.copyTo(out) }
+                }
+                emit("deviceEvent", mapOf("hex" to "gallery ← $name"))
+            } catch (e: Exception) {
+                Log.i(TAG, "gallery export failed: $e")
+                emit(
+                    "deviceEvent",
+                    mapOf("hex" to "gallery export failed: ${e.message}")
+                )
+            }
+        }.start()
     }
 
     /**
