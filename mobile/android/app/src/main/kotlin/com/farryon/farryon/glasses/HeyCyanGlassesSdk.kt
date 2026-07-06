@@ -359,6 +359,16 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             } catch (e: Exception) {
                 // Scanner may already be stopped — the result list still counts.
             }
+            if (hits.isEmpty()) {
+                emit(
+                    "deviceEvent",
+                    mapOf(
+                        "hex" to "scan found no glasses — an already-connected/" +
+                            "busy L801 does not advertise; use the saved device " +
+                            "to connect directly, or power-cycle the glasses"
+                    )
+                )
+            }
             main.post { onResult(hits.values.toList()) }
         }
 

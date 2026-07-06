@@ -107,16 +107,20 @@ class GlassesLabController extends ChangeNotifier {
         // Last-connected device: list it instantly so Connect works without
         // waiting out an 8 s scan (a scan replaces this with live results).
         final lastMac = info['lastMac'] as String?;
-        if (lastMac != null && devices.isEmpty) {
-          devices = [
-            GlassesDeviceHit(
-              name: '${info['lastName'] ?? 'L801'} (saved)',
-              mac: lastMac,
-              rssi: 0,
-            ),
-          ];
+        if (lastMac != null) {
+          _savedDevice = GlassesDeviceHit(
+            name: '${info['lastName'] ?? 'L801'} (saved)',
+            mac: lastMac,
+            rssi: 0,
+          );
+          if (devices.isEmpty) devices = [_savedDevice!];
         }
       });
+
+  /// Remembered device — survives empty scans (an already-connected L801
+  /// does not advertise, so a scan can come back empty while direct
+  /// connect still works).
+  GlassesDeviceHit? _savedDevice;
 
   // -- Actions ----------------------------------------------------------------
 
@@ -133,7 +137,12 @@ class GlassesLabController extends ChangeNotifier {
         scanning = true;
         devices = const [];
         notifyListeners();
-        devices = await _bridge.scan();
+        final results = await _bridge.scan();
+        // Empty scan must not erase the saved device — busy glasses don't
+        // advertise, but direct connect to the saved MAC still works.
+        devices = results.isEmpty && _savedDevice != null
+            ? [_savedDevice!]
+            : results;
         scanning = false;
       });
 
