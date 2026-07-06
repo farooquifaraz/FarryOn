@@ -411,6 +411,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             return
         }
         val op = BleOperateManager.getInstance()
+        if (op.isConnected && pendingMac == mac && lastConnectionState == "connected") {
+            // Already connected to this device (hit on-device 2026-07-06:
+            // re-tapping Connect on a live link tore it down and the SDK
+            // needed a power-cycle to recover) — just re-assert the state.
+            Log.i(TAG, "already connected to $mac — re-emitting state")
+            emit("connectionState", mapOf("state" to "connected", "mac" to mac))
+            return
+        }
         if (op.isConnected && pendingMac != null && pendingMac != mac) {
             // Switching devices (seen on hardware: user connected to a TV,
             // then tapped the glasses): tear the old link down first or
@@ -1005,6 +1013,17 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         // entry — safe to add up front.
         LargeDataHandler.getInstance().addBatteryCallBack("glasses_lab") { _, resp ->
             if (resp != null) {
+                // Battery reports only flow over a live link — if the SDK
+                // reconnected silently (seen when the glasses woke on the
+                // charger, 2026-07-06, with no service-discovered broadcast),
+                // reflect the truth in the Lab.
+                if (lastConnectionState != "connected" && !userDisconnected) {
+                    cancelConnectWatchdog()
+                    emitConnectionState(
+                        "connected",
+                        pendingMac ?: DeviceManager.getInstance().deviceAddress,
+                    )
+                }
                 emit(
                     "battery",
                     mapOf("pct" to resp.battery, "charging" to resp.isCharging)

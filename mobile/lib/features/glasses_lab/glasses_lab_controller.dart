@@ -198,7 +198,13 @@ class GlassesLabController extends ChangeNotifier {
     switch (event.type) {
       case 'connectionState':
         connectionState = (event.data['state'] as String?) ?? connectionState;
-        if (connectionState == 'disconnected') connectedMac = null;
+        if (connectionState == 'disconnected') {
+          connectedMac = null;
+        } else if (event.data['mac'] is String) {
+          // Auto-reconnects arrive without a preceding connect() call — the
+          // "this device" pill must still follow the event's MAC.
+          connectedMac = event.data['mac'] as String;
+        }
       case 'battery':
         batteryPct = (event.data['pct'] as num?)?.toInt();
         charging = event.data['charging'] == true;
