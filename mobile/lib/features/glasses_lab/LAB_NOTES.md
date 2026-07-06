@@ -126,3 +126,12 @@
     - The SDK re-broadcasts service-discovered every ~2.5 s on a live link →
       "connected" spam in the console. Now deduped to transitions only (raw
       callbacks still in logcat, tag `GlassesLab`).
+  - 2026-07-06 (BT-toggle session):
+    - Phone-BT off/on mid-session handled: off → instant disconnected+notice;
+      on → auto-reconnect in ~11 s. Verified on device.
+    - `connectDirectly()` on an ALREADY-connected link TEARS IT DOWN and the
+      SDK then fails repeated reconnects until the glasses power-cycle/charge.
+      Guarded: re-tapping Connect on the live device is now a no-op.
+    - The SDK can reconnect silently (glasses woke on charger) with NO
+      service-discovered broadcast — only battery callbacks betray the live
+      link. The bridge now infers "connected" from battery traffic.
