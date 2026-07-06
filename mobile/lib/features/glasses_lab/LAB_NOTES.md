@@ -147,6 +147,23 @@
       Hypothesis: reporting must be enabled first via
       `LargeDataHandler.wearCheck(enable, ...)` (API exists in the .aar) —
       test in a follow-up session; matters for Stage B auto-sleep.
+## Sprint 3 (hardware verification)
+
+- [x] 3.2 Thumbnail latency benchmark (2026-07-06): **21 samples, 21/21
+      success.** Today's 16: 3107–4509 ms (median 3803); combined with the
+      first 5: **median 3830 ms, min 3107, max 4564** — consistently
+      3.1–4.6 s, no outliers/failures. Above the 3 s card target, comfortably
+      inside the 3–5 s Camera-to-Action budget ⇒ **Photo-Trigger Vision
+      viable**. Thumbnails 14.7–33.5 KB (scene-dependent).
+      Optional lever if Stage B wants speed: thumbnailSize 0x02→0x01.
+- [ ] 3.1 variants (glasses off→on, range out→in):
+- [ ] 3.3 thumbnails → Gemini recognition:
+- [ ] 3.5 TTS at volume min/mid/max:
+- [ ] 3.6 edge cases: BT-off ✅ / permission deny / battery die / incoming
+      call / 10-min background:
+- [ ] 3.7 battery drain 15-min heavy:
+- [ ] 3.8 Live-screen regression:
+
 - [ ] Surprises / vendor doc se alag behaviour:
   - 2026-07-05 (first hardware session, Task 2.3):
     - Device info: btFirmware `AM01L2_2.00.00_260114`, btHardware `AM01L2_V2.0`,
