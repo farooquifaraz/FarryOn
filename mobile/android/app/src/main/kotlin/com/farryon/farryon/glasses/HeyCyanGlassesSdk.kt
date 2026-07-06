@@ -552,11 +552,25 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                             0x0d -> "unbindApp"
                             0x0e -> "glasses storage FULL"
                             0x10 -> "translationPause"
-                            0x12 -> "TOUCH slide → volume " +
-                                "music=${load.getOrNull(10)?.toInt()}/" +
-                                "${load.getOrNull(9)?.toInt()} " +
-                                "system=${load.getOrNull(18)?.toInt()}/" +
-                                "${load.getOrNull(17)?.toInt()}"
+                            0x12 -> {
+                                // Volume-change reports carry the full block
+                                // — prime the cache so app-side setVolume is
+                                // a single write.
+                                if (load.size > 19) {
+                                    volCache = intArrayOf(
+                                        load[8].toInt(), load[9].toInt(),
+                                        load[10].toInt(), load[12].toInt(),
+                                        load[13].toInt(), load[14].toInt(),
+                                        load[16].toInt(), load[17].toInt(),
+                                        load[18].toInt(), load[19].toInt(),
+                                    )
+                                }
+                                "TOUCH slide → volume " +
+                                    "music=${load.getOrNull(10)?.toInt()}/" +
+                                    "${load.getOrNull(9)?.toInt()} " +
+                                    "system=${load.getOrNull(18)?.toInt()}/" +
+                                    "${load.getOrNull(17)?.toInt()}"
+                            }
                             else -> "unknown"
                         }
                         emit(
@@ -1180,40 +1194,55 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     }
 
     /**
-     * App-side volume (0–100 %) — reads the current control block, rewrites
-     * only the requested channel, sends it back. This is also the Stage B
-     * "Farry, volume badhao" voice-command path.
-     * Param order follows getVolumeControl's field order (music/call/system
-     * min-max-curr + mode) — hardware-verify.
+     * App-side volume (0–100 %) — Stage B's "Farry, volume badhao" path.
+     * The volume block is CACHED (primed by 0x12 events and the first get)
+     * so a slider release is ONE BLE write. The get path is single-shot
+     * guarded: the SDK's getVolumeControl callback is persistent and re-fires
+     * on every later volume packet (caused a 12-duplicate command storm,
+     * 2026-07-06).
      */
+    private var volCache: IntArray? = null
+
+    private fun writeVolume(type: String, level: Int, block: IntArray) {
+        fun scaled(min: Int, max: Int) =
+            min + ((max - min) * level.coerceIn(0, 100)) / 100
+        when (type) {
+            "music" -> block[2] = scaled(block[0], block[1])
+            "call" -> block[5] = scaled(block[3], block[4])
+            else -> block[8] = scaled(block[6], block[7])
+        }
+        LargeDataHandler.getInstance().setVolumeControl(
+            block[0], block[1], block[2], block[3], block[4],
+            block[5], block[6], block[7], block[8], block[9],
+        )
+        volCache = block
+        emit(
+            "deviceEvent",
+            mapOf(
+                "hex" to "setVolume $type=$level% → music=${block[2]} " +
+                    "call=${block[5]} system=${block[8]}"
+            )
+        )
+    }
+
     override fun setVolume(type: String, level: Int) {
         Log.i(TAG, "setVolume $type=$level")
+        val cached = volCache
+        if (cached != null) {
+            writeVolume(type, level, cached.copyOf())
+            return
+        }
+        var handled = false
         LargeDataHandler.getInstance().getVolumeControl { _, rsp ->
-            if (rsp == null) {
-                emit("deviceEvent", mapOf("hex" to "setVolume: no volume block from glasses"))
-                return@getVolumeControl
-            }
-            fun scaled(min: Int, max: Int) =
-                min + ((max - min) * level.coerceIn(0, 100)) / 100
-            val music =
-                if (type == "music") scaled(rsp.minVolumeMusic, rsp.maxVolumeMusic)
-                else rsp.currVolumeMusic
-            val call =
-                if (type == "call") scaled(rsp.minVolumeCall, rsp.maxVolumeCall)
-                else rsp.currVolumeCall
-            val system =
-                if (type == "system") scaled(rsp.minVolumeSystem, rsp.maxVolumeSystem)
-                else rsp.currVolumeSystem
-            LargeDataHandler.getInstance().setVolumeControl(
-                rsp.minVolumeMusic, rsp.maxVolumeMusic, music,
-                rsp.minVolumeCall, rsp.maxVolumeCall, call,
-                rsp.minVolumeSystem, rsp.maxVolumeSystem, system,
+            if (handled || rsp == null) return@getVolumeControl
+            handled = true
+            val block = intArrayOf(
+                rsp.minVolumeMusic, rsp.maxVolumeMusic, rsp.currVolumeMusic,
+                rsp.minVolumeCall, rsp.maxVolumeCall, rsp.currVolumeCall,
+                rsp.minVolumeSystem, rsp.maxVolumeSystem, rsp.currVolumeSystem,
                 rsp.currVolumeType,
             )
-            emit(
-                "deviceEvent",
-                mapOf("hex" to "setVolume $type=$level% → music=$music call=$call system=$system")
-            )
+            main.post { writeVolume(type, level, block) }
         }
     }
 
