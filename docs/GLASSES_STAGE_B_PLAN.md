@@ -25,15 +25,24 @@ the existing `CaptureSource` seam.
 
 ## Phases (~6–8 weeks total)
 
-### B0 — Bridge graduation prep (0.5 wk)
-- Move `glasses/` Kotlin bridge behind a production-grade API: split
-  `HeyCyanGlassesSdk` into connection/audio/vision services; keep the Lab
-  working against the same code (Lab stays the debug bench).
-- Incorporate Tina's answers (remote mic `aiVoiceWake`, charging-WiFi block,
-  P2P reset). Design fallbacks assuming NO vendor fixes.
-- Exit: Lab regression green on refactored bridge.
+### B0 — Bridge graduation prep — DONE (2026-07-07)
+- B0.1 ✅ `pcmChunk` events now carry the real PCM bytes (voice pipeline
+  can consume audio) — commit c6ecc52.
+- **Decision (Faraz, 2026-07-07): the bridge SERVICE-SPLIT moves into B1.**
+  Reason: the 1385-line `HeyCyanGlassesSdk` is hardware-verified as-is;
+  splitting it in a vacuum forces a full device-regression for zero new
+  behaviour. In B1 the real consumer (GlassesCaptureSource) reveals where
+  the seams actually belong, so the split is cheaper and correct there.
+- Tina's answers (remote mic `aiVoiceWake`, charging-WiFi, P2P reset) fold
+  in whenever they arrive; B1+ designs fallbacks assuming NO vendor fixes.
 
-### B1 — Split capture seam + GlassesCaptureSource (1.5 wk)
+### B1 — Bridge split + capture seam + GlassesCaptureSource (2 wk)
+- **First: split `HeyCyanGlassesSdk` into services** (folded from B0) —
+  `GlassesConnection` (scan/connect/reconnect/watchdogs/BT-state),
+  `GlassesAudio` (PCM/HFP/TTS/volume), `GlassesVision` (photo/thumbnail/
+  WiFi-sync/gallery). Shared event bus + main-thread marshalling stay
+  central. Lab keeps working against the same services (debug bench).
+  Gate: Lab hardware regression green before touching the seam.
 - **Design change (Faraz, 2026-07-07): "capture device" is not one device.**
   Split the seam into three independent selectors, mix-and-match:
   - **Audio in:** Phone mic / BT earbuds (system route — works through the
