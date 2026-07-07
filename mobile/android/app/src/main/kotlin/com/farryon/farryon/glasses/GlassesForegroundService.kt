@@ -66,7 +66,7 @@ class GlassesForegroundService : Service() {
                 Notification.Builder(this)
             })
                 .setSmallIcon(applicationInfo.icon)
-                .setContentTitle("FarryOn glasses connected")
+                .setContentTitle("Farry glasses connected")
                 .setContentText("$device — link active")
                 .setOngoing(true)
                 .build()

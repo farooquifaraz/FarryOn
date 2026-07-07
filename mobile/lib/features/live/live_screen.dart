@@ -159,9 +159,9 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
         title: const Text('Permissions needed'),
         content: Text(
           permanent
-              ? 'FarryOn needs the microphone and camera. Please enable them in '
+              ? 'Farry needs the microphone and camera. Please enable them in '
                   'Settings to use voice and vision.'
-              : 'FarryOn needs the microphone and camera to see and hear. '
+              : 'Farry needs the microphone and camera to see and hear. '
                   'Please allow access.',
         ),
         actions: [

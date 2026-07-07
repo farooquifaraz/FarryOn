@@ -411,7 +411,7 @@ class _ChatSessionScreen extends StatelessWidget {
                     : CrossAxisAlignment.start,
                 children: [
                   Text(
-                    isUser ? 'You' : 'FarryOn',
+                    isUser ? 'You' : 'Farry',
                     style: TextStyle(
                       color: isUser ? Aurora.mint : Aurora.tealInk,
                       fontSize: 11,

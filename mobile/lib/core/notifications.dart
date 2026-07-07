@@ -23,7 +23,7 @@ class Notifications {
     android: AndroidNotificationDetails(
       _channelId,
       'Reminders',
-      channelDescription: 'FarryOn task reminders',
+      channelDescription: 'Farry task reminders',
       importance: Importance.max,
       priority: Priority.high,
       // White silhouette of the app mark — Android tints the small icon, so a
@@ -49,7 +49,7 @@ class Notifications {
         const AndroidNotificationChannel(
           _channelId,
           'Reminders',
-          description: 'FarryOn task reminders',
+          description: 'Farry task reminders',
           importance: Importance.max,
         ),
       );

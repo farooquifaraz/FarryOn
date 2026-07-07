@@ -976,7 +976,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
     private fun speakSample(engine: TextToSpeech) {
         val spoken = engine.speak(
-            "Hello Faraz. This is FarryOn speaking through your smart glasses. " +
+            "Hello Faraz. This is Farry speaking through your smart glasses. " +
                 "If you can hear this clearly, the audio output path works.",
             TextToSpeech.QUEUE_FLUSH, null, "glasses_lab_tts",
         )

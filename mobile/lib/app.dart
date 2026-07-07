@@ -10,7 +10,7 @@ class FarryOnApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'FarryOn',
+      title: 'Farry',
       debugShowCheckedModeBanner: false,
       theme: Aurora.theme(),
       home: const LiveScreen(),
