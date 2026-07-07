@@ -74,7 +74,8 @@ class LiveSessionState {
     this.cameraZoom = 1.0,
     this.transcripts = const [],
     this.tools = const [],
-    this.deviceKind = 'phone',
+    this.audioKind = 'phone',
+    this.videoKind = 'phone',
     this.lastError,
     this.permissionsGranted = false,
   });
@@ -104,8 +105,16 @@ class LiveSessionState {
   /// Tool activity, most-recent last.
   final List<ToolActivity> tools;
 
-  /// Active capture device kind (for the UI badge).
-  final String deviceKind;
+  /// Device supplying the microphone (for the UI badge).
+  final String audioKind;
+
+  /// Device supplying the camera (for the UI badge).
+  final String videoKind;
+
+  /// Combined label for the status badge: one name when both channels share a
+  /// device, otherwise `audio+video`.
+  String get deviceKind =>
+      audioKind == videoKind ? audioKind : '$audioKind+$videoKind';
 
   /// Last non-fatal error message for a transient banner, if any.
   final String? lastError;
@@ -124,7 +133,8 @@ class LiveSessionState {
     double? cameraZoom,
     List<TranscriptEntry>? transcripts,
     List<ToolActivity>? tools,
-    String? deviceKind,
+    String? audioKind,
+    String? videoKind,
     String? lastError,
     bool clearError = false,
     bool? permissionsGranted,
@@ -138,7 +148,8 @@ class LiveSessionState {
         cameraZoom: cameraZoom ?? this.cameraZoom,
         transcripts: transcripts ?? this.transcripts,
         tools: tools ?? this.tools,
-        deviceKind: deviceKind ?? this.deviceKind,
+        audioKind: audioKind ?? this.audioKind,
+        videoKind: videoKind ?? this.videoKind,
         lastError: clearError ? null : (lastError ?? this.lastError),
         permissionsGranted: permissionsGranted ?? this.permissionsGranted,
       );

@@ -123,15 +123,17 @@ class LiveNotifier extends Notifier<LiveSessionState> {
       _controller.setCameraPortrait(portrait);
   Future<void> setCameraZoom(double level) =>
       _controller.setCameraZoom(level);
-  Future<void> switchDevice(CaptureDeviceKind kind) =>
-      _controller.switchDevice(kind);
+  Future<void> setAudioDevice(CaptureDeviceKind kind) =>
+      _controller.setAudioDevice(kind);
+  Future<void> setVideoDevice(CaptureDeviceKind kind) =>
+      _controller.setVideoDevice(kind);
   void respondToolPermission(String id, bool granted) =>
       _controller.respondToolPermission(id, granted);
   void dismissError() => _controller.dismissError();
 
-  /// The currently active capture source (for the camera preview widget).
+  /// The current camera source (for the camera preview widget).
   CaptureSource get activeSource =>
-      ref.read(deviceRegistryProvider).active;
+      ref.read(deviceRegistryProvider).videoSource;
 }
 
 /// Primary UI entry point: the live session state + intents.

@@ -148,8 +148,26 @@ class LiveController {
     if (!_stateController.isClosed) _stateController.add(next);
   }
 
-  CaptureSource get _activeSource => _registry.active;
-  DeviceInfo _activeDeviceInfo() => _activeSource.info;
+  CaptureSource get _audioSource => _registry.audioSource;
+  CaptureSource get _videoSource => _registry.videoSource;
+
+  /// Composite `hello.device`: the mic comes from the audio source, the camera
+  /// from the video source (B1-B: they can be different devices). We advertise
+  /// the union of what each channel can actually produce.
+  DeviceInfo _activeDeviceInfo() {
+    final a = _registry.audioKind;
+    final v = _registry.videoKind;
+    final kind = a == v ? a.name : '${a.name}+${v.name}';
+    return DeviceInfo(
+      kind: kind,
+      id: a == v ? _audioSource.info.id : '${_audioSource.info.id}/${_videoSource.info.id}',
+      capabilities: [
+        if (_audioSource.capabilities.audioIn) 'audio_in',
+        if (_videoSource.capabilities.videoIn) 'video_in',
+        'audio_out',
+      ],
+    );
+  }
 
   // ---- Lifecycle ---------------------------------------------------------
 
@@ -159,7 +177,8 @@ class LiveController {
     final outcome = await _permissions.requestMicAndCamera();
     _emit(_state.copyWith(
       permissionsGranted: outcome == PermissionOutcome.granted,
-      deviceKind: _registry.activeKind.name,
+      audioKind: _registry.audioKind.name,
+      videoKind: _registry.videoKind.name,
     ));
     if (outcome != PermissionOutcome.granted) {
       _log.warn('permissions not granted: $outcome');
@@ -167,7 +186,12 @@ class LiveController {
     }
 
     await _player.initialize();
-    await _activeSource.initialize();
+    await _audioSource.initialize();
+    // If the camera is a different device, initialize it too (same instance is
+    // idempotent, so a double-init when both channels share a source is safe).
+    if (!identical(_videoSource, _audioSource)) {
+      await _videoSource.initialize();
+    }
     // Start the camera immediately so the preview is live and ~1 fps frames
     // begin flowing.
     await _startVideo();
@@ -808,9 +832,9 @@ class LiveController {
   // ---- Capture stream piping --------------------------------------------
 
   Future<void> _startAudio() async {
-    await _activeSource.startAudio();
+    await _audioSource.startAudio();
     await _audioSub?.cancel();
-    _audioSub = _activeSource.audio16k.listen((pcm) {
+    _audioSub = _audioSource.audio16k.listen((pcm) {
       // Half-duplex: never feed the mic while the assistant's TTS is still
       // playing out (covers the player's buffer drain after audio_end), so
       // automatic VAD can't re-trigger on its own voice.
@@ -822,13 +846,13 @@ class LiveController {
   Future<void> _stopAudio() async {
     await _audioSub?.cancel();
     _audioSub = null;
-    await _activeSource.stopAudio();
+    await _audioSource.stopAudio();
   }
 
   Future<void> _startVideo() async {
-    await _activeSource.startVideo();
+    await _videoSource.startVideo();
     await _videoSub?.cancel();
-    _videoSub = _activeSource.jpegFrames.listen((jpeg) {
+    _videoSub = _videoSource.jpegFrames.listen((jpeg) {
       // Always keep the freshest frame for the scan button / identify_image,
       // even while the assistant is speaking.
       _lastFrame = jpeg;
@@ -847,7 +871,7 @@ class LiveController {
     // Drop the cached frame so a later scan/identify can't run against a stale
     // scene from before the camera was turned off.
     _lastFrame = null;
-    await _activeSource.stopVideo();
+    await _videoSource.stopVideo();
     _emit(_state.copyWith(cameraOn: false));
   }
 
@@ -871,7 +895,7 @@ class LiveController {
     _cameraWasOn = _state.cameraOn;
     if (_state.cameraOn) {
       await _stopVideo();
-      await _activeSource.releaseCamera();
+      await _videoSource.releaseCamera();
       _emit(_state.copyWith(cameraOn: false));
     }
   }
@@ -889,7 +913,7 @@ class LiveController {
   /// Switch the camera preview/capture between portrait and landscape.
   Future<void> setCameraPortrait(bool portrait) async {
     if (portrait == _state.cameraPortrait) return;
-    await _activeSource.setPortrait(portrait);
+    await _videoSource.setPortrait(portrait);
     _emit(_state.copyWith(cameraPortrait: portrait));
   }
 
@@ -897,29 +921,37 @@ class LiveController {
   /// read-out and presets). Used by pinch, the preset chips, and the model's
   /// `set_camera_zoom` tool.
   Future<void> setCameraZoom(double level) async {
-    final applied = await _activeSource.setZoom(level);
+    final applied = await _videoSource.setZoom(level);
     _emit(_state.copyWith(cameraZoom: applied));
   }
 
-  // ---- Device switching (universal adapter) -----------------------------
+  // ---- Device switching (universal adapter, B1-B: per-channel) ----------
 
-  /// Switch the active capture device (phone ⇄ glasses). Stops streams on the
-  /// old source, re-initializes the new one, and resumes video. The socket
-  /// stays up; only the media origin changes, and the next `hello` (on any
-  /// reconnect) will advertise the new device.
-  Future<void> switchDevice(CaptureDeviceKind kind) async {
-    if (kind == _registry.activeKind) return;
-    _log.info('switching device → $kind');
+  /// Select the microphone device (phone/earbuds ⇄ glasses). Restarts only the
+  /// audio stream; the camera is untouched. The socket stays up; the next
+  /// `hello` advertises the new combo.
+  Future<void> setAudioDevice(CaptureDeviceKind kind) async {
+    if (kind == _registry.audioKind) return;
+    _log.info('audio device → $kind');
     final wasListening = _state.micOpen;
     await _stopAudio();
-    await _stopVideo();
-
-    _registry.switchTo(kind);
-    await _activeSource.initialize();
-
-    await _startVideo();
+    _registry.setAudioKind(kind);
+    await _audioSource.initialize();
     if (wasListening) await _startAudio();
-    _emit(_state.copyWith(deviceKind: kind.name));
+    _emit(_state.copyWith(audioKind: kind.name));
+  }
+
+  /// Select the camera device (phone ⇄ glasses). Restarts only the video
+  /// stream; audio is untouched.
+  Future<void> setVideoDevice(CaptureDeviceKind kind) async {
+    if (kind == _registry.videoKind) return;
+    _log.info('video device → $kind');
+    final wasOn = _state.cameraOn;
+    await _stopVideo();
+    _registry.setVideoKind(kind);
+    await _videoSource.initialize();
+    if (wasOn) await _startVideo();
+    _emit(_state.copyWith(videoKind: kind.name));
   }
 
   // ---- Config / reconnect target ----------------------------------------

@@ -327,13 +327,20 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
           mainAxisSize: MainAxisSize.min,
           children: [
             const ListTile(
-              title: Text('Capture device'),
-              subtitle: Text('Universal adapter — phone or smart glasses'),
+              title: Text('Capture devices'),
+              subtitle: Text(
+                  'Mic and camera pick independently — e.g. earbuds mic + glasses camera'),
+            ),
+            // --- Microphone ---
+            const ListTile(
+              dense: true,
+              leading: Icon(Icons.mic, color: Aurora.textMuted),
+              title: Text('Microphone'),
             ),
             RadioGroup<CaptureDeviceKind>(
-              groupValue: _kindFromName(state.deviceKind),
+              groupValue: _kindFromName(state.audioKind),
               onChanged: (value) {
-                if (value != null) notifier.switchDevice(value);
+                if (value != null) notifier.setAudioDevice(value);
                 Navigator.pop(context);
               },
               child: Column(
@@ -342,11 +349,41 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                   for (final kind in CaptureDeviceKind.values)
                     RadioListTile<CaptureDeviceKind>(
                       value: kind,
-                      title: Text(_deviceLabel(kind)),
-                      subtitle: kind == CaptureDeviceKind.glasses
-                          ? const Text('Stub — BLE/RTSP transport TODO')
-                          : null,
+                      dense: true,
+                      title: Text(kind == CaptureDeviceKind.phone
+                          ? 'Phone / earbuds mic'
+                          : 'Glasses mic (long-press to talk)'),
                     ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            // --- Camera ---
+            const ListTile(
+              dense: true,
+              leading: Icon(Icons.photo_camera, color: Aurora.textMuted),
+              title: Text('Camera'),
+            ),
+            RadioGroup<CaptureDeviceKind>(
+              groupValue: _kindFromName(state.videoKind),
+              onChanged: (value) {
+                if (value != null) notifier.setVideoDevice(value);
+                Navigator.pop(context);
+              },
+              child: const Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  RadioListTile<CaptureDeviceKind>(
+                    value: CaptureDeviceKind.phone,
+                    dense: true,
+                    title: Text('Phone camera (live 1 fps)'),
+                  ),
+                  RadioListTile<CaptureDeviceKind>(
+                    value: CaptureDeviceKind.glasses,
+                    dense: true,
+                    enabled: false,
+                    title: Text('Glasses camera (photo-trigger — coming in B3)'),
+                  ),
                 ],
               ),
             ),
@@ -397,11 +434,6 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
 
   static CaptureDeviceKind _kindFromName(String name) =>
       name == 'glasses' ? CaptureDeviceKind.glasses : CaptureDeviceKind.phone;
-
-  static String _deviceLabel(CaptureDeviceKind kind) => switch (kind) {
-        CaptureDeviceKind.phone => 'Phone (camera + mic)',
-        CaptureDeviceKind.glasses => 'Smart glasses',
-      };
 }
 
 /// The live, cloud-hosted FarryOn backend (Render). One tap fills these in so

@@ -6,21 +6,24 @@ import 'phone_capture_source.dart';
 /// The kinds of capture devices the app can switch between.
 enum CaptureDeviceKind { phone, glasses }
 
-/// Owns the set of available [CaptureSource]s and tracks the active one.
+/// Owns the set of available [CaptureSource]s and tracks the active ones.
 ///
 /// This is the switchboard for the universal device-adapter layer: the UI and
 /// controller ask the registry for the *active* source and never construct
-/// concrete sources themselves. Adding a new device type is a matter of
-/// teaching [create] (or registering an instance) about it.
+/// concrete sources themselves.
 ///
-/// Sources are created lazily and cached so switching back and forth doesn't
-/// re-acquire hardware unnecessarily. The registry disposes everything it
-/// created in [dispose].
+/// **B1-B: audio and vision are chosen independently.** The mic can come from
+/// one device (e.g. glasses PCM, or the phone/earbuds route) while the camera
+/// comes from another (e.g. the phone). [audioSource] and [videoSource] may be
+/// the same instance (both phone) or two different ones. Sources are created
+/// lazily and cached so a source that backs both channels is initialized once.
 class DeviceRegistry {
   DeviceRegistry({
-    CaptureDeviceKind initial = CaptureDeviceKind.phone,
+    CaptureDeviceKind audio = CaptureDeviceKind.phone,
+    CaptureDeviceKind video = CaptureDeviceKind.phone,
     CaptureSource Function(CaptureDeviceKind kind)? factory,
-  })  : _activeKind = initial,
+  })  : _audioKind = audio,
+        _videoKind = video,
         _factory = factory ?? _defaultFactory;
 
   static final _log = Logger('DeviceRegistry');
@@ -28,16 +31,23 @@ class DeviceRegistry {
   final CaptureSource Function(CaptureDeviceKind kind) _factory;
   final Map<CaptureDeviceKind, CaptureSource> _sources = {};
 
-  CaptureDeviceKind _activeKind;
+  CaptureDeviceKind _audioKind;
+  CaptureDeviceKind _videoKind;
 
-  /// The kind of the currently-selected device.
-  CaptureDeviceKind get activeKind => _activeKind;
+  /// Device supplying the microphone.
+  CaptureDeviceKind get audioKind => _audioKind;
+
+  /// Device supplying the camera.
+  CaptureDeviceKind get videoKind => _videoKind;
 
   /// All device kinds the registry knows how to create.
   List<CaptureDeviceKind> get availableKinds => CaptureDeviceKind.values;
 
-  /// The currently-active capture source (created on first access).
-  CaptureSource get active => _sourceFor(_activeKind);
+  /// The source backing the microphone (created on first access).
+  CaptureSource get audioSource => _sourceFor(_audioKind);
+
+  /// The source backing the camera (created on first access).
+  CaptureSource get videoSource => _sourceFor(_videoKind);
 
   CaptureSource _sourceFor(CaptureDeviceKind kind) =>
       _sources.putIfAbsent(kind, () {
@@ -45,13 +55,18 @@ class DeviceRegistry {
         return _factory(kind);
       });
 
-  /// Switch the active device. Returns the newly-active source. The previously
-  /// active source is left initialized but its streams should be stopped by the
-  /// controller before switching.
-  CaptureSource switchTo(CaptureDeviceKind kind) {
-    _activeKind = kind;
-    _log.info('active device → $kind');
-    return _sourceFor(kind);
+  /// Select the microphone device; returns the newly-active audio source.
+  CaptureSource setAudioKind(CaptureDeviceKind kind) {
+    _audioKind = kind;
+    _log.info('audio device → $kind');
+    return audioSource;
+  }
+
+  /// Select the camera device; returns the newly-active video source.
+  CaptureSource setVideoKind(CaptureDeviceKind kind) {
+    _videoKind = kind;
+    _log.info('video device → $kind');
+    return videoSource;
   }
 
   /// Dispose every source the registry instantiated.
