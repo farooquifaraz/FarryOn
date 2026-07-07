@@ -2,62 +2,50 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../core/logger.dart';
+import '../features/glasses_lab/bridge/glasses_channel.dart';
 import '../protocol/messages.dart';
 import 'capture_source.dart';
 
-/// Smart-glasses implementation of [CaptureSource] — **transport stub**.
+/// Smart-glasses implementation of [CaptureSource], backed by the real HeyCyan
+/// bridge (`com.farryon/glasses`) proven in Stage A — the same transport the
+/// Glasses Lab uses.
 ///
-/// This class exists today to prove and document the adapter seam: because the
-/// whole app talks to [CaptureSource] and nothing else, dropping in real glasses
-/// means filling in the transport here, with **zero** changes to the data,
-/// state, or UI layers.
+/// **Audio (B1):** the glasses mic streams PCM 16 kHz / 16-bit / mono over BLE
+/// (hardware-verified), exactly the [CaptureSource] contract — forwarded to
+/// [audio16k] with zero resampling. Note the glasses are **push-to-talk**:
+/// [startAudio] arms the PCM path but bytes only flow while the user
+/// long-presses the temple (voiceFromGlassesStatus 1→2). That matches the
+/// "long-press-to-talk" glasses combo.
 ///
-/// It compiles and behaves safely (its streams simply stay silent until a
-/// transport is wired), so it can be selected in the device registry for
-/// development without crashing.
-///
-/// ---------------------------------------------------------------------------
-/// TODO(transport): wire a real glasses transport. Likely shapes:
-///   * **BLE** (GATT): subscribe to an audio characteristic that streams Opus or
-///     PCM; transcode/resample to PCM16 mono 16 kHz before emitting on
-///     [audio16k]. Video over BLE is usually impractical — many glasses send
-///     periodic JPEG stills over a side channel.
-///   * **Wi-Fi / RTSP / WebRTC**: pull an A/V stream from the glasses' on-device
-///     server; decode audio → resample to 16 kHz → [audio16k]; grab key frames
-///     ~1 fps → downscale ≤ 1024 px → JPEG → [jpegFrames].
-///   * **Companion SDK**: many vendors ship a Flutter/native SDK; adapt its
-///     callbacks onto the two streams below.
-///
-/// In all cases the *only* job is to normalize device output into the
-/// [CaptureSource] contract: PCM16 LE mono 16 kHz audio chunks and ≤1024 px
-/// JPEG frames. The rest of FarryOn is already device-agnostic.
-/// ---------------------------------------------------------------------------
+/// **Vision:** the glasses do NOT produce a continuous 1 fps video stream —
+/// they are photo-trigger only (AI photo → BLE thumbnail, median 3.8 s). So
+/// [capabilities.videoIn] is false here; the split-seam vision selector +
+/// on-demand photo trigger arrive in B1-B / B3. [jpegFrames] stays silent.
 class GlassesCaptureSource implements CaptureSource {
   GlassesCaptureSource({
-    this.deviceId = 'glasses-stub',
-    this.endpoint,
-  });
+    this.deviceId = 'heycyan-l801',
+    GlassesBridgeApi? bridge,
+  }) : _bridge = bridge ?? GlassesChannel();
 
   static final _log = Logger('GlassesCapture');
 
   /// Stable identifier reported in `hello.device.id`.
   final String deviceId;
 
-  /// Transport address for the future implementation (BLE id, RTSP URL, …).
-  /// Currently informational only.
-  final String? endpoint;
+  final GlassesBridgeApi _bridge;
 
   final _audioController = StreamController<Uint8List>.broadcast();
   final _videoController = StreamController<Uint8List>.broadcast();
 
+  StreamSubscription<GlassesLabEvent>? _eventSub;
   bool _audioRunning = false;
-  bool _videoRunning = false;
+  String? _connectedMac;
 
   @override
   CaptureCapabilities get capabilities =>
-      // Most glasses provide mic + camera; many also have a speaker, but
-      // playback routing is out of scope for the stub.
-      const CaptureCapabilities(audioIn: true, videoIn: true);
+      // Audio-in only for now: glasses mic works; continuous video does not
+      // exist on this hardware (photo-trigger arrives via the vision selector).
+      const CaptureCapabilities(audioIn: true, videoIn: false);
 
   @override
   DeviceInfo get info => DeviceInfo(
@@ -74,59 +62,97 @@ class GlassesCaptureSource implements CaptureSource {
 
   @override
   Future<void> initialize() async {
-    // TODO(transport): establish the BLE/RTSP/SDK connection to [endpoint].
-    _log.info(
-      'glasses stub initialized (endpoint=$endpoint) — no transport yet',
-    );
+    // One event subscription for the source's lifetime: PCM bytes → audio,
+    // connection state tracked for auto-connect.
+    _eventSub ??= _bridge.events().listen(_onEvent, onError: (Object e) {
+      _log.warn('glasses event error: $e');
+    });
+    // Auto-connect to the last-paired glasses (saved MAC, no scan).
+    try {
+      final infoMap = await _bridge.bridgeInfo();
+      final lastMac = infoMap['lastMac'] as String?;
+      if (lastMac != null && lastMac.isNotEmpty) {
+        _log.info('glasses: auto-connecting to saved $lastMac');
+        await _bridge.connect(lastMac);
+      } else {
+        _log.info('glasses: no saved device — pick one in the Glasses Lab first');
+      }
+    } catch (e) {
+      _log.warn('glasses initialize failed: $e');
+    }
+  }
+
+  void _onEvent(GlassesLabEvent event) {
+    switch (event.type) {
+      case 'connectionState':
+        final state = event.data['state'] as String?;
+        _connectedMac =
+            state == 'connected' ? event.data['mac'] as String? : null;
+      case 'pcmChunk':
+        if (!_audioRunning) return;
+        final data = event.data['data'];
+        if (data is Uint8List && data.isNotEmpty) {
+          _audioController.add(data);
+        }
+    }
   }
 
   @override
   Future<void> startAudio() async {
-    // TODO(transport): subscribe to the device audio stream and forward
-    // resampled PCM16 mono 16 kHz chunks via `_audioController.add(...)`.
     _audioRunning = true;
-    _log.warn('startAudio: glasses transport not implemented — silent stream');
+    // Arm the glasses PCM path; bytes flow on long-press (push-to-talk).
+    try {
+      await _bridge.startAudioTest('pcm');
+      _log.info('glasses audio armed (long-press the temple to talk)');
+    } catch (e) {
+      _log.warn('glasses startAudio failed: $e');
+    }
   }
 
   @override
   Future<void> stopAudio() async {
     _audioRunning = false;
+    try {
+      await _bridge.stopAudioTest();
+    } catch (e) {
+      _log.warn('glasses stopAudio failed: $e');
+    }
   }
 
   @override
   Future<void> startVideo() async {
-    // TODO(transport): pull ~1 fps stills, downscale ≤1024px, JPEG-encode, then
-    // forward via `_videoController.add(...)`.
-    _videoRunning = true;
-    _log.warn('startVideo: glasses transport not implemented — silent stream');
+    // Photo-trigger only — no continuous stream. The vision selector + AI
+    // photo trigger land in B1-B / B3; jpegFrames stays silent here.
+    _log.info('glasses startVideo: photo-trigger only, no continuous stream');
   }
 
   @override
-  Future<void> stopVideo() async {
-    _videoRunning = false;
-  }
+  Future<void> stopVideo() async {}
 
   @override
   Future<void> releaseCamera() async {}
 
   @override
   Future<void> setPortrait(bool portrait) async {
-    // Orientation is fixed by the headset; nothing to do for the stub.
+    // Orientation is fixed by the headset.
   }
 
   @override
-  Future<double> setZoom(double level) async {
-    // TODO(transport): forward a zoom command to the glasses if supported.
-    return level < 1.0 ? 1.0 : level;
-  }
+  Future<double> setZoom(double level) async => level < 1.0 ? 1.0 : level;
 
-  /// Whether the (future) transport is currently streaming. Exposed for UI/debug.
+  /// Whether the glasses link is currently up (for UI/debug).
+  bool get isConnected => _connectedMac != null;
   bool get isAudioRunning => _audioRunning;
-  bool get isVideoRunning => _videoRunning;
 
   @override
   Future<void> dispose() async {
-    // TODO(transport): tear down the BLE/RTSP/SDK connection.
+    await _eventSub?.cancel();
+    _eventSub = null;
+    try {
+      await _bridge.disconnect();
+    } catch (_) {
+      // Best-effort teardown.
+    }
     await _audioController.close();
     await _videoController.close();
   }
