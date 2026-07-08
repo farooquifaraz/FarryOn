@@ -148,6 +148,28 @@
       arrive as notify **0x0a** with loadData[7]=1 (worn) — Lab emits
       `wearState {worn}`. The "mystery 0x0a" from 07-05 was a wear event all
       along. Stage B auto-sleep path is available.
+## Vendor answers (Tina, 2026-07-08) — authoritative
+
+- **Wear on/off = notify code 0x09** (NOT 0x0a). `wearCheck(true,true)` only
+  authorizes the feature; the notify listener (addOutDeviceListener) must be
+  registered to receive 0x09 — device reports it on every put-on/take-off.
+  load[7]==1 worn, 0 removed. Fixed in HeyCyanGlassesSdk (was mis-mapped 0x0a).
+- **0x0a** = internal HW-sensor debug (battery temp, touch idle) — not for
+  external SDKs. **0x0b** = periodic heartbeat the official app uses for
+  online/offline monitoring. Neither actionable.
+- **Remote mic (aiVoiceWake): NOT supported on firmware AM01L2_2.00.00_260114.**
+  Hardware-layer restriction — the mic PCM can ONLY be triggered by the
+  glasses long-press. aiVoiceWake(p1,p2): p1=voice-wake master switch,
+  p2=auto-enable AI recognition after wake; it only configures standby mode,
+  cannot pull the live mic stream (hence ack-only, no mic). ⇒ Stage B voice
+  from glasses is push-to-talk OR use phone/earbuds mic (wear-to-talk design).
+- **WiFi-P2P off while charging** = native power-saving (heat/battery); the
+  official app behaves the same; only removable via custom firmware. Our
+  watchdog + "take off charger" message is the correct handling.
+- **Stale P2P after interrupted sync**: no SDK WiFi-reset command; the
+  official app clears it by **disconnect + reconnect Bluetooth** (not a full
+  glasses power-cycle). Improvement: auto BT-reconnect before a sync retry.
+
 ## Sprint 3 (hardware verification)
 
 - [x] 3.2 Thumbnail latency benchmark (2026-07-06): **21 samples, 21/21
