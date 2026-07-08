@@ -116,6 +116,12 @@ class GlassesLabEvent {
 
 /// [MethodChannel]-backed implementation used by the app.
 class GlassesChannel implements GlassesBridgeApi {
+  /// One shared instance for the whole app: the native `events` EventChannel
+  /// has a single sink, so both [GlassesCaptureSource] and the live
+  /// controller's wear-watcher must listen to the SAME broadcast stream.
+  /// Lazy so nothing touches the platform channel until glasses are used.
+  static final GlassesChannel shared = GlassesChannel();
+
   /// [methodChannel] / [eventStream] are injectable for tests only.
   GlassesChannel({
     MethodChannel? methodChannel,

@@ -7,6 +7,7 @@ import '../core/config_store.dart';
 import '../data/data_api.dart';
 import '../data/finder_api.dart';
 import '../data/live_client.dart';
+import '../features/glasses_lab/bridge/glasses_channel.dart';
 import '../playback/pcm_player.dart';
 import '../protocol/messages.dart';
 import 'live_controller.dart';
@@ -80,6 +81,7 @@ final liveControllerProvider = Provider<LiveController>((ref) {
     player: player,
     permissions: permissions,
     clientFactory: clientFactory,
+    glassesBridge: GlassesChannel.shared,
   );
   ref.onDispose(controller.dispose);
   return controller;

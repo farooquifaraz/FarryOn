@@ -272,8 +272,9 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
               ),
             ),
           ),
-          // 5b. Glasses-mode banner (B1-C): only when the mic is the glasses.
-          if (state.audioKind == 'glasses')
+          // 5b. Glasses-mode banner (B1-C): when the mic is the glasses, or
+          //     whenever glasses are connected (wear-to-talk feedback).
+          if (state.audioKind == 'glasses' || state.glassesConnected)
             SafeArea(
               child: Align(
                 alignment: Alignment.topCenter,
@@ -458,16 +459,25 @@ class _GlassesBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final connected = state.glassesConnected;
-    final talking = state.glassesTalking;
-    final (Color color, IconData icon, String text) = talking
-        ? (Aurora.teal, Icons.graphic_eq, 'Listening…')
-        : connected
-            ? (
-                Aurora.teal,
-                Icons.visibility,
-                'Glasses ready — long-press the temple to talk'
-              )
-            : (Aurora.amber, Icons.bluetooth_searching, 'Connecting glasses…');
+    final micIsGlasses = state.audioKind == 'glasses';
+    final talking = state.glassesTalking || (state.glassesWorn && state.micOpen);
+    final (Color color, IconData icon, String text) = !connected
+        ? (Aurora.amber, Icons.bluetooth_searching, 'Connecting glasses…')
+        : talking
+            ? (Aurora.teal, Icons.graphic_eq, 'Listening…')
+            : micIsGlasses
+                ? (
+                    Aurora.teal,
+                    Icons.visibility,
+                    'Glasses ready — long-press the temple to talk'
+                  )
+                : state.glassesWorn
+                    ? (Aurora.teal, Icons.visibility, 'Glasses on — just talk')
+                    : (
+                        Aurora.textMuted,
+                        Icons.visibility_off,
+                        'Put the glasses on to talk'
+                      );
     final battery = state.glassesBattery;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12),

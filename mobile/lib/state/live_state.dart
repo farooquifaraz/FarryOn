@@ -79,6 +79,7 @@ class LiveSessionState {
     this.glassesConnected = false,
     this.glassesBattery,
     this.glassesTalking = false,
+    this.glassesWorn = false,
     this.lastError,
     this.permissionsGranted = false,
   });
@@ -126,6 +127,9 @@ class LiveSessionState {
   /// True while the user is long-pressing and glasses-mic PCM is flowing.
   final bool glassesTalking;
 
+  /// True while the glasses are being worn (wear-to-talk auto-listen).
+  final bool glassesWorn;
+
   /// Last non-fatal error message for a transient banner, if any.
   final String? lastError;
 
@@ -148,6 +152,7 @@ class LiveSessionState {
     bool? glassesConnected,
     int? glassesBattery,
     bool? glassesTalking,
+    bool? glassesWorn,
     String? lastError,
     bool clearError = false,
     bool? permissionsGranted,
@@ -166,6 +171,7 @@ class LiveSessionState {
         glassesConnected: glassesConnected ?? this.glassesConnected,
         glassesBattery: glassesBattery ?? this.glassesBattery,
         glassesTalking: glassesTalking ?? this.glassesTalking,
+        glassesWorn: glassesWorn ?? this.glassesWorn,
         lastError: clearError ? null : (lastError ?? this.lastError),
         permissionsGranted: permissionsGranted ?? this.permissionsGranted,
       );

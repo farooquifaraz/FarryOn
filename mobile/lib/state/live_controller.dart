@@ -16,6 +16,7 @@ import '../core/logger.dart';
 import '../core/notifications.dart';
 import '../data/finder_api.dart';
 import '../data/live_client.dart';
+import '../features/glasses_lab/bridge/glasses_channel.dart';
 import '../playback/pcm_player.dart';
 import '../protocol/frames.dart';
 import '../protocol/messages.dart';
@@ -50,10 +51,12 @@ class LiveController {
     required WebSocketLiveClient Function(AppConfig, DeviceInfo Function())
         clientFactory,
     String? platform,
+    GlassesBridgeApi? glassesBridge,
   })  : _config = config,
         _registry = registry,
         _player = player,
         _permissions = permissions,
+        _glassesBridge = glassesBridge,
         platform = platform ?? defaultPlatform {
     _client = clientFactory(_config, _activeDeviceInfo);
     _bindClient();
@@ -77,6 +80,12 @@ class LiveController {
   StreamSubscription<Uint8List>? _audioSub;
   StreamSubscription<Uint8List>? _videoSub;
   StreamSubscription<GlassesStatus>? _glassesSub;
+
+  /// Optional glasses bridge for wear-to-talk (null in unit tests). Wear-on
+  /// auto-opens the mic, wear-off pauses it — no long-press, hands-free.
+  final GlassesBridgeApi? _glassesBridge;
+  StreamSubscription<GlassesLabEvent>? _wearSub;
+  bool _glassesWorn = false;
 
   // Server stream plumbing.
   StreamSubscription<ServerMessage>? _eventSub;
@@ -153,6 +162,49 @@ class LiveController {
   CaptureSource get _audioSource => _registry.audioSource;
   CaptureSource get _videoSource => _registry.videoSource;
 
+  /// Wear-to-talk (B1-C): connect the saved glasses (if any) and watch wear
+  /// events. Put-on → open the mic hands-free; take-off → pause. No-op when
+  /// there's no glasses bridge (unit tests) or no saved device.
+  Future<void> _startWearToTalk() async {
+    final bridge = _glassesBridge;
+    if (bridge == null) return;
+    try {
+      _wearSub ??= bridge.events().listen(_onGlassesEvent);
+      final info = await bridge.bridgeInfo();
+      final savedMac = info['lastMac'] as String?;
+      if (savedMac != null && savedMac.isNotEmpty) {
+        await bridge.connect(savedMac);
+      }
+    } catch (e) {
+      _log.warn('wear-to-talk setup failed: $e');
+    }
+  }
+
+  void _onGlassesEvent(GlassesLabEvent event) {
+    switch (event.type) {
+      case 'connectionState':
+        final connected = event.data['state'] == 'connected';
+        _emit(_state.copyWith(glassesConnected: connected));
+      case 'battery':
+        final pct = (event.data['pct'] as num?)?.toInt();
+        if (pct != null) _emit(_state.copyWith(glassesBattery: pct));
+      case 'wearState':
+        final worn = event.data['worn'] == true;
+        _emit(_state.copyWith(glassesWorn: worn));
+        if (worn == _glassesWorn) return;
+        _glassesWorn = worn;
+        _log.info('glasses ${worn ? "worn → listen" : "removed → pause"}');
+        if (_state.connection != ConnectionStatus.connected) return;
+        // Wear drives the mic only when it's the phone/earbuds (continuous);
+        // the glasses' own mic is push-to-talk and can't auto-stream.
+        if (worn) {
+          if (!_state.micOpen) unawaited(startListening());
+        } else {
+          if (_state.micOpen) unawaited(stopListening());
+        }
+    }
+  }
+
   /// Mirror the glasses status into state when glasses back the mic, so the
   /// live screen can show a connected/battery/talking banner (B1-C).
   void _watchGlassesStatus() {
@@ -219,6 +271,10 @@ class LiveController {
     await _startVideo();
 
     _client.start();
+    // Wear-to-talk: auto-connect the saved glasses in the background so wear
+    // events flow, then let put-on / take-off drive the mic. Best with the
+    // mic on phone/earbuds (the glasses mic is push-to-talk by hardware).
+    unawaited(_startWearToTalk());
     // Hands-free: open the mic right away so the user can just talk. In
     // TAP-TO-TALK mode we leave it closed — the user taps the mic button to
     // speak, so a noisy room / TV / the assistant's own voice can't trigger a
@@ -999,6 +1055,7 @@ class LiveController {
     await _audioSub?.cancel();
     await _videoSub?.cancel();
     await _glassesSub?.cancel();
+    await _wearSub?.cancel();
     await _eventSub?.cancel();
     await _frameSub?.cancel();
     await _statusSub?.cancel();

@@ -25,7 +25,7 @@ class GlassesCaptureSource implements CaptureSource {
   GlassesCaptureSource({
     this.deviceId = 'heycyan-l801',
     GlassesBridgeApi? bridge,
-  }) : _bridge = bridge ?? GlassesChannel();
+  }) : _bridge = bridge ?? GlassesChannel.shared;
 
   static final _log = Logger('GlassesCapture');
 
