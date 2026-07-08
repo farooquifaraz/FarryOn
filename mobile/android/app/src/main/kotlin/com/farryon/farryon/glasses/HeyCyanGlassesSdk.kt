@@ -540,11 +540,12 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                         )
                         fetchThumbnail()
                     }
-                    0x0a -> {
-                        // Tentative wear mapping: 0x0a is undocumented; seen
-                        // while handling the glasses on 2026-07-05. Raw hex
-                        // stays in logcat until hardware confirms.
-                        Log.i(TAG, "0x0a raw ${load.toHex()}")
+                    0x09 -> {
+                        // Wear on/off — the unified code per the vendor
+                        // (Tina, 2026-07-08). load[7]==1 → worn, 0 → removed.
+                        // (Earlier we wrongly mapped 0x0a; that is internal
+                        // hardware-debug, and 0x0b is the heartbeat.)
+                        Log.i(TAG, "0x09 wear ${load.toHex()}")
                         emit(
                             "wearState",
                             mapOf("worn" to (load.getOrNull(7)?.toInt() == 1))
@@ -564,6 +565,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                                     "TOUCH long-press → glasses mic ON"
                                 else "glasses mic state=${load.getOrNull(7)?.toInt()}"
                             0x04 -> "otaProgress"
+                            // Vendor (Tina): 0x0a = internal HW-sensor debug,
+                            // 0x0b = periodic heartbeat — neither is actionable.
+                            0x0a -> "hwSensorDebug (internal)"
+                            0x0b -> "heartbeat"
                             0x0c -> "TOUCH pause gesture (voice broadcast paused)"
                             0x0d -> "unbindApp"
                             0x0e -> "glasses storage FULL"
