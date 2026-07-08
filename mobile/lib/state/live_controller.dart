@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../capture/capture_source.dart';
 import '../capture/device_registry.dart';
+import '../capture/glasses_capture_source.dart';
 import '../core/chat_history.dart';
 import '../core/config.dart';
 import '../core/location.dart';
@@ -75,6 +76,7 @@ class LiveController {
   // Capture stream plumbing for the *currently active* source.
   StreamSubscription<Uint8List>? _audioSub;
   StreamSubscription<Uint8List>? _videoSub;
+  StreamSubscription<GlassesStatus>? _glassesSub;
 
   // Server stream plumbing.
   StreamSubscription<ServerMessage>? _eventSub;
@@ -151,6 +153,25 @@ class LiveController {
   CaptureSource get _audioSource => _registry.audioSource;
   CaptureSource get _videoSource => _registry.videoSource;
 
+  /// Mirror the glasses status into state when glasses back the mic, so the
+  /// live screen can show a connected/battery/talking banner (B1-C).
+  void _watchGlassesStatus() {
+    _glassesSub?.cancel();
+    _glassesSub = null;
+    final src = _audioSource;
+    if (src is GlassesCaptureSource) {
+      _glassesSub = src.status.listen((s) {
+        _emit(_state.copyWith(
+          glassesConnected: s.connected,
+          glassesBattery: s.battery,
+          glassesTalking: s.talking,
+        ));
+      });
+    } else {
+      _emit(_state.copyWith(glassesConnected: false, glassesTalking: false));
+    }
+  }
+
   /// Composite `hello.device`: the mic comes from the audio source, the camera
   /// from the video source (B1-B: they can be different devices). We advertise
   /// the union of what each channel can actually produce.
@@ -187,6 +208,7 @@ class LiveController {
 
     await _player.initialize();
     await _audioSource.initialize();
+    _watchGlassesStatus();
     // If the camera is a different device, initialize it too (same instance is
     // idempotent, so a double-init when both channels share a source is safe).
     if (!identical(_videoSource, _audioSource)) {
@@ -937,6 +959,7 @@ class LiveController {
     await _stopAudio();
     _registry.setAudioKind(kind);
     await _audioSource.initialize();
+    _watchGlassesStatus();
     if (wasListening) await _startAudio();
     _emit(_state.copyWith(audioKind: kind.name));
   }
@@ -975,6 +998,7 @@ class LiveController {
     _userLogTimer?.cancel();
     await _audioSub?.cancel();
     await _videoSub?.cancel();
+    await _glassesSub?.cancel();
     await _eventSub?.cancel();
     await _frameSub?.cancel();
     await _statusSub?.cancel();

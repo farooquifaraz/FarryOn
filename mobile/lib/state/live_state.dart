@@ -76,6 +76,9 @@ class LiveSessionState {
     this.tools = const [],
     this.audioKind = 'phone',
     this.videoKind = 'phone',
+    this.glassesConnected = false,
+    this.glassesBattery,
+    this.glassesTalking = false,
     this.lastError,
     this.permissionsGranted = false,
   });
@@ -116,6 +119,13 @@ class LiveSessionState {
   String get deviceKind =>
       audioKind == videoKind ? audioKind : '$audioKind+$videoKind';
 
+  /// Glasses link status (only meaningful when audioKind == 'glasses').
+  final bool glassesConnected;
+  final int? glassesBattery;
+
+  /// True while the user is long-pressing and glasses-mic PCM is flowing.
+  final bool glassesTalking;
+
   /// Last non-fatal error message for a transient banner, if any.
   final String? lastError;
 
@@ -135,6 +145,9 @@ class LiveSessionState {
     List<ToolActivity>? tools,
     String? audioKind,
     String? videoKind,
+    bool? glassesConnected,
+    int? glassesBattery,
+    bool? glassesTalking,
     String? lastError,
     bool clearError = false,
     bool? permissionsGranted,
@@ -150,6 +163,9 @@ class LiveSessionState {
         tools: tools ?? this.tools,
         audioKind: audioKind ?? this.audioKind,
         videoKind: videoKind ?? this.videoKind,
+        glassesConnected: glassesConnected ?? this.glassesConnected,
+        glassesBattery: glassesBattery ?? this.glassesBattery,
+        glassesTalking: glassesTalking ?? this.glassesTalking,
         lastError: clearError ? null : (lastError ?? this.lastError),
         permissionsGranted: permissionsGranted ?? this.permissionsGranted,
       );

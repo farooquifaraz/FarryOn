@@ -37,9 +37,20 @@ class GlassesCaptureSource implements CaptureSource {
   final _audioController = StreamController<Uint8List>.broadcast();
   final _videoController = StreamController<Uint8List>.broadcast();
 
+  /// Live glasses status for the UI (connection + battery + whether mic PCM
+  /// is currently flowing). B1-C surfaces this as a banner in the live screen.
+  final _statusController = StreamController<GlassesStatus>.broadcast();
+  Stream<GlassesStatus> get status => _statusController.stream;
+  GlassesStatus _lastStatus = const GlassesStatus();
+
   StreamSubscription<GlassesLabEvent>? _eventSub;
   bool _audioRunning = false;
   String? _connectedMac;
+
+  void _pushStatus(GlassesStatus s) {
+    _lastStatus = s;
+    if (!_statusController.isClosed) _statusController.add(s);
+  }
 
   @override
   CaptureCapabilities get capabilities =>
@@ -88,11 +99,29 @@ class GlassesCaptureSource implements CaptureSource {
         final state = event.data['state'] as String?;
         _connectedMac =
             state == 'connected' ? event.data['mac'] as String? : null;
+        _pushStatus(_lastStatus.copyWith(
+          connected: _connectedMac != null,
+          battery: _connectedMac == null ? null : _lastStatus.battery,
+        ));
+      case 'battery':
+        final pct = (event.data['pct'] as num?)?.toInt();
+        if (pct != null) _pushStatus(_lastStatus.copyWith(battery: pct));
       case 'pcmChunk':
         if (!_audioRunning) return;
+        if (!_lastStatus.talking) {
+          _pushStatus(_lastStatus.copyWith(talking: true));
+        }
         final data = event.data['data'];
         if (data is Uint8List && data.isNotEmpty) {
           _audioController.add(data);
+        }
+      case 'audio':
+        // voiceFromGlassesStatus 2 (mic off) arrives as an `audio` status.
+        final s = (event.data['status'] as String?) ?? '';
+        if (s.contains('mic OFF') || s.contains('stopped')) {
+          if (_lastStatus.talking) {
+            _pushStatus(_lastStatus.copyWith(talking: false));
+          }
         }
     }
   }
@@ -155,5 +184,28 @@ class GlassesCaptureSource implements CaptureSource {
     }
     await _audioController.close();
     await _videoController.close();
+    await _statusController.close();
   }
+}
+
+/// A snapshot of the glasses for the live-screen banner (B1-C).
+class GlassesStatus {
+  const GlassesStatus({
+    this.connected = false,
+    this.battery,
+    this.talking = false,
+  });
+
+  final bool connected;
+  final int? battery;
+
+  /// True while glasses-mic PCM is actively streaming (user is long-pressing).
+  final bool talking;
+
+  GlassesStatus copyWith({bool? connected, int? battery, bool? talking}) =>
+      GlassesStatus(
+        connected: connected ?? this.connected,
+        battery: battery ?? this.battery,
+        talking: talking ?? this.talking,
+      );
 }

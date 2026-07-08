@@ -272,6 +272,17 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
               ),
             ),
           ),
+          // 5b. Glasses-mode banner (B1-C): only when the mic is the glasses.
+          if (state.audioKind == 'glasses')
+            SafeArea(
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 64),
+                  child: _GlassesBanner(state: state),
+                ),
+              ),
+            ),
           // 6. Bottom overlay: tool activity + transcript + controls.
           SafeArea(
             child: Align(
@@ -434,6 +445,60 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
 
   static CaptureDeviceKind _kindFromName(String name) =>
       name == 'glasses' ? CaptureDeviceKind.glasses : CaptureDeviceKind.phone;
+}
+
+/// B1-C: compact glasses-mode status banner shown at the top of the live
+/// screen when the microphone is the smart glasses. Removes the "is it
+/// connected / how do I talk" confusion.
+class _GlassesBanner extends StatelessWidget {
+  const _GlassesBanner({required this.state});
+
+  final LiveSessionState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final connected = state.glassesConnected;
+    final talking = state.glassesTalking;
+    final (Color color, IconData icon, String text) = talking
+        ? (Aurora.teal, Icons.graphic_eq, 'Listening…')
+        : connected
+            ? (
+                Aurora.teal,
+                Icons.visibility,
+                'Glasses ready — long-press the temple to talk'
+              )
+            : (Aurora.amber, Icons.bluetooth_searching, 'Connecting glasses…');
+    final battery = state.glassesBattery;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              text,
+              style: TextStyle(color: color, fontSize: 12.5),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (connected && battery != null) ...[
+            const SizedBox(width: 8),
+            Text('$battery%',
+                style:
+                    const TextStyle(color: Aurora.textMuted, fontSize: 12.5)),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 /// The live, cloud-hosted FarryOn backend (Render). One tap fills these in so
