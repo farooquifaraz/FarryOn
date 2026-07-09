@@ -272,22 +272,23 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
               ),
             ),
           ),
-          // 5b. Status stack below the top bar — mic-device chip and (when
-          //     relevant) the glasses banner, stacked so they never overlap.
+          // 5b. Compact status row below the top bar — mic-device chip and a
+          //     small glasses pill (icon + battery), side by side so they
+          //     never overlap each other or the transcript.
           SafeArea(
             child: Align(
               alignment: Alignment.topCenter,
               child: Padding(
                 padding: const EdgeInsets.only(top: 58),
-                child: Column(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _MicChip(state: state),
                     if (state.audioKind == 'glasses' || state.glassesConnected)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: _GlassesBanner(state: state),
-                      ),
+                      ...[
+                      const SizedBox(width: 8),
+                      _GlassesPill(state: state),
+                    ],
                   ],
                 ),
               ),
@@ -491,67 +492,52 @@ class _MicChip extends StatelessWidget {
   }
 }
 
-/// B1-C: compact glasses-mode status banner shown at the top of the live
-/// screen when the microphone is the smart glasses. Removes the "is it
-/// connected / how do I talk" confusion.
-class _GlassesBanner extends StatelessWidget {
-  const _GlassesBanner({required this.state});
+/// Compact glasses status pill — sits side-by-side with the mic chip. Shows
+/// ONLY a bluetooth-connection icon and the battery %, no prose (the user
+/// asked for a clean, professional indicator, not a sentence).
+class _GlassesPill extends StatelessWidget {
+  const _GlassesPill({required this.state});
 
   final LiveSessionState state;
 
   @override
   Widget build(BuildContext context) {
     final connected = state.glassesConnected;
-    final micIsGlasses = state.audioKind == 'glasses';
-    // NOTE: this firmware never reports wear on/off (0x09 dead, vendor-
-    // confirmed), so we do NOT gate on glassesWorn — showing "put the glasses
-    // on" while they're already worn is wrong. Just report connected + battery.
-    final (Color color, IconData icon, String text) = !connected
-        ? (Aurora.amber, Icons.bluetooth_searching, 'Connecting glasses…')
-        : micIsGlasses
-            ? (
-                Aurora.teal,
-                Icons.visibility,
-                'Glasses mic — long-press the temple to talk'
-              )
-            : (Aurora.teal, Icons.visibility, 'Glasses connected — just talk');
     final battery = state.glassesBattery;
+    final low = battery != null && battery <= 20;
+    // Amber while connecting, red on low battery, teal when healthy.
+    final color = !connected
+        ? Aurora.amber
+        : low
+            ? Aurora.danger
+            : Aurora.teal;
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.55),
+        color: Colors.black.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.6)),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: color),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              text,
-              style: TextStyle(color: color, fontSize: 12.5),
-              overflow: TextOverflow.ellipsis,
-            ),
+          Icon(
+            connected
+                ? Icons.bluetooth_connected
+                : Icons.bluetooth_searching,
+            size: 14,
+            color: color,
           ),
           if (connected && battery != null) ...[
-            const SizedBox(width: 8),
-            Icon(
-              battery <= 20
-                  ? Icons.battery_alert
-                  : Icons.battery_full,
-              size: 14,
-              color: battery <= 20 ? Aurora.danger : Aurora.textMuted,
-            ),
+            const SizedBox(width: 6),
+            Icon(low ? Icons.battery_alert : Icons.battery_full,
+                size: 13, color: color),
             const SizedBox(width: 2),
             Text('$battery%',
                 style: TextStyle(
-                    color: battery <= 20 ? Aurora.danger : Aurora.textMuted,
-                    fontSize: 12.5,
-                    fontWeight:
-                        battery <= 20 ? FontWeight.w700 : FontWeight.w400)),
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: low ? FontWeight.w700 : FontWeight.w600)),
           ],
         ],
       ),
