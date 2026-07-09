@@ -184,6 +184,10 @@ class LiveController {
   Future<void> _connectSavedGlasses() async {
     final bridge = _glassesBridge;
     if (bridge == null) return;
+    // Robustness: ignore a duplicate connect while one is already up/in flight
+    // (the model sometimes calls the tool twice).
+    if (_state.glassesConnected || _connectingGlasses) return;
+    _connectingGlasses = true;
     try {
       final info = await bridge.bridgeInfo();
       final mac = info['lastMac'] as String?;
@@ -195,8 +199,16 @@ class LiveController {
       await bridge.connect(mac);
     } catch (e) {
       _log.warn('connect_glasses failed: $e');
+    } finally {
+      // Clear the in-flight guard after the connect watchdog window so a
+      // genuine retry is possible if the first attempt timed out.
+      Future<void>.delayed(const Duration(seconds: 22), () {
+        if (!_state.glassesConnected) _connectingGlasses = false;
+      });
     }
   }
+
+  bool _connectingGlasses = false;
 
   void _onGlassesEvent(GlassesLabEvent event) {
     switch (event.type) {

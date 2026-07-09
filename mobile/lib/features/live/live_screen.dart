@@ -505,24 +505,18 @@ class _GlassesBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final connected = state.glassesConnected;
     final micIsGlasses = state.audioKind == 'glasses';
-    final talking = state.glassesTalking || (state.glassesWorn && state.micOpen);
+    // NOTE: this firmware never reports wear on/off (0x09 dead, vendor-
+    // confirmed), so we do NOT gate on glassesWorn — showing "put the glasses
+    // on" while they're already worn is wrong. Just report connected + battery.
     final (Color color, IconData icon, String text) = !connected
         ? (Aurora.amber, Icons.bluetooth_searching, 'Connecting glasses…')
-        : talking
-            ? (Aurora.teal, Icons.graphic_eq, 'Listening…')
-            : micIsGlasses
-                ? (
-                    Aurora.teal,
-                    Icons.visibility,
-                    'Glasses ready — long-press the temple to talk'
-                  )
-                : state.glassesWorn
-                    ? (Aurora.teal, Icons.visibility, 'Glasses on — just talk')
-                    : (
-                        Aurora.textMuted,
-                        Icons.visibility_off,
-                        'Put the glasses on to talk'
-                      );
+        : micIsGlasses
+            ? (
+                Aurora.teal,
+                Icons.visibility,
+                'Glasses mic — long-press the temple to talk'
+              )
+            : (Aurora.teal, Icons.visibility, 'Glasses connected — just talk');
     final battery = state.glassesBattery;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12),
