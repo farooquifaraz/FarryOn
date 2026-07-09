@@ -178,6 +178,26 @@ class LiveController {
     }
   }
 
+  /// Voice tool `connect_glasses`: connect the saved glasses (asked-and-
+  /// confirmed by the model before this fires). Status lands in the banner
+  /// via the wear/connection watcher.
+  Future<void> _connectSavedGlasses() async {
+    final bridge = _glassesBridge;
+    if (bridge == null) return;
+    try {
+      final info = await bridge.bridgeInfo();
+      final mac = info['lastMac'] as String?;
+      if (mac == null || mac.isEmpty) {
+        _log.warn('connect_glasses: no saved glasses — pair once in the Lab');
+        return;
+      }
+      _log.info('connect_glasses → $mac');
+      await bridge.connect(mac);
+    } catch (e) {
+      _log.warn('connect_glasses failed: $e');
+    }
+  }
+
   void _onGlassesEvent(GlassesLabEvent event) {
     switch (event.type) {
       case 'connectionState':
@@ -569,6 +589,8 @@ class LiveController {
             _log.warn('enable_bluetooth failed: $e');
           }
         }));
+      case 'connect_glasses':
+        unawaited(_connectSavedGlasses());
       case 'end_session':
         // Let the spoken confirmation play out, then disconnect.
         Future<void>.delayed(

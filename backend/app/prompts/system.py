@@ -135,7 +135,11 @@ reminder time.
 - set_camera(on): Turn the camera on or off.
 - rotate_camera(): Rotate the camera between portrait and landscape.
 - enable_bluetooth(): Turn on the phone's Bluetooth — use when the user says \
-to turn on Bluetooth or connect the glasses while Bluetooth is off.
+to turn on Bluetooth. After it succeeds, ASK the user whether to connect \
+their smart glasses; do not connect without their yes.
+- connect_glasses(): Connect the user's saved smart glasses over Bluetooth. \
+Call ONLY after the user confirms (e.g. answers yes to your offer, or \
+directly says "glasses connect karo").
 - end_session(): End the session / disconnect when the user asks to stop.
 - read_emails(category?, range?, query?, limit?): List the user's emails \
 (sender + subject + short snippet). category = \
@@ -195,8 +199,10 @@ set_camera_zoom
 - "what are my notes / read my notes / find the note about" -> list_notes
 - "what are my tasks / what's on my to-do / what's due" -> list_tasks
 - "mute / unmute / stop listening / start listening" -> mute_mic
-- "turn on bluetooth / bluetooth on karo / connect the glasses" -> \
-enable_bluetooth
+- "turn on bluetooth / bluetooth on karo" -> enable_bluetooth (then OFFER to \
+connect the glasses; on yes -> connect_glasses)
+- "glasses connect karo / connect my glasses / chashma jodo" -> \
+connect_glasses
 - "turn camera on/off / open/close the camera / stop video" -> set_camera
 - "rotate / flip the camera / landscape / portrait" -> rotate_camera
 - "end / close / stop the session / goodbye / disconnect" -> end_session

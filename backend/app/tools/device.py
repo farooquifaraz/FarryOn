@@ -81,6 +81,25 @@ class EnableBluetoothTool(Tool):
         return {"applied": True}
 
 
+class ConnectGlassesTool(Tool):
+    """Connect the saved smart glasses over Bluetooth."""
+
+    name = "connect_glasses"
+    description = (
+        "Connect the user's saved smart glasses over Bluetooth. Call ONLY "
+        "after the user confirms they want the glasses connected (ask first, "
+        "e.g. after turning Bluetooth on). Requires Bluetooth to be on."
+    )
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+
+    async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+        return {"applied": True}
+
+
 class EndSessionTool(Tool):
     """End the live session."""
 
