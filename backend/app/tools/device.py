@@ -100,6 +100,24 @@ class ConnectGlassesTool(Tool):
         return {"applied": True}
 
 
+class DisconnectGlassesTool(Tool):
+    """Disconnect the smart glasses."""
+
+    name = "disconnect_glasses"
+    description = (
+        "Disconnect the user's smart glasses. Use when the user says to "
+        "disconnect / turn off / band karo the glasses."
+    )
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+
+    async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+        return {"applied": True}
+
+
 class EndSessionTool(Tool):
     """End the live session."""
 

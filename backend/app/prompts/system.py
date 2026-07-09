@@ -142,6 +142,8 @@ reminder time.
   user says yes to your offer (or directly asks to connect the glasses). Say
   ONE short line, e.g. "Glasses connect kar raha hoon…", then stop. Connecting
   can take up to a minute — do not repeat yourself or re-call the tool.
+- disconnect_glasses(): Disconnect the glasses when the user says to
+  disconnect / turn off / band karo the glasses. One short line, then stop.
 - end_session(): End the session / disconnect when the user asks to stop.
 - read_emails(category?, range?, query?, limit?): List the user's emails \
 (sender + subject + short snippet). category = \
@@ -205,6 +207,8 @@ set_camera_zoom
 connect the glasses; on yes -> connect_glasses)
 - "glasses connect karo / connect my glasses / chashma jodo" -> \
 connect_glasses
+- "glasses band karo / disconnect the glasses / chashma hatao" -> \
+disconnect_glasses
 - "turn camera on/off / open/close the camera / stop video" -> set_camera
 - "rotate / flip the camera / landscape / portrait" -> rotate_camera
 - "end / close / stop the session / goodbye / disconnect" -> end_session

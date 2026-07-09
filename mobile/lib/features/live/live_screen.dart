@@ -272,29 +272,27 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
               ),
             ),
           ),
-          // 5c. Mic-device chip: always shows WHICH device the mic is using
-          //     (Phone/earbuds vs Glasses) + green while listening.
+          // 5b. Status stack below the top bar — mic-device chip and (when
+          //     relevant) the glasses banner, stacked so they never overlap.
           SafeArea(
             child: Align(
-              alignment: Alignment.topLeft,
+              alignment: Alignment.topCenter,
               child: Padding(
-                padding: const EdgeInsets.only(top: 60, left: 12),
-                child: _MicChip(state: state),
-              ),
-            ),
-          ),
-          // 5b. Glasses-mode banner (B1-C): when the mic is the glasses, or
-          //     whenever glasses are connected (wear-to-talk feedback).
-          if (state.audioKind == 'glasses' || state.glassesConnected)
-            SafeArea(
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 64),
-                  child: _GlassesBanner(state: state),
+                padding: const EdgeInsets.only(top: 58),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _MicChip(state: state),
+                    if (state.audioKind == 'glasses' || state.glassesConnected)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: _GlassesBanner(state: state),
+                      ),
+                  ],
                 ),
               ),
             ),
+          ),
           // 6. Bottom overlay: tool activity + transcript + controls.
           SafeArea(
             child: Align(
@@ -540,9 +538,20 @@ class _GlassesBanner extends StatelessWidget {
           ),
           if (connected && battery != null) ...[
             const SizedBox(width: 8),
+            Icon(
+              battery <= 20
+                  ? Icons.battery_alert
+                  : Icons.battery_full,
+              size: 14,
+              color: battery <= 20 ? Aurora.danger : Aurora.textMuted,
+            ),
+            const SizedBox(width: 2),
             Text('$battery%',
-                style:
-                    const TextStyle(color: Aurora.textMuted, fontSize: 12.5)),
+                style: TextStyle(
+                    color: battery <= 20 ? Aurora.danger : Aurora.textMuted,
+                    fontSize: 12.5,
+                    fontWeight:
+                        battery <= 20 ? FontWeight.w700 : FontWeight.w400)),
           ],
         ],
       ),

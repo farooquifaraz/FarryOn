@@ -210,6 +210,22 @@ class LiveController {
 
   bool _connectingGlasses = false;
 
+  bool _lowBatteryWarned = false;
+
+  /// Announce a low glasses battery once (via Farry), re-arming after it
+  /// recovers. Visual red is handled by the banner.
+  void _maybeWarnLowBattery(int pct) {
+    if (pct > 25) _lowBatteryWarned = false;
+    if (pct >= 20 || _lowBatteryWarned) return;
+    if (_state.connection != ConnectionStatus.connected) return;
+    _lowBatteryWarned = true;
+    _log.info('glasses battery low ($pct%) — asking Farry to warn');
+    _client.send(TextMessage(
+      '(System note: the smart glasses battery is low at $pct%. Briefly warn '
+      'me out loud in one short sentence, then continue.)',
+    ));
+  }
+
   void _onGlassesEvent(GlassesLabEvent event) {
     switch (event.type) {
       case 'connectionState':
@@ -217,7 +233,10 @@ class LiveController {
         _emit(_state.copyWith(glassesConnected: connected));
       case 'battery':
         final pct = (event.data['pct'] as num?)?.toInt();
-        if (pct != null) _emit(_state.copyWith(glassesBattery: pct));
+        if (pct != null) {
+          _emit(_state.copyWith(glassesBattery: pct));
+          _maybeWarnLowBattery(pct);
+        }
       case 'wearState':
         final worn = event.data['worn'] == true;
         _emit(_state.copyWith(glassesWorn: worn));
@@ -603,6 +622,14 @@ class LiveController {
         }));
       case 'connect_glasses':
         unawaited(_connectSavedGlasses());
+      case 'disconnect_glasses':
+        unawaited(Future(() async {
+          try {
+            await _glassesBridge?.disconnect();
+          } catch (e) {
+            _log.warn('disconnect_glasses failed: $e');
+          }
+        }));
       case 'end_session':
         // Let the spoken confirmation play out, then disconnect.
         Future<void>.delayed(
