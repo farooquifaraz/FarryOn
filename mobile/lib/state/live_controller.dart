@@ -162,19 +162,17 @@ class LiveController {
   CaptureSource get _audioSource => _registry.audioSource;
   CaptureSource get _videoSource => _registry.videoSource;
 
-  /// Wear-to-talk (B1-C): connect the saved glasses (if any) and watch wear
-  /// events. Put-on → open the mic hands-free; take-off → pause. No-op when
-  /// there's no glasses bridge (unit tests) or no saved device.
+  /// Wear-to-talk (B1-C): just watch for wear events — put-on opens the mic
+  /// hands-free, take-off pauses. We do NOT auto-connect the glasses on every
+  /// session (that caused 20 s connect-timeout churn when the glasses were
+  /// off, and hands-free doesn't need them). The user connects glasses
+  /// explicitly (Glasses Lab / glasses mic); wear then drives the mic if the
+  /// firmware ever reports it. No-op without a glasses bridge (unit tests).
   Future<void> _startWearToTalk() async {
     final bridge = _glassesBridge;
     if (bridge == null) return;
     try {
       _wearSub ??= bridge.events().listen(_onGlassesEvent);
-      final info = await bridge.bridgeInfo();
-      final savedMac = info['lastMac'] as String?;
-      if (savedMac != null && savedMac.isNotEmpty) {
-        await bridge.connect(savedMac);
-      }
     } catch (e) {
       _log.warn('wear-to-talk setup failed: $e');
     }
