@@ -272,6 +272,17 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
               ),
             ),
           ),
+          // 5c. Mic-device chip: always shows WHICH device the mic is using
+          //     (Phone/earbuds vs Glasses) + green while listening.
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 60, left: 12),
+                child: _MicChip(state: state),
+              ),
+            ),
+          ),
           // 5b. Glasses-mode banner (B1-C): when the mic is the glasses, or
           //     whenever glasses are connected (wear-to-talk feedback).
           if (state.audioKind == 'glasses' || state.glassesConnected)
@@ -446,6 +457,40 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
 
   static CaptureDeviceKind _kindFromName(String name) =>
       name == 'glasses' ? CaptureDeviceKind.glasses : CaptureDeviceKind.phone;
+}
+
+/// Always-visible chip telling the user which device the mic is using
+/// (Phone/earbuds vs Glasses) and whether it's actively listening.
+class _MicChip extends StatelessWidget {
+  const _MicChip({required this.state});
+
+  final LiveSessionState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final glasses = state.audioKind == 'glasses';
+    final listening = state.micOpen;
+    final color = listening ? Aurora.mint : Aurora.textMuted;
+    final label = glasses ? 'Glasses mic' : 'Phone / earbuds';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(listening ? Icons.mic : Icons.mic_none, size: 14, color: color),
+          const SizedBox(width: 6),
+          Text(label,
+              style: TextStyle(
+                  color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
 }
 
 /// B1-C: compact glasses-mode status banner shown at the top of the live
