@@ -231,9 +231,21 @@ class Orchestrator:
             }
         )
 
-        # 5. Feed the result back to the model to continue the turn.
+        # 5. Feed the result back to the model to continue the turn. For
+        #    fire-and-forget device tools the model already spoke its one
+        #    acknowledgement WHEN it called the tool; if we hand back a plain
+        #    result it narrates a SECOND time (heard as a repeated response).
+        #    We must still send a result (the Live protocol requires one), so
+        #    we embed a "stay silent" instruction for these tools.
         try:
-            payload: Any = result.result if result.ok else (result.error or "error")
+            if result.ok and event.name in self._SILENT_RESULT_TOOLS:
+                payload: Any = {
+                    "applied": True,
+                    "_instruction": "Done. Do NOT speak or respond again about "
+                    "this — you already acknowledged it to the user.",
+                }
+            else:
+                payload = result.result if result.ok else (result.error or "error")
             await self._gateway.send_tool_result(
                 event.id, event.name, payload, ok=result.ok
             )
@@ -243,6 +255,19 @@ class Orchestrator:
         return result
 
     _SEND_TOOLS = {"send_whatsapp", "send_message", "send_telegram"}
+
+    # Fire-and-forget device tools: the client acts, the model already spoke
+    # once. Suppress the post-result re-narration (double voice).
+    _SILENT_RESULT_TOOLS = {
+        "mute_mic",
+        "set_camera",
+        "rotate_camera",
+        "set_camera_zoom",
+        "enable_bluetooth",
+        "connect_glasses",
+        "disconnect_glasses",
+        "end_session",
+    }
 
     async def _log_send_if_messaging(self, db, name: str, result) -> None:
         """Record a successful messaging send to the history/audit log.
