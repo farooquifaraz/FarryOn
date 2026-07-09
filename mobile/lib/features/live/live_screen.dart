@@ -1414,17 +1414,28 @@ class _TopOverlay extends StatelessWidget {
       ),
       child: Row(
         children: [
-          if (state.cameraOn) ...[
-            const _LiveBadge(),
-            const SizedBox(width: 8),
-          ],
-          // Connection status only here (never clipped); state is shown by the
-          // orb and device by the settings sheet.
-          StatusIndicator(
-            connection: state.connection,
-            liveState: state.liveState,
-            deviceKind: state.deviceKind,
-            connectionOnly: true,
+          // Left cluster shrinks (scaleDown) instead of overflowing when the
+          // connection pill is wide ("Reconnecting") on narrow screens.
+          Flexible(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (state.cameraOn) ...[
+                    const _LiveBadge(),
+                    const SizedBox(width: 8),
+                  ],
+                  StatusIndicator(
+                    connection: state.connection,
+                    liveState: state.liveState,
+                    deviceKind: state.deviceKind,
+                    connectionOnly: true,
+                  ),
+                ],
+              ),
+            ),
           ),
           const Spacer(),
           _BarIcon(Icons.image_search, 'Finder — identify a photo', onFinder),
