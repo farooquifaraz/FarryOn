@@ -67,6 +67,30 @@ class GlassesChannels private constructor(
 
     private var eventSink: EventChannel.EventSink? = null
 
+    /**
+     * Fire Android's system "turn on Bluetooth?" prompt (voice tool
+     * `enable_bluetooth`). Android 13+ forbids silently enabling BT, so this
+     * is the most an app can do — the user taps Allow. SDK-independent, so it
+     * works in stub mode too.
+     */
+    private fun enableBluetooth() {
+        val ctx = appContext ?: return
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
+                ctx.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                android.util.Log.i("GlassesLab", "enableBluetooth: BLUETOOTH_CONNECT not granted")
+            }
+            ctx.startActivity(
+                android.content.Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (e: Exception) {
+            android.util.Log.i("GlassesLab", "enableBluetooth failed: $e")
+        }
+    }
+
     init {
         sdk.setListener { type, data ->
             // Already on the main thread (GlassesSdkListener contract).
@@ -119,6 +143,7 @@ class GlassesChannels private constructor(
                     sdk.startAudioTest(call.argument<String>("mode") ?: "hfp")
                     result.success(null)
                 }
+                "enableBluetooth" -> { enableBluetooth(); result.success(null) }
                 "stopAudioTest" -> { sdk.stopAudioTest(); result.success(null) }
                 "startWifiSync" -> { sdk.startWifiSync(); result.success(null) }
                 "stopWifiSync" -> { sdk.stopWifiSync(); result.success(null) }

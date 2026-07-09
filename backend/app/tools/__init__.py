@@ -10,6 +10,7 @@ from app.tools.base import Tool
 from app.tools.camera import SetCameraZoomTool
 from app.tools.contacts import ResolveContactTool, SaveContactTool
 from app.tools.device import (
+    EnableBluetoothTool,
     EndSessionTool,
     MuteMicTool,
     RotateCameraTool,
@@ -43,6 +44,7 @@ __all__ = [
     "CreateTaskTool",
     "DeleteNoteTool",
     "DeleteTaskTool",
+    "EnableBluetoothTool",
     "EndSessionTool",
     "IdentifyImageTool",
     "ListNotesTool",
@@ -90,6 +92,7 @@ def build_default_tools() -> list[Tool]:
         MuteMicTool(),
         SetCameraTool(),
         RotateCameraTool(),
+        EnableBluetoothTool(),
         EndSessionTool(),
         ReadEmailsTool(),
         ReadEmailTool(),

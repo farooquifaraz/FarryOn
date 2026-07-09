@@ -62,6 +62,25 @@ class RotateCameraTool(Tool):
         return {"applied": True}
 
 
+class EnableBluetoothTool(Tool):
+    """Ask the phone to turn Bluetooth on (e.g. to connect the glasses)."""
+
+    name = "enable_bluetooth"
+    description = (
+        "Turn on the phone's Bluetooth. Use when the user asks to enable/turn "
+        "on Bluetooth or to connect the glasses while Bluetooth is off. On "
+        "Android the user sees a quick system 'Allow' prompt to confirm."
+    )
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+
+    async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+        return {"applied": True}
+
+
 class EndSessionTool(Tool):
     """End the live session."""
 

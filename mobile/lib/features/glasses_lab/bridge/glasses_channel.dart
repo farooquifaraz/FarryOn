@@ -57,6 +57,10 @@ abstract class GlassesBridgeApi {
   /// [type]: `music` | `call` | `system`.
   Future<void> setVolume(String type, int level);
 
+  /// Ask Android to turn Bluetooth on (system 'Allow' prompt). Used by the
+  /// `enable_bluetooth` voice tool so the user can connect the glasses hands-free.
+  Future<void> enableBluetooth();
+
   /// Broadcast stream of device events (see [GlassesLabEvent.type] values).
   Stream<GlassesLabEvent> events();
 }
@@ -196,6 +200,10 @@ class GlassesChannel implements GlassesBridgeApi {
   @override
   Future<void> setVolume(String type, int level) =>
       _method.invokeMethod<void>('setVolume', {'type': type, 'level': level});
+
+  @override
+  Future<void> enableBluetooth() =>
+      _method.invokeMethod<void>('enableBluetooth');
 
   @override
   Stream<GlassesLabEvent> events() => _rawEvents

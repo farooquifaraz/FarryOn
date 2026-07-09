@@ -89,6 +89,9 @@ class _FakeBridge implements GlassesBridgeApi {
       _maybeFail('setVolume:$type:$level');
 
   @override
+  Future<void> enableBluetooth() => _maybeFail('enableBluetooth');
+
+  @override
   Stream<GlassesLabEvent> events() => eventController.stream;
 }
 

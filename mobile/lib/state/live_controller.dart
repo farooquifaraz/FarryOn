@@ -561,6 +561,14 @@ class LiveController {
         unawaited(setCameraEnabled(on));
       case 'rotate_camera':
         unawaited(setCameraPortrait(!_state.cameraPortrait));
+      case 'enable_bluetooth':
+        unawaited(Future(() async {
+          try {
+            await _glassesBridge?.enableBluetooth();
+          } catch (e) {
+            _log.warn('enable_bluetooth failed: $e');
+          }
+        }));
       case 'end_session':
         // Let the spoken confirmation play out, then disconnect.
         Future<void>.delayed(
