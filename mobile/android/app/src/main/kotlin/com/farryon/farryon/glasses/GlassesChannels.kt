@@ -73,6 +73,56 @@ class GlassesChannels private constructor(
      * is the most an app can do — the user taps Allow. SDK-independent, so it
      * works in stub mode too.
      */
+    /**
+     * Option A: disconnect the glasses' classic-BT A2DP (audio) profile so the
+     * assistant's TTS routes back to the phone speaker after a "disconnect
+     * glasses" command. Android has no public A2DP-disconnect API, so we call
+     * the hidden BluetoothA2dp.disconnect(device) via reflection (the standard
+     * technique). We do NOT remove the bond — a later connect re-pairs cleanly.
+     */
+    private fun disconnectClassicAudio() {
+        val ctx = appContext ?: return
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
+                ctx.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+            val mgr = ctx.getSystemService(android.content.Context.BLUETOOTH_SERVICE)
+                as? android.bluetooth.BluetoothManager ?: return
+            val adapter = mgr.adapter ?: return
+            adapter.getProfileProxy(
+                ctx,
+                object : android.bluetooth.BluetoothProfile.ServiceListener {
+                    override fun onServiceConnected(
+                        profile: Int,
+                        proxy: android.bluetooth.BluetoothProfile,
+                    ) {
+                        try {
+                            val connected = proxy.connectedDevices
+                            for (device in connected) {
+                                proxy.javaClass
+                                    .getMethod("disconnect", android.bluetooth.BluetoothDevice::class.java)
+                                    .invoke(proxy, device)
+                                android.util.Log.i("GlassesLab", "A2DP disconnect → ${device.address}")
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.i("GlassesLab", "A2DP disconnect reflection failed: $e")
+                        } finally {
+                            adapter.closeProfileProxy(profile, proxy)
+                        }
+                    }
+
+                    override fun onServiceDisconnected(profile: Int) {}
+                },
+                android.bluetooth.BluetoothProfile.A2DP,
+            )
+        } catch (e: Exception) {
+            android.util.Log.i("GlassesLab", "disconnectClassicAudio failed: $e")
+        }
+    }
+
     private fun enableBluetooth() {
         val ctx = appContext ?: return
         try {
@@ -125,7 +175,14 @@ class GlassesChannels private constructor(
                     sdk.connect(call.argument<String>("mac") ?: "")
                     result.success(null)
                 }
-                "disconnect" -> { sdk.disconnect(); result.success(null) }
+                "disconnect" -> {
+                    sdk.disconnect()
+                    // Option A: also drop the glasses' classic-BT (A2DP)
+                    // audio so TTS routes back to the phone speaker — the
+                    // SDK's unBindDevice only kills the BLE link.
+                    disconnectClassicAudio()
+                    result.success(null)
+                }
                 "setAutoReconnect" -> {
                     sdk.setAutoReconnect(call.argument<Boolean>("enabled") ?: true)
                     result.success(null)
