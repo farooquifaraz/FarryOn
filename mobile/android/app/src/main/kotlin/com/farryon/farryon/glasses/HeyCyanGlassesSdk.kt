@@ -117,6 +117,38 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         (app.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)
             ?.adapter?.isEnabled == true
 
+    /**
+     * Glasses already paired in Android's Bluetooth settings (classic-BT, for
+     * audio). Verified 2026-07-10: a unit the user pairs there holds an A2DP
+     * link and STOPS BLE-advertising, so [scan] finds nothing and the app can
+     * never bind it. But we already know its MAC from the bond list, and
+     * [BleOperateManager.connectDirectly] connects by MAC without needing an
+     * advertisement — so we seed these into the scan results to make the glasses
+     * connectable anyway. Name is normalized (strip spaces + uppercase) so
+     * "L 801_DD8A" matches the L80x family like everything else.
+     */
+    private fun bondedGlasses(): List<Map<String, Any?>> {
+        return try {
+            val adapter = (app.getSystemService(Context.BLUETOOTH_SERVICE)
+                as? BluetoothManager)?.adapter ?: return emptyList()
+            adapter.bondedDevices.orEmpty().mapNotNull { device ->
+                val name = try { device.name } catch (e: SecurityException) { null }
+                if (name.isNullOrEmpty()) return@mapNotNull null
+                if (!name.replace(" ", "").uppercase().startsWith("L80")) {
+                    return@mapNotNull null
+                }
+                mapOf<String, Any?>(
+                    "name" to name,
+                    "mac" to device.address,
+                    "rssi" to null,
+                    "bonded" to true,
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     private fun requestEnableBluetooth() {
         try {
             app.startActivity(
@@ -365,13 +397,22 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             } catch (e: Exception) {
                 // Scanner may already be stopped — the result list still counts.
             }
+            // Fold in glasses already paired in Android BT settings. A unit
+            // that's busy on classic-BT audio doesn't BLE-advertise, so the
+            // scan above misses it — but we can still connectDirectly by the
+            // bonded MAC. Don't clobber a live advertisement (keep the one
+            // with a real rssi), just add any bonded L80x the scan didn't see.
+            for (b in bondedGlasses()) {
+                val mac = b["mac"] as? String ?: continue
+                if (!hits.containsKey(mac)) hits[mac] = b
+            }
             if (hits.isEmpty()) {
                 emit(
                     "deviceEvent",
                     mapOf(
-                        "hex" to "scan found no glasses — an already-connected/" +
-                            "busy L801 does not advertise; use the saved device " +
-                            "to connect directly, or power-cycle the glasses"
+                        "hex" to "scan found no glasses — turn the glasses on and " +
+                            "off-body wear sensor, or pair them once in Android " +
+                            "Bluetooth settings so the app can connect directly"
                     )
                 )
             }

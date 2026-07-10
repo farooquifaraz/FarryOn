@@ -190,10 +190,20 @@ class LiveController {
     _connectingGlasses = true;
     try {
       final info = await bridge.bridgeInfo();
-      final mac = info['lastMac'] as String?;
+      var mac = info['lastMac'] as String?;
       if (mac == null || mac.isEmpty) {
-        _log.warn('connect_glasses: no saved glasses — pair once in the Lab');
-        return;
+        // No saved device (or a fresh pair the app hasn't bound yet). Scan —
+        // which now also surfaces glasses already paired in Android BT
+        // settings (bonded but not BLE-advertising) — and connect the first
+        // L80x we see, so a voice "connect glasses" works without a manual
+        // trip through the Lab.
+        _log.info('connect_glasses: no saved MAC — scanning for glasses');
+        final hits = await bridge.scan(timeout: const Duration(seconds: 8));
+        if (hits.isEmpty) {
+          _log.warn('connect_glasses: scan found no glasses');
+          return;
+        }
+        mac = hits.first.mac;
       }
       _log.info('connect_glasses → $mac');
       await bridge.connect(mac);
