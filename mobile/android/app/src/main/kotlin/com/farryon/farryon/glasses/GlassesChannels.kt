@@ -204,8 +204,63 @@ class GlassesChannels private constructor(
     init {
         sdk.setListener { type, data ->
             // Already on the main thread (GlassesSdkListener contract).
+            // Bring up A2DP audio only AFTER the BLE link is established — doing
+            // both at once makes the classic + LE radios contend and slows the
+            // BLE connect (measured: latency crept 4s→16s under rapid cycling).
+            if (type == "connectionState" && (data["state"] as? String) == "connected") {
+                val mac = (data["mac"] as? String).orEmpty()
+                if (mac.isNotEmpty()) connectClassicAudio(mac)
+            }
             eventSink?.success(mapOf("type" to type, "data" to data))
         }
+        registerTestReceiver()
+    }
+
+    /**
+     * Debug-only broadcast hook for automated stress testing over adb. Lets a
+     * test harness drive the real bridge without the Flutter UI:
+     *   adb shell am broadcast -a com.farryon.glasses.TEST --es cmd connect
+     *   adb shell am broadcast -a com.farryon.glasses.TEST --es cmd disconnect
+     *   adb shell am broadcast -a com.farryon.glasses.TEST --es cmd scan
+     * `connect` uses the saved MAC + brings up A2DP, exactly like the app's
+     * connect path. No-op in release builds.
+     */
+    private var testReceiver: android.content.BroadcastReceiver? = null
+
+    private fun registerTestReceiver() {
+        val ctx = appContext ?: return
+        // Debug builds only — never wire a broadcast trigger into a release APK.
+        if ((ctx.applicationInfo.flags and
+                android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0) {
+            return
+        }
+        val rx = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: android.content.Intent?) {
+                val cmd = intent?.getStringExtra("cmd") ?: return
+                android.util.Log.i("GlassesLab", "TEST broadcast: $cmd")
+                val prefs = ctx.getSharedPreferences("glasses_lab", Context.MODE_PRIVATE)
+                val mac = prefs.getString("last_mac", null) ?: ""
+                when (cmd) {
+                    "connect" -> sdk.connect(mac) // A2DP follows on connected-event
+                    "disconnect" -> {
+                        sdk.disconnect()
+                        disconnectClassicAudio()
+                    }
+                    "scan" -> sdk.scan(8000) { hits ->
+                        android.util.Log.i("GlassesLab", "TEST scan → ${hits.size} hits")
+                    }
+                }
+            }
+        }
+        val filter = android.content.IntentFilter("com.farryon.glasses.TEST")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            ctx.registerReceiver(rx, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            ctx.registerReceiver(rx, filter)
+        }
+        testReceiver = rx
+        android.util.Log.i("GlassesLab", "TEST receiver registered")
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -232,12 +287,10 @@ class GlassesChannels private constructor(
                     sdk.scan(timeoutMs) { hits -> result.success(hits) }
                 }
                 "connect" -> {
-                    val mac = call.argument<String>("mac") ?: ""
-                    sdk.connect(mac)
-                    // Also bring up the glasses' A2DP audio so Farry's voice
-                    // plays through them (the SDK's BLE link is control+mic
-                    // only). Harmless if already connected / a different unit.
-                    connectClassicAudio(mac)
+                    // A2DP audio is brought up in the connectionState=connected
+                    // listener (init), AFTER the BLE link — so classic + LE
+                    // don't contend and slow the connect.
+                    sdk.connect(call.argument<String>("mac") ?: "")
                     result.success(null)
                 }
                 "disconnect" -> {
@@ -293,6 +346,14 @@ class GlassesChannels private constructor(
 
     fun dispose() {
         eventSink = null
+        testReceiver?.let {
+            try {
+                appContext?.unregisterReceiver(it)
+            } catch (e: Exception) {
+                // Already unregistered — ignore.
+            }
+        }
+        testReceiver = null
         sdk.dispose()
     }
 }

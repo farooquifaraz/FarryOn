@@ -176,19 +176,36 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
     }
 
+    /** Attempts used for the in-flight connect (1 = first try). One silent
+     *  retry recovers a slow/failed connect (e.g. a degraded BLE stack after
+     *  heavy connect/disconnect cycling) without the user doing anything. */
+    private var connectAttempt = 0
+
     private fun armConnectWatchdog() {
         cancelConnectWatchdog()
         val r = Runnable {
-            if (lastConnectionState != "connected") {
-                emit(
-                    "deviceEvent",
-                    mapOf("hex" to "connect timeout (20 s) — glasses off / out of range?")
-                )
-                emitConnectionState("disconnected")
+            if (lastConnectionState == "connected") return@Runnable
+            val mac = pendingMac
+            if (!userDisconnected && mac != null && connectAttempt < 2) {
+                // First timeout: retry once before declaring failure. The
+                // window is 28 s — a healthy connect is ~3–4 s; only a degraded
+                // stack takes ~20 s, so this rescues those instead of flashing
+                // "disconnected" prematurely.
+                connectAttempt++
+                Log.i(TAG, "connect retry #$connectAttempt → $mac")
+                emit("deviceEvent", mapOf("hex" to "connect slow — retrying ($mac)"))
+                BleOperateManager.getInstance().connectDirectly(mac)
+                armConnectWatchdog()
+                return@Runnable
             }
+            emit(
+                "deviceEvent",
+                mapOf("hex" to "connect timeout — glasses off / out of range?")
+            )
+            emitConnectionState("disconnected")
         }
         connectWatchdog = r
-        main.postDelayed(r, 20_000L)
+        main.postDelayed(r, 28_000L)
     }
 
     private fun cancelConnectWatchdog() {
@@ -226,6 +243,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     val mac = pendingMac
                     if (autoReconnectEnabled && !userDisconnected && mac != null) {
                         emit("deviceEvent", mapOf("hex" to "auto-reconnecting to $mac"))
+                        connectAttempt = 1
                         BleOperateManager.getInstance().connectDirectly(mac)
                         armConnectWatchdog()
                     }
@@ -523,6 +541,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         lastConnectionState = null
         userDisconnected = false
         pendingMac = mac
+        connectAttempt = 1
         op.connectDirectly(mac)
         armConnectWatchdog()
     }
