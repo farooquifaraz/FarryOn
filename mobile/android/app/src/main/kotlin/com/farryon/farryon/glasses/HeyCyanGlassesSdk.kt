@@ -398,7 +398,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 // a nearby TV got tapped by mistake. L80x covers the
                 // L801/L802 naming seen on hardware; everything else stays
                 // visible in logcat for Stage A truth-keeping.
-                if (!name.startsWith("L80")) {
+                // 2026-07-10: a second unit advertises as "L 801_DD8A" (with a
+                // space), which "L80" prefix missed — normalize out whitespace
+                // and uppercase before matching so all L80x variants pass.
+                val norm = name.replace(" ", "").uppercase()
+                if (!norm.startsWith("L80")) {
                     if (filteredLogged.add(device.address)) {
                         Log.i(TAG, "scan filtered out: $name ${device.address} $rssi dBm")
                     }
