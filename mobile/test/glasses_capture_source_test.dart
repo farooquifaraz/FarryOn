@@ -45,7 +45,10 @@ class _FakeBridge implements GlassesBridgeApi {
   @override
   Future<void> takePhoto() async {}
   @override
-  Future<String> takeAiPhoto() async => 'req';
+  Future<String> takeAiPhoto() async {
+    calls.add('takeAiPhoto');
+    return 'req';
+  }
   @override
   Future<void> pairClassicBt() async {}
   @override
@@ -69,10 +72,41 @@ void main() {
 
   Future<void> pump() => Future<void>.delayed(Duration.zero);
 
-  test('advertises audio-in only (no continuous video on this hardware)', () {
+  test('advertises audio-in and (photo-trigger) video-in', () {
     expect(src.capabilities.audioIn, isTrue);
-    expect(src.capabilities.videoIn, isFalse);
+    // B3: vision is on — not a continuous stream, but an on-demand photo whose
+    // thumbnail is emitted on jpegFrames.
+    expect(src.capabilities.videoIn, isTrue);
     expect(src.info.kind, 'glasses');
+  });
+
+  test('B3: capturePhoto triggers an AI photo whose thumbnail becomes a frame',
+      () async {
+    // Subscribe to bridge events, then mark connected (capturePhoto needs it).
+    await src.initialize();
+    bridge.emit('connectionState', {'state': 'connected', 'mac': 'C0:97:AA'});
+    await pump();
+
+    final frames = <Uint8List>[];
+    final sub = src.jpegFrames.listen(frames.add);
+
+    await src.capturePhoto();
+    expect(bridge.calls, contains('takeAiPhoto'));
+
+    // The bridge later delivers the thumbnail — it should surface as a frame.
+    final jpeg = Uint8List.fromList([1, 2, 3, 4]);
+    bridge.emit('thumbnail', {'requestId': 'req', 'jpeg': jpeg});
+    await pump();
+
+    expect(frames, hasLength(1));
+    expect(frames.first, jpeg);
+    await sub.cancel();
+  });
+
+  test('B3: capturePhoto is a no-op while disconnected', () async {
+    await src.initialize();
+    await src.capturePhoto();
+    expect(bridge.calls, isNot(contains('takeAiPhoto')));
   });
 
   test('initialize auto-connects to the saved MAC', () async {

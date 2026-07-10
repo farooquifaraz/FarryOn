@@ -322,6 +322,7 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                     onToggleCamera: () =>
                         notifier.setCameraEnabled(!state.cameraOn),
                     onScan: _scanCurrentView,
+                    onCapturePhoto: notifier.captureGlassesPhoto,
                   ),
                   ],
                 ),
@@ -1146,6 +1147,7 @@ class _Controls extends StatelessWidget {
     required this.onSendText,
     required this.onToggleCamera,
     required this.onScan,
+    required this.onCapturePhoto,
   });
 
   final LiveSessionState state;
@@ -1155,6 +1157,7 @@ class _Controls extends StatelessWidget {
   final ValueChanged<String> onSendText;
   final VoidCallback onToggleCamera;
   final VoidCallback onScan;
+  final VoidCallback onCapturePhoto;
 
   @override
   Widget build(BuildContext context) {
@@ -1176,6 +1179,16 @@ class _Controls extends StatelessWidget {
                 tooltip: state.cameraOn ? 'Turn camera off' : 'Turn camera on',
                 onPressed: onToggleCamera,
               ),
+              // B3: glasses shutter — take a still through the glasses camera
+              // and let Farry look at it. Only shown when the glasses are the
+              // vision source (the phone camera streams continuously, so it
+              // doesn't need a shutter).
+              if (state.videoKind == 'glasses')
+                _CircleButton(
+                  icon: Icons.photo_camera,
+                  tooltip: 'Take a photo through the glasses',
+                  onPressed: state.glassesConnected ? onCapturePhoto : null,
+                ),
               _CircleButton(
                 icon: Icons.center_focus_strong,
                 tooltip: 'Identify what the camera sees',

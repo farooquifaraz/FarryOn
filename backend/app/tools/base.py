@@ -67,6 +67,11 @@ class ToolContext:
     #: later send_telegram by name can use it. Signature:
     #: ``note_phone(name, phone) -> None``.
     note_phone: Callable[[str, str], None] | None = None
+    #: Await the NEXT camera frame (INPUT_VIDEO). Used by ``capture_photo`` so a
+    #: voice-triggered glasses photo is in context before the model answers.
+    #: Signature: ``await wait_for_frame(timeout) -> bool`` (True if a frame
+    #: landed). Set by the orchestrator; ``None`` outside a live session.
+    wait_for_frame: Callable[..., Awaitable[bool]] | None = None
 
 
 class Tool(abc.ABC):

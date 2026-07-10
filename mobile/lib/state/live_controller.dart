@@ -620,6 +620,8 @@ class LiveController {
       case 'set_camera':
         final on = msg.args['on'] as bool? ?? true;
         unawaited(setCameraEnabled(on));
+      case 'capture_photo':
+        unawaited(captureGlassesPhoto());
       case 'rotate_camera':
         unawaited(setCameraPortrait(!_state.cameraPortrait));
       case 'enable_bluetooth':
@@ -1028,6 +1030,22 @@ class LiveController {
     _lastFrame = null;
     await _videoSource.stopVideo();
     _emit(_state.copyWith(cameraOn: false));
+  }
+
+  /// B3: snap a still from the active glasses camera and push it into the
+  /// video pipeline (→ Gemini vision + backend last_frame). Triggered by the
+  /// `capture_photo` voice tool or the on-screen shutter button. No-op if the
+  /// selected camera isn't the glasses (the phone camera already streams).
+  Future<void> captureGlassesPhoto() async {
+    final src = _videoSource;
+    if (src is! GlassesCaptureSource) {
+      _log.warn('capture_photo: active camera is not the glasses — ignoring');
+      return;
+    }
+    // Make sure the jpegFrames→sendVideo listener is attached so the photo
+    // reaches Gemini (glasses have no continuous stream to start it for us).
+    if (_videoSub == null) await _startVideo();
+    await src.capturePhoto();
   }
 
   /// Enable/disable the camera stream at runtime.

@@ -47,6 +47,49 @@ class SetCameraTool(Tool):
         return {"applied": True, "on": bool(kwargs.get("on"))}
 
 
+class CapturePhotoTool(Tool):
+    """Take a single photo from the active camera and look at it.
+
+    B3: on the smart glasses there is no continuous video — the model calls
+    this to snap a still (the app triggers the glasses shutter). We then wait
+    for that frame to arrive so the model answers about what it actually sees.
+    """
+
+    name = "capture_photo"
+    description = (
+        "Take a photo from the camera the user is looking through (their smart "
+        "glasses) and look at it. Call this whenever the user asks about "
+        "something in front of them — 'what is this?', 'what does this say?', "
+        "'read this', 'what am I looking at?', 'describe this' — so you get a "
+        "fresh picture before answering. After it returns, describe what you "
+        "see in the image."
+    )
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+
+    async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+        # The app started the capture the moment it saw this tool_call. Wait
+        # for the resulting frame so it's in context before the model speaks.
+        got = False
+        if ctx.wait_for_frame is not None:
+            got = await ctx.wait_for_frame(timeout=8.0)
+        if got:
+            return {
+                "captured": True,
+                "_instruction": "The photo is now in view — describe what you "
+                "see and answer the user's question about it.",
+            }
+        return {
+            "captured": False,
+            "_instruction": "The photo didn't come through (glasses may be off "
+            "or the shot failed). Ask the user to make sure the glasses are on "
+            "and try again.",
+        }
+
+
 class RotateCameraTool(Tool):
     """Rotate the camera between portrait and landscape."""
 

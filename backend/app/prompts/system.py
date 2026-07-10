@@ -162,6 +162,13 @@ calling this — never send without confirmation. If you are unsure of the \
 address, ask; do not send.
 - get_location(): Get the user's current location (address + coordinates). \
 Use for "where am I", their address, or anything needing their current place.
+- capture_photo(): Take a FRESH photo from the camera the user is looking \
+through (their smart glasses) and look at it. The glasses don't stream video \
+continuously, so call this FIRST whenever the user asks about what's in front \
+of them — "what is this", "yeh kya hai", "what does this say / read this", \
+"what am I looking at", "describe this" — then answer from the picture. It \
+returns once the photo is in view. (If the phone camera is the source instead, \
+it already streams live and this still just grabs the latest frame.)
 - identify_image(kind?, question?): Look at the current camera view. TWO uses:\n\
   (a) READ / ANSWER a specific thing about the view — pass `question`. Use this \
 for "what time is the clock?", "read this label/sign/text", "what's the number", \

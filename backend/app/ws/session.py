@@ -327,6 +327,8 @@ class Session:
             if self._orchestrator is not None:
                 self._orchestrator.last_frame = payload
                 self._orchestrator.last_frame_at = time.monotonic()
+                # Wake any tool (capture_photo) waiting for a fresh frame.
+                self._orchestrator.notify_new_frame()
             await self._gateway.send_video(payload, ts_ms=ts)
         else:
             metrics.FRAMES_IN.labels(kind="unknown").inc()

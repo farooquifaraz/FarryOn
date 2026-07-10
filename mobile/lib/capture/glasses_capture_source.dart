@@ -17,10 +17,11 @@ import 'capture_source.dart';
 /// long-presses the temple (voiceFromGlassesStatus 1→2). That matches the
 /// "long-press-to-talk" glasses combo.
 ///
-/// **Vision:** the glasses do NOT produce a continuous 1 fps video stream —
+/// **Vision (B3):** the glasses do NOT produce a continuous 1 fps stream —
 /// they are photo-trigger only (AI photo → BLE thumbnail, median 3.8 s). So
-/// [capabilities.videoIn] is false here; the split-seam vision selector +
-/// on-demand photo trigger arrive in B1-B / B3. [jpegFrames] stays silent.
+/// [capabilities.videoIn] is true but [jpegFrames] only emits when
+/// [capturePhoto] is called (voice `capture_photo` tool or shutter button);
+/// that one frame then flows the same path a phone-camera frame does.
 class GlassesCaptureSource implements CaptureSource {
   GlassesCaptureSource({
     this.deviceId = 'heycyan-l801',
@@ -54,9 +55,11 @@ class GlassesCaptureSource implements CaptureSource {
 
   @override
   CaptureCapabilities get capabilities =>
-      // Audio-in only for now: glasses mic works; continuous video does not
-      // exist on this hardware (photo-trigger arrives via the vision selector).
-      const CaptureCapabilities(audioIn: true, videoIn: false);
+      // B3: glasses now expose vision too — not a continuous stream but an
+      // on-demand photo (voice tool or shutter button) whose thumbnail is
+      // emitted on [jpegFrames], so downstream it behaves like a phone-camera
+      // frame (Gemini native vision + identify_image both work).
+      const CaptureCapabilities(audioIn: true, videoIn: true);
 
   @override
   DeviceInfo get info => DeviceInfo(
@@ -115,6 +118,16 @@ class GlassesCaptureSource implements CaptureSource {
         if (data is Uint8List && data.isNotEmpty) {
           _audioController.add(data);
         }
+      case 'thumbnail':
+        // B3: an AI/gesture photo finished — the JPEG thumbnail is exactly the
+        // frame Stage B feeds to vision. Emit it on jpegFrames so it flows the
+        // same path a phone-camera frame does (→ sendVideo → Gemini + backend
+        // last_frame cache).
+        final jpeg = event.data['jpeg'];
+        if (jpeg is Uint8List && jpeg.isNotEmpty) {
+          _log.info('glasses photo → ${jpeg.length} bytes (emitting as frame)');
+          if (!_videoController.isClosed) _videoController.add(jpeg);
+        }
       case 'audio':
         // voiceFromGlassesStatus 2 (mic off) arrives as an `audio` status.
         final s = (event.data['status'] as String?) ?? '';
@@ -123,6 +136,22 @@ class GlassesCaptureSource implements CaptureSource {
             _pushStatus(_lastStatus.copyWith(talking: false));
           }
         }
+    }
+  }
+
+  /// B3: trigger an on-demand glasses photo. The capture runs on the headset
+  /// (~3–4 s to the BLE thumbnail); when it lands it is emitted on
+  /// [jpegFrames]. Safe to call only while connected.
+  Future<void> capturePhoto() async {
+    if (_connectedMac == null) {
+      _log.warn('capturePhoto: glasses not connected');
+      return;
+    }
+    try {
+      _log.info('glasses: taking AI photo…');
+      await _bridge.takeAiPhoto();
+    } catch (e) {
+      _log.warn('glasses capturePhoto failed: $e');
     }
   }
 
@@ -150,9 +179,10 @@ class GlassesCaptureSource implements CaptureSource {
 
   @override
   Future<void> startVideo() async {
-    // Photo-trigger only — no continuous stream. The vision selector + AI
-    // photo trigger land in B1-B / B3; jpegFrames stays silent here.
-    _log.info('glasses startVideo: photo-trigger only, no continuous stream');
+    // Photo-trigger only — no continuous stream. Frames appear on [jpegFrames]
+    // when [capturePhoto] is called (voice tool or shutter button, B3); there
+    // is nothing to start here.
+    _log.info('glasses startVideo: photo-trigger only (capturePhoto emits frames)');
   }
 
   @override

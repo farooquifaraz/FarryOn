@@ -82,6 +82,11 @@ class Orchestrator:
         #: ``request_contact_resolution`` creates a Future here and the session
         #: resolves it when the matching ``resolve_contact_result`` arrives.
         self._pending_resolves: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        #: Futures awaiting the NEXT INPUT_VIDEO frame. The ``capture_photo``
+        #: tool (B3 glasses photo-trigger) parks here; the session resolves
+        #: them when a fresh frame lands, so the tool returns exactly when the
+        #: glasses photo is in the model's context — not before, not after.
+        self._frame_waiters: list[asyncio.Future[bool]] = []
         #: Recently device-resolved names -> contact_id, so send_whatsapp /
         #: send_message still work if a weaker model forgets to thread the
         #: contact_id back from resolve_contact (it passes just the name).
@@ -139,6 +144,31 @@ class Orchestrator:
         if future is not None and not future.done():
             future.set_result(payload)
 
+    async def wait_for_frame(self, timeout: float = 8.0) -> bool:
+        """Block until the next INPUT_VIDEO frame arrives (or ``timeout``).
+
+        Used by the ``capture_photo`` tool so a voice-triggered glasses photo
+        is in the model's context before it answers. Returns ``True`` if a
+        fresh frame landed, ``False`` on timeout.
+        """
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[bool] = loop.create_future()
+        self._frame_waiters.append(future)
+        try:
+            return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            return False
+        finally:
+            if future in self._frame_waiters:
+                self._frame_waiters.remove(future)
+
+    def notify_new_frame(self) -> None:
+        """Wake any tool awaiting a fresh frame (called by the session on an
+        incoming INPUT_VIDEO frame)."""
+        for future in self._frame_waiters:
+            if not future.done():
+                future.set_result(True)
+
     def recall_resolved(self, name: str) -> str | None:
         """Contact id from a recent device resolution of ``name``, if any."""
         return self._resolved_ids.get((name or "").strip().lower())
@@ -195,6 +225,7 @@ class Orchestrator:
                 recall_resolved=self.recall_resolved,
                 recall_phone=self.recall_phone,
                 note_phone=self.note_phone,
+                wait_for_frame=self.wait_for_frame,
             )
             result = await self._engine.dispatch(event.name, event.args, ctx)
             try:
