@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:farryon/capture/capture_source.dart';
 import 'package:farryon/capture/device_registry.dart';
 import 'package:farryon/core/config.dart';
+import 'package:farryon/features/glasses_lab/bridge/glasses_channel.dart';
 import 'package:farryon/data/live_client.dart';
 import 'package:farryon/playback/pcm_player.dart';
 import 'package:farryon/protocol/frames.dart';
@@ -81,6 +82,52 @@ class FakePcmPlayer implements PcmPlayer {
   Future<void> stop() async {}
   @override
   Future<void> dispose() async {}
+}
+
+/// Fake glasses bridge: records connect calls and lets the test push events.
+class FakeGlassesBridge implements GlassesBridgeApi {
+  final connectCalls = <String>[];
+  final _events = StreamController<GlassesLabEvent>.broadcast();
+  Map<String, Object?> info = const {'implementation': 'stub', 'lastMac': 'AA:BB:CC'};
+
+  void emit(String type, Map<String, Object?> data) =>
+      _events.add(GlassesLabEvent(type: type, data: data));
+
+  @override
+  Stream<GlassesLabEvent> events() => _events.stream;
+  @override
+  Future<Map<String, Object?>> bridgeInfo() async => info;
+  @override
+  Future<void> connect(String mac) async => connectCalls.add(mac);
+  @override
+  Future<List<GlassesDeviceHit>> scan({Duration timeout = Duration.zero}) async =>
+      const [];
+  @override
+  Future<void> disconnect() async {}
+  @override
+  Future<void> setAutoReconnect(bool enabled) async {}
+  @override
+  Future<void> requestBattery() async {}
+  @override
+  Future<void> requestDeviceInfo() async {}
+  @override
+  Future<void> takePhoto() async {}
+  @override
+  Future<String> takeAiPhoto() async => 'req';
+  @override
+  Future<void> pairClassicBt() async {}
+  @override
+  Future<void> startAudioTest(String mode) async {}
+  @override
+  Future<void> stopAudioTest() async {}
+  @override
+  Future<void> startWifiSync() async {}
+  @override
+  Future<void> stopWifiSync() async {}
+  @override
+  Future<void> setVolume(String type, int level) async {}
+  @override
+  Future<void> enableBluetooth() async {}
 }
 
 class GrantingPermissions implements PermissionsService {
@@ -306,5 +353,63 @@ void main() {
         .whereType<String>()
         .any((s) => s.contains('"type":"text"') && s.contains('hi there'));
     expect(sentText, isTrue);
+  });
+
+  test('connect_glasses can reconnect after a drop (guard is not stuck)',
+      () async {
+    // Regression: after a successful connect the in-flight guard used to stay
+    // set forever, silently blocking every later reconnect (e.g. a second
+    // session started without killing the app). This drives connect → drop →
+    // reconnect and asserts the second connect is actually attempted.
+    final glasses = FakeGlassesBridge();
+    final source = FakeCaptureSource();
+    final registry = DeviceRegistry(factory: (_) => source);
+    final ctl = LiveController(
+      config: const AppConfig(host: 'h', port: 8000, secure: false),
+      registry: registry,
+      player: FakePcmPlayer(),
+      permissions: GrantingPermissions(),
+      clientFactory: (cfg, deviceInfo) => WebSocketLiveClient(
+        config: cfg,
+        platform: 'android',
+        deviceInfoProvider: deviceInfo,
+        channelFactory: (_) => fake,
+      ),
+      platform: 'android',
+      glassesBridge: glasses,
+    );
+    addTearDown(ctl.dispose);
+
+    await ctl.connect();
+    await tick();
+
+    // First connect_glasses tool call → bridge.connect attempted.
+    fake.pushJson({
+      'type': 'tool_call',
+      'id': 'g1',
+      'name': 'connect_glasses',
+      'args': <String, dynamic>{},
+      'needsPermission': false,
+    });
+    await tick();
+    expect(glasses.connectCalls, hasLength(1));
+
+    // Link comes up, then drops (BLE lost between sessions).
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+    glasses.emit('connectionState', {'state': 'disconnected'});
+    await tick();
+
+    // Second connect_glasses (new session) MUST attempt a connect again.
+    fake.pushJson({
+      'type': 'tool_call',
+      'id': 'g2',
+      'name': 'connect_glasses',
+      'args': <String, dynamic>{},
+      'needsPermission': false,
+    });
+    await tick();
+    expect(glasses.connectCalls, hasLength(2),
+        reason: 'reconnect after a drop must not be blocked by a stuck guard');
   });
 }

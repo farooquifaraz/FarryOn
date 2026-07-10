@@ -208,10 +208,14 @@ class LiveController {
     } catch (e) {
       _log.warn('connect_glasses failed: $e');
     } finally {
-      // Clear the in-flight guard after the connect watchdog window so a
-      // genuine retry is possible if the first attempt timed out.
+      // Backstop: always clear the in-flight guard after the connect watchdog
+      // window. (It's also cleared the instant a connectionState event lands —
+      // see _onGlassesEvent.) Previously this only cleared when NOT connected,
+      // so a successful connect left the guard stuck true forever and every
+      // later reconnect — e.g. starting a second session without killing the
+      // app — was silently blocked.
       Future<void>.delayed(const Duration(seconds: 24), () {
-        if (!_state.glassesConnected) _connectingGlasses = false;
+        _connectingGlasses = false;
       });
     }
   }
@@ -272,6 +276,9 @@ class LiveController {
       case 'connectionState':
         final connected = event.data['state'] == 'connected';
         _emit(_state.copyWith(glassesConnected: connected));
+        // The connect attempt has resolved (either way) — release the in-flight
+        // guard so a later reconnect (new session, or after a drop) can proceed.
+        _connectingGlasses = false;
       case 'battery':
         final pct = (event.data['pct'] as num?)?.toInt();
         if (pct != null) {
