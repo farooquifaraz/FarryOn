@@ -121,6 +121,7 @@ class LiveNotifier extends Notifier<LiveSessionState> {
   Future<void> interrupt() => _controller.interrupt();
   void sendText(String text) => _controller.sendText(text);
   Future<void> setCameraEnabled(bool on) => _controller.setCameraEnabled(on);
+  Future<void> captureGlassesPhoto() => _controller.captureGlassesPhoto();
   Future<void> setCameraPortrait(bool portrait) =>
       _controller.setCameraPortrait(portrait);
   Future<void> setCameraZoom(double level) =>

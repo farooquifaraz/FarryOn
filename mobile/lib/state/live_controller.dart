@@ -190,22 +190,37 @@ class LiveController {
     _connectingGlasses = true;
     try {
       final info = await bridge.bridgeInfo();
-      var mac = info['lastMac'] as String?;
-      if (mac == null || mac.isEmpty) {
-        // No saved device (or a fresh pair the app hasn't bound yet). Scan —
-        // which now also surfaces glasses already paired in Android BT
-        // settings (bonded but not BLE-advertising) — and connect the first
-        // L80x we see, so a voice "connect glasses" works without a manual
-        // trip through the Lab.
-        _log.info('connect_glasses: no saved MAC — scanning for glasses');
-        final hits = await bridge.scan(timeout: const Duration(seconds: 8));
-        if (hits.isEmpty) {
-          _log.warn('connect_glasses: scan found no glasses');
-          return;
+      final savedMac = info['lastMac'] as String?;
+      // Scan to see which glasses are actually PRESENT right now. This also
+      // surfaces units paired in Android BT settings (bonded), each flagged
+      // with whether it's powered on this instant. Critical when two glasses
+      // are paired: the saved one may be off while the other is the one the
+      // user is wearing — connect the live one, not the dead saved MAC.
+      final hits = await bridge.scan(timeout: const Duration(seconds: 6));
+      String? mac;
+      if (hits.isNotEmpty) {
+        // 1) powered-on-right-now (classic link up) wins; 2) else a unit that's
+        // BLE-advertising (real rssi); 3) else the saved MAC if it's in range;
+        // 4) else just the first thing we saw.
+        final live = hits.where((h) => h.connected).toList();
+        final advertising = hits.where((h) => h.rssi != 0).toList();
+        if (live.isNotEmpty) {
+          mac = live.first.mac;
+        } else if (advertising.isNotEmpty) {
+          mac = advertising.first.mac;
+        } else if (savedMac != null && hits.any((h) => h.mac == savedMac)) {
+          mac = savedMac;
+        } else {
+          mac = hits.first.mac;
         }
-        mac = hits.first.mac;
       }
-      _log.info('connect_glasses → $mac');
+      // Direct connect can still reach a bonded device the scan missed.
+      mac ??= (savedMac != null && savedMac.isNotEmpty) ? savedMac : null;
+      if (mac == null) {
+        _log.warn('connect_glasses: no glasses found — turn them on');
+        return;
+      }
+      _log.info('connect_glasses → $mac (saved=$savedMac)');
       await bridge.connect(mac);
     } catch (e) {
       _log.warn('connect_glasses failed: $e');

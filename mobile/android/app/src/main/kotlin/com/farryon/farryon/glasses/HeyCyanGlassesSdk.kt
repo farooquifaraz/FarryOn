@@ -127,6 +127,17 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      * connectable anyway. Name is normalized (strip spaces + uppercase) so
      * "L 801_DD8A" matches the L80x family like everything else.
      */
+    /** Is this bonded device currently connected over classic BT (powered on
+     *  and in range)? Uses the hidden BluetoothDevice.isConnected(). */
+    private fun isClassicConnected(device: BluetoothDevice): Boolean {
+        return try {
+            val m = device.javaClass.getMethod("isConnected")
+            (m.invoke(device) as? Boolean) == true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun bondedGlasses(): List<Map<String, Any?>> {
         return try {
             val adapter = (app.getSystemService(Context.BLUETOOTH_SERVICE)
@@ -142,6 +153,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     "mac" to device.address,
                     "rssi" to null,
                     "bonded" to true,
+                    // Which unit is powered on RIGHT NOW (classic link up) — the
+                    // one the user is actually wearing when two are paired.
+                    "connected" to isClassicConnected(device),
                 )
             }
         } catch (e: Exception) {

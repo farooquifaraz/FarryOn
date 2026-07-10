@@ -68,17 +68,30 @@ abstract class GlassesBridgeApi {
 /// One BLE scan result.
 class GlassesDeviceHit {
   const GlassesDeviceHit(
-      {required this.name, required this.mac, required this.rssi});
+      {required this.name,
+      required this.mac,
+      required this.rssi,
+      this.bonded = false,
+      this.connected = false});
 
   factory GlassesDeviceHit.fromMap(Map<dynamic, dynamic> m) => GlassesDeviceHit(
         name: (m['name'] as String?) ?? 'Unknown',
         mac: (m['mac'] as String?) ?? '',
         rssi: (m['rssi'] as num?)?.toInt() ?? 0,
+        bonded: (m['bonded'] as bool?) ?? false,
+        connected: (m['connected'] as bool?) ?? false,
       );
 
   final String name;
   final String mac;
   final int rssi;
+
+  /// Paired in Android BT settings (may not be BLE-advertising).
+  final bool bonded;
+
+  /// Currently powered on and linked over classic BT right now — the strongest
+  /// signal that this is the glasses the user is actually wearing.
+  final bool connected;
 }
 
 /// A single event from the native side.
