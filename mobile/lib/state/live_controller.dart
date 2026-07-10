@@ -191,46 +191,62 @@ class LiveController {
     try {
       final info = await bridge.bridgeInfo();
       final savedMac = info['lastMac'] as String?;
-      // Scan to see which glasses are actually PRESENT right now. This also
-      // surfaces units paired in Android BT settings (bonded), each flagged
-      // with whether it's powered on this instant. Critical when two glasses
-      // are paired: the saved one may be off while the other is the one the
-      // user is wearing — connect the live one, not the dead saved MAC.
-      final hits = await bridge.scan(timeout: const Duration(seconds: 6));
-      String? mac;
-      if (hits.isNotEmpty) {
-        // 1) powered-on-right-now (classic link up) wins; 2) else a unit that's
-        // BLE-advertising (real rssi); 3) else the saved MAC if it's in range;
-        // 4) else just the first thing we saw.
-        final live = hits.where((h) => h.connected).toList();
-        final advertising = hits.where((h) => h.rssi != 0).toList();
-        if (live.isNotEmpty) {
-          mac = live.first.mac;
-        } else if (advertising.isNotEmpty) {
-          mac = advertising.first.mac;
-        } else if (savedMac != null && hits.any((h) => h.mac == savedMac)) {
-          mac = savedMac;
-        } else {
-          mac = hits.first.mac;
-        }
+      if (savedMac != null && savedMac.isNotEmpty) {
+        // FAST PATH: connect the saved device directly — no scan. A mid-session
+        // BLE scan holds the radio for seconds and stalls the audio we're
+        // streaming to Gemini (seen as a 1011 "deadline expired" session drop),
+        // so we avoid it in the common case. If the saved unit is actually off
+        // (two-glasses case), the watchdog below falls back to a scan.
+        _log.info('connect_glasses → $savedMac (direct)');
+        await bridge.connect(savedMac);
+        _scheduleGlassesScanFallback(bridge, savedMac);
+      } else {
+        // No saved device — we have no choice but to scan (also surfaces units
+        // paired in Android BT settings) and connect the best candidate.
+        await _scanAndConnectBest(bridge, null);
       }
-      // Direct connect can still reach a bonded device the scan missed.
-      mac ??= (savedMac != null && savedMac.isNotEmpty) ? savedMac : null;
-      if (mac == null) {
-        _log.warn('connect_glasses: no glasses found — turn them on');
-        return;
-      }
-      _log.info('connect_glasses → $mac (saved=$savedMac)');
-      await bridge.connect(mac);
     } catch (e) {
       _log.warn('connect_glasses failed: $e');
     } finally {
       // Clear the in-flight guard after the connect watchdog window so a
       // genuine retry is possible if the first attempt timed out.
-      Future<void>.delayed(const Duration(seconds: 22), () {
+      Future<void>.delayed(const Duration(seconds: 24), () {
         if (!_state.glassesConnected) _connectingGlasses = false;
       });
     }
+  }
+
+  /// If the direct connect to [triedMac] hasn't landed within the connect
+  /// watchdog window, the saved unit is probably off — scan and connect
+  /// whichever glasses is actually present now.
+  void _scheduleGlassesScanFallback(GlassesBridgeApi bridge, String triedMac) {
+    Future<void>.delayed(const Duration(seconds: 12), () async {
+      if (_state.glassesConnected) return; // direct connect worked
+      _log.info('connect_glasses: $triedMac did not connect — scan fallback');
+      await _scanAndConnectBest(bridge, triedMac);
+    });
+  }
+
+  /// Scan and connect the best-available glasses: powered-on-now wins, then a
+  /// live BLE advertiser, then anything we saw. [skipMac] is the unit we just
+  /// failed to reach (avoid retrying the dead one first).
+  Future<void> _scanAndConnectBest(
+      GlassesBridgeApi bridge, String? skipMac) async {
+    final hits = await bridge.scan(timeout: const Duration(seconds: 6));
+    if (hits.isEmpty) {
+      _log.warn('connect_glasses: no glasses found — turn them on');
+      return;
+    }
+    final live = hits.where((h) => h.connected && h.mac != skipMac).toList();
+    final advertising =
+        hits.where((h) => h.rssi != 0 && h.mac != skipMac).toList();
+    final mac = live.isNotEmpty
+        ? live.first.mac
+        : advertising.isNotEmpty
+            ? advertising.first.mac
+            : hits.first.mac;
+    _log.info('connect_glasses → $mac (from scan)');
+    await bridge.connect(mac);
   }
 
   bool _connectingGlasses = false;
