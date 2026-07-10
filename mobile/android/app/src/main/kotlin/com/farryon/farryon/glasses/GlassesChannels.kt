@@ -123,6 +123,66 @@ class GlassesChannels private constructor(
         }
     }
 
+    /**
+     * Connect the glasses' classic-BT A2DP (audio) profile so the assistant's
+     * TTS plays THROUGH the glasses. The BLE link the SDK sets up only carries
+     * control + mic PCM; media output is a separate A2DP connection that
+     * Android does not always auto-restore (esp. after our Option-A disconnect).
+     * No public connect API exists, so we call the hidden
+     * BluetoothA2dp.connect(device) via reflection (mirror of the disconnect).
+     */
+    private fun connectClassicAudio(mac: String) {
+        val ctx = appContext ?: return
+        if (mac.isBlank()) return
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
+                ctx.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+            val mgr = ctx.getSystemService(android.content.Context.BLUETOOTH_SERVICE)
+                as? android.bluetooth.BluetoothManager ?: return
+            val adapter = mgr.adapter ?: return
+            val device = try {
+                adapter.getRemoteDevice(mac)
+            } catch (e: Exception) {
+                null
+            } ?: return
+            adapter.getProfileProxy(
+                ctx,
+                object : android.bluetooth.BluetoothProfile.ServiceListener {
+                    override fun onServiceConnected(
+                        profile: Int,
+                        proxy: android.bluetooth.BluetoothProfile,
+                    ) {
+                        try {
+                            if (proxy.getConnectionState(device) ==
+                                android.bluetooth.BluetoothProfile.STATE_CONNECTED
+                            ) {
+                                android.util.Log.i("GlassesLab", "A2DP already connected → $mac")
+                            } else {
+                                proxy.javaClass
+                                    .getMethod("connect", android.bluetooth.BluetoothDevice::class.java)
+                                    .invoke(proxy, device)
+                                android.util.Log.i("GlassesLab", "A2DP connect → $mac")
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.i("GlassesLab", "A2DP connect reflection failed: $e")
+                        } finally {
+                            adapter.closeProfileProxy(profile, proxy)
+                        }
+                    }
+
+                    override fun onServiceDisconnected(profile: Int) {}
+                },
+                android.bluetooth.BluetoothProfile.A2DP,
+            )
+        } catch (e: Exception) {
+            android.util.Log.i("GlassesLab", "connectClassicAudio failed: $e")
+        }
+    }
+
     private fun enableBluetooth() {
         val ctx = appContext ?: return
         try {
@@ -172,7 +232,12 @@ class GlassesChannels private constructor(
                     sdk.scan(timeoutMs) { hits -> result.success(hits) }
                 }
                 "connect" -> {
-                    sdk.connect(call.argument<String>("mac") ?: "")
+                    val mac = call.argument<String>("mac") ?: ""
+                    sdk.connect(mac)
+                    // Also bring up the glasses' A2DP audio so Farry's voice
+                    // plays through them (the SDK's BLE link is control+mic
+                    // only). Harmless if already connected / a different unit.
+                    connectClassicAudio(mac)
                     result.success(null)
                 }
                 "disconnect" -> {
