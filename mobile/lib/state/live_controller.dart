@@ -674,6 +674,12 @@ class LiveController {
         unawaited(setCameraEnabled(on));
       case 'capture_photo':
         unawaited(captureGlassesPhoto());
+      case 'identify_image':
+        // The model often reaches for identify_image on "what is this". With
+        // the glasses (photo-trigger) there's no live frame, so snap one now —
+        // the backend tool waits for it. No-op if the phone camera is active
+        // (it already streams frames).
+        unawaited(captureGlassesPhoto());
       case 'rotate_camera':
         unawaited(setCameraPortrait(!_state.cameraPortrait));
       case 'enable_bluetooth':

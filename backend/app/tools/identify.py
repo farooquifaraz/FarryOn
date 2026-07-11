@@ -64,11 +64,21 @@ class IdentifyImageTool(Tool):
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
         """Run detection on the cached camera frame and return the result."""
-        stale = (
-            ctx.last_frame_at is None
-            or (time.monotonic() - ctx.last_frame_at) > _FRAME_STALE_SECONDS
-        )
-        if not ctx.last_frame or stale:
+        def _is_stale() -> bool:
+            return (
+                ctx.last_frame_at is None
+                or (time.monotonic() - ctx.last_frame_at) > _FRAME_STALE_SECONDS
+            )
+
+        # Photo-trigger cameras (smart glasses) have no continuous stream: the
+        # client snaps a fresh photo when it sees this tool call, so if there's
+        # no usable frame yet, wait briefly for that photo to land before giving
+        # up. On the phone camera a frame is already fresh, so this returns at
+        # once.
+        if (not ctx.last_frame or _is_stale()) and ctx.wait_for_frame is not None:
+            await ctx.wait_for_frame(timeout=8.0)
+
+        if not ctx.last_frame or _is_stale():
             return {
                 "ok": False,
                 "error": (
