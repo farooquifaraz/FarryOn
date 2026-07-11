@@ -284,6 +284,8 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _MicChip(state: state),
+                    const SizedBox(width: 8),
+                    _CamChip(state: state),
                     if (state.audioKind == 'glasses' || state.glassesConnected)
                       ...[
                       const SizedBox(width: 8),
@@ -404,8 +406,7 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                   RadioListTile<CaptureDeviceKind>(
                     value: CaptureDeviceKind.glasses,
                     dense: true,
-                    enabled: false,
-                    title: Text('Glasses camera (photo-trigger — coming in B3)'),
+                    title: Text('Glasses camera (say "what is this" or tap 📷)'),
                   ),
                 ],
               ),
@@ -488,6 +489,34 @@ class _MicChip extends StatelessWidget {
               style: TextStyle(
                   color: color, fontSize: 12, fontWeight: FontWeight.w600)),
         ],
+      ),
+    );
+  }
+}
+
+/// Icon-only indicator of the active CAMERA — glasses eye when the glasses cam
+/// is selected, phone-camera icon otherwise. Mirrors the mic chip so the user
+/// can see at a glance which camera a photo will come from.
+class _CamChip extends StatelessWidget {
+  const _CamChip({required this.state});
+
+  final LiveSessionState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final glasses = state.videoKind == 'glasses';
+    final color = state.cameraOn ? Aurora.mint : Aurora.textMuted;
+    return Container(
+      padding: const EdgeInsets.all(7),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+      ),
+      child: Icon(
+        glasses ? Icons.visibility : Icons.photo_camera,
+        size: 14,
+        color: color,
       ),
     );
   }

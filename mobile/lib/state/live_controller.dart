@@ -255,6 +255,10 @@ class LiveController {
 
   bool _connectingGlasses = false;
 
+  /// Tracks the last glasses connection state so the camera auto-switches only
+  /// on a real transition (connect → glasses cam, disconnect → phone cam).
+  bool _glassesWasConnected = false;
+
   bool _lowBatteryWarned = false;
 
   /// Announce a low glasses battery once (via Farry), re-arming after it
@@ -279,6 +283,16 @@ class LiveController {
         // The connect attempt has resolved (either way) — release the in-flight
         // guard so a later reconnect (new session, or after a drop) can proceed.
         _connectingGlasses = false;
+        // Auto-pick the camera on a connect/disconnect TRANSITION: glasses
+        // become the default camera the moment they connect, and it falls back
+        // to the phone camera when they drop. (setVideoDevice no-ops if already
+        // on that device, so this won't fight a matching manual choice.)
+        if (connected != _glassesWasConnected) {
+          _glassesWasConnected = connected;
+          unawaited(setVideoDevice(connected
+              ? CaptureDeviceKind.glasses
+              : CaptureDeviceKind.phone));
+        }
       case 'battery':
         final pct = (event.data['pct'] as num?)?.toInt();
         if (pct != null) {
