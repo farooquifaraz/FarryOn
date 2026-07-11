@@ -1067,14 +1067,21 @@ class LiveController {
   Future<void> _startVideo() async {
     await _videoSource.startVideo();
     await _videoSub?.cancel();
+    // A glasses source only emits on an explicit capture (photo-trigger), so
+    // its frames are one-shot and must always be sent. A phone camera streams
+    // ~1 fps continuously — those we drop while the assistant speaks.
+    final oneShotCamera = _videoSource is GlassesCaptureSource;
     _videoSub = _videoSource.jpegFrames.listen((jpeg) {
       // Always keep the freshest frame for the scan button / identify_image,
       // even while the assistant is speaking.
       _lastFrame = jpeg;
-      // Don't feed frames while the assistant is speaking: they can't influence
-      // the in-flight reply and would only pile up in the realtime model's
-      // context, slowing later turns. Frames resume the moment TTS drains.
-      if (_ttsActive) return;
+      // Don't feed CONTINUOUS frames while the assistant is speaking: they
+      // can't influence the in-flight reply and would only pile up in the
+      // realtime model's context. But a glasses photo is a one-shot the model
+      // explicitly requested — it MUST reach the model even mid-speech, else a
+      // "take a photo and tell me about it" (model narrates → TTS active) drops
+      // the frame and comes back with no information.
+      if (_ttsActive && !oneShotCamera) return;
       _client.sendVideo(jpeg);
     });
     _emit(_state.copyWith(cameraOn: true));
