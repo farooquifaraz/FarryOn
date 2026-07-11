@@ -9,9 +9,16 @@ voice: "mute the mic", "turn the camera off", "rotate", "end the session".
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
+from app.config import get_settings
+from app.logging_conf import get_logger
+from app.services.vision import run_detection
 from app.tools.base import Tool, ToolContext
+from app.tools.capture_feedback import capture_failure_message
+
+logger = get_logger(__name__)
 
 
 class MuteMicTool(Tool):
@@ -70,23 +77,64 @@ class CapturePhotoTool(Tool):
         "required": [],
     }
 
+    #: Question that turns the fresh frame into a concise scene description via
+    #: the reliable server-side vision path (not the model's realtime video).
+    _DESCRIBE_QUESTION = (
+        "Describe the scene in front of the camera concisely: the main "
+        "objects, the setting, and anything notable. If there is readable "
+        "text, include it."
+    )
+
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
         # The app started the capture the moment it saw this tool_call. Wait
         # for the resulting frame so it's in context before the model speaks.
+        # The timeout is the session's device-appropriate default; a
+        # device-reported capture failure wakes the wait early with a reason.
         got = False
         if ctx.wait_for_frame is not None:
-            got = await ctx.wait_for_frame(timeout=8.0)
-        if got:
-            return {
-                "captured": True,
-                "_instruction": "The photo is now in view — describe what you "
-                "see and answer the user's question about it.",
-            }
+            got = await ctx.wait_for_frame()
+        if not got:
+            reason = ctx.capture_error() if ctx.capture_error is not None else None
+            return {"captured": False, "_instruction": capture_failure_message(reason)}
+
+        # Describe the ACTUAL captured frame via the server-side vision path
+        # (a one-shot Gemini vision call on the exact JPEG bytes) instead of
+        # relying on the model's realtime-video context. The realtime path is
+        # unreliable for a one-shot glasses photo — the model kept describing a
+        # PREVIOUS scene it still "remembered" (device-proven 2026-07-11: it
+        # described an indoor desk while the fresh photo was a night skyline).
+        frame: bytes | None
+        if ctx.latest_frame is not None:
+            frame, _ = ctx.latest_frame()
+        else:
+            frame = ctx.last_frame
+        if frame:
+            try:
+                image_b64 = base64.b64encode(frame).decode("utf-8")
+                detection = await run_detection(
+                    "auto",
+                    settings=get_settings(),
+                    image_data=image_b64,
+                    question=self._DESCRIBE_QUESTION,
+                )
+                answer = (detection.get("result") or {}).get("answer")
+                if detection.get("ok") and answer:
+                    return {
+                        "captured": True,
+                        "description": answer,
+                        "_instruction": "This is what the camera actually sees "
+                        "right now. Relay it to the user and answer their "
+                        "question from it; do not describe anything else.",
+                    }
+            except Exception as exc:  # noqa: BLE001 - fall back to native vision
+                logger.warning("capture_photo.describe_failed", error=repr(exc))
+
+        # Fallback: the describe call was unavailable (no vision key) or failed
+        # — let the model use its own view of the just-sent frame.
         return {
-            "captured": False,
-            "_instruction": "The photo didn't come through (glasses may be off "
-            "or the shot failed). Ask the user to make sure the glasses are on "
-            "and try again.",
+            "captured": True,
+            "_instruction": "The photo is now in view — describe what you see "
+            "and answer the user's question about it.",
         }
 
 

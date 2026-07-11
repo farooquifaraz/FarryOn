@@ -171,6 +171,11 @@ class Session:
             web_search = (self._hello or {}).get("webSearch")
             email = (self._hello or {}).get("email")
             location = (self._hello or {}).get("location")
+            # Vision tools wait longer for a frame on photo-trigger glasses
+            # than on a streaming phone camera (see Settings for the budgets).
+            device = (self._hello or {}).get("device")
+            device_kind = device.get("kind") if isinstance(device, dict) else None
+            frame_wait_seconds = self._frame_wait_for_kind(device_kind)
             self._orchestrator = Orchestrator(
                 engine=self._engine,
                 gateway=self._gateway,
@@ -181,6 +186,7 @@ class Session:
                 web_search=web_search if isinstance(web_search, dict) else None,
                 email=email if isinstance(email, dict) else None,
                 location=location if isinstance(location, dict) else None,
+                frame_wait_seconds=frame_wait_seconds,
             )
 
             read_task = asyncio.create_task(self._read_pump(), name="read_pump")
@@ -292,6 +298,18 @@ class Session:
         except json.JSONDecodeError:
             return None
 
+    def _frame_wait_for_kind(self, device_kind: str | None) -> float:
+        """Frame-wait budget for a camera ``kind``.
+
+        The kind is a combo when the channels come from different devices
+        (e.g. ``"phone+glasses"`` = phone mic + glasses camera), so match by
+        substring: any glasses involvement means the camera may be the
+        photo-trigger one, which needs the longer budget.
+        """
+        if isinstance(device_kind, str) and "glasses" in device_kind:
+            return self._settings.glasses_frame_wait_seconds
+        return self._settings.frame_wait_seconds
+
     # -- Read pump (client -> gateway) ---------------------------------------
 
     async def _read_pump(self) -> None:
@@ -327,9 +345,17 @@ class Session:
             if self._orchestrator is not None:
                 self._orchestrator.last_frame = payload
                 self._orchestrator.last_frame_at = time.monotonic()
-                # Wake any tool (capture_photo) waiting for a fresh frame.
-                self._orchestrator.notify_new_frame()
+            # Push the frame to the model BEFORE waking any waiting tool. Order
+            # matters: capture_photo's result triggers the model to generate a
+            # "describe what you see" reply, so the frame must already be in the
+            # model's realtime-input queue or the model answers blind and
+            # hallucinates (device-proven 2026-07-11: it described a "grey
+            # gradient" while the glasses had captured a clear room photo).
             await self._gateway.send_video(payload, ts_ms=ts)
+            if self._orchestrator is not None:
+                # Wake any tool (capture_photo) waiting for a fresh frame — now
+                # that the frame is on its way to the model.
+                self._orchestrator.notify_new_frame()
         else:
             metrics.FRAMES_IN.labels(kind="unknown").inc()
             logger.warning("frame.unknown_tag", tag=tag)
@@ -373,6 +399,38 @@ class Session:
             if isinstance(loc, dict) and self._orchestrator is not None:
                 self._orchestrator.location = loc
                 logger.info("location.updated", session_id=self.session_id)
+        elif mtype == "device_update":
+            # The client switched its active capture device mid-session (e.g.
+            # glasses connected by voice AFTER hello and became the camera).
+            # Re-pick the frame-wait budget from the NEW camera kind, so a
+            # photo-trigger glasses capture gets the long budget it needs —
+            # without this the session kept the hello-time "phone" budget and
+            # cut off every glasses photo (device-proven 2026-07-11).
+            new_kind = message.get("videoKind")
+            if self._orchestrator is not None and isinstance(new_kind, str):
+                budget = self._frame_wait_for_kind(new_kind)
+                self._orchestrator.set_frame_wait_seconds(budget)
+                logger.info(
+                    "device.updated",
+                    session_id=self.session_id,
+                    video_kind=new_kind,
+                    frame_wait_seconds=budget,
+                )
+        elif mtype == "capture_failed":
+            # The device could not deliver the photo a vision tool is waiting
+            # for (glasses not connected / camera busy / transfer stalled...).
+            # Wake the waiting tool NOW with the precise reason instead of
+            # letting it run out the full frame timeout.
+            reason = message.get("reason")
+            if self._orchestrator is not None:
+                self._orchestrator.notify_capture_failed(
+                    reason if isinstance(reason, str) and reason else "unknown"
+                )
+                logger.info(
+                    "capture.failed",
+                    session_id=self.session_id,
+                    reason=reason,
+                )
         elif mtype == "resolve_contact_result":
             # The device finished resolving a contact name locally (privacy-
             # preserving). Hand the masked result back to the awaiting tool.

@@ -54,6 +54,64 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     companion object {
         /** `adb logcat -s GlassesLab` follows the whole bridge remotely. */
         const val TAG = "GlassesLab"
+
+        // -- Tuning knobs (all timing/protocol values live here, never inline) --
+
+        /** BLE connect budget before the watchdog declares failure. A healthy
+         *  connect is ~2.5 s (median, 11 samples); only a degraded stack takes
+         *  ~20 s, so this window rescues those instead of flashing
+         *  "disconnected" prematurely. */
+        private const val CONNECT_TIMEOUT_MS = 28_000L
+
+        /** Total connect attempts (1 first try + silent retries). */
+        private const val CONNECT_MAX_ATTEMPTS = 2
+
+        /** Pause between the clean-slate unBindDevice() and the fresh
+         *  connectDirectly(). A wedged pending connect only clears via
+         *  unBindDevice (log-proven 2026-07-11: five overlapping connects hung
+         *  for 3 min; a manual disconnect→connect then linked in 4.9 s) — the
+         *  pause lets the SDK finish tearing down before the new attempt. */
+        private const val CONNECT_CLEAN_SLATE_DELAY_MS = 500L
+
+        /** Wait after the phone's Bluetooth turns ON before auto-reconnecting.
+         *  Firing connectDirectly on the STATE_ON broadcast itself wedges the
+         *  attempt (seen 2026-07-11 19:47): the BLE stack is still booting and
+         *  the glasses' classic-BT (A2DP) reattach contends with the LE radio. */
+        private const val BT_ON_RECONNECT_DELAY_MS = 2_500L
+
+        /** AI-photo budget from the BLE command to the capture notify (0x02).
+         *  Capture itself is ~2.2-2.4 s (firmware-fixed); busy glasses ignore
+         *  the command silently, which this watchdog turns into a report. */
+        private const val PHOTO_CAPTURE_TIMEOUT_MS = 8_000L
+
+        /** Rolling per-chunk budget while the JPEG thumbnail streams over BLE
+         *  (~1013-byte chunks, ~10 kB/s measured). Re-armed on every chunk, so
+         *  it only fires when the transfer genuinely stalls. */
+        private const val THUMBNAIL_CHUNK_TIMEOUT_MS = 3_000L
+
+        /** Vendor thumbnailSize argument (range 0x00..0x06). 0x02 measures
+         *  512×384 / 15-33 KB — recognition-grade; lower is faster. */
+        private const val THUMBNAIL_SIZE: Byte = 0x02
+
+        /** requestId used for captures the glasses started themselves
+         *  (touch gesture) — there is no app-side request to correlate. */
+        private const val DEVICE_INITIATED_REQUEST_ID = "device-initiated"
+
+        /** WiFi sync stall budget: importAlbum fails silently when the
+         *  glasses' WiFi-P2P never comes up (e.g. on the charger). */
+        private const val WIFI_SYNC_STALL_TIMEOUT_MS = 60_000L
+
+        /** Media-count probe reply budget before importing anyway. */
+        private const val MEDIA_COUNT_PROBE_TIMEOUT_MS = 3_000L
+
+        /** The glasses mark synced media as done LAZILY (still stale 1.5 s
+         *  after completion) — re-query twice; the later result wins. */
+        private const val MEDIA_RECOUNT_FIRST_DELAY_MS = 3_000L
+        private const val MEDIA_RECOUNT_SECOND_DELAY_MS = 10_000L
+
+        /** HFP mic probe: SCO route settle time + recording duration. */
+        private const val HFP_SCO_SETTLE_MS = 1_000L
+        private const val HFP_RECORD_DURATION_MS = 10_000L
     }
 
     override val implementationName = "heycyan"
@@ -112,6 +170,12 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
     /** Pending "still connecting?" check — cleared on connect/disconnect. */
     private var connectWatchdog: Runnable? = null
+
+    /** A connect attempt is in flight exactly while its watchdog is armed.
+     *  Used to serialize attempts: overlapping connectDirectly calls wedge
+     *  the vendor SDK until unBindDevice (log-proven 2026-07-11). */
+    private val isConnecting: Boolean
+        get() = connectWatchdog != null
 
     private fun bluetoothEnabled(): Boolean =
         (app.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)
@@ -181,21 +245,45 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      *  heavy connect/disconnect cycling) without the user doing anything. */
     private var connectAttempt = 0
 
+    /**
+     * Clean-slate connect: unbind whatever half-open attempt the SDK holds,
+     * pause, then issue a fresh connectDirectly. This is the ONLY sequence
+     * that recovers a wedged pending connect (log-proven 2026-07-11), and it
+     * is also safe on a healthy stack (unbind of nothing is a no-op).
+     */
+    private fun cleanSlateConnect(mac: String) {
+        try {
+            BleOperateManager.getInstance().unBindDevice()
+        } catch (e: Exception) {
+            Log.i(TAG, "pre-connect unbind: $e")
+        }
+        main.postDelayed({
+            // Abandon if the user disconnected / switched device / lost
+            // Bluetooth meanwhile.
+            if (userDisconnected || pendingMac != mac) return@postDelayed
+            if (lastConnectionState == "connected" || !bluetoothEnabled()) {
+                return@postDelayed
+            }
+            BleOperateManager.getInstance().connectDirectly(mac)
+        }, CONNECT_CLEAN_SLATE_DELAY_MS)
+        armConnectWatchdog()
+    }
+
     private fun armConnectWatchdog() {
         cancelConnectWatchdog()
         val r = Runnable {
+            connectWatchdog = null // this attempt is over; allow a fresh one
             if (lastConnectionState == "connected") return@Runnable
             val mac = pendingMac
-            if (!userDisconnected && mac != null && connectAttempt < 2) {
-                // First timeout: retry once before declaring failure. The
-                // window is 28 s — a healthy connect is ~3–4 s; only a degraded
-                // stack takes ~20 s, so this rescues those instead of flashing
-                // "disconnected" prematurely.
+            if (!userDisconnected && mac != null && connectAttempt < CONNECT_MAX_ATTEMPTS) {
+                // Timed out: retry silently before declaring failure (see
+                // CONNECT_TIMEOUT_MS for the window rationale). The retry is
+                // clean-slate — a bare connectDirectly on top of the stuck
+                // attempt never recovers (log-proven 2026-07-11).
                 connectAttempt++
-                Log.i(TAG, "connect retry #$connectAttempt → $mac")
+                Log.i(TAG, "connect retry #$connectAttempt (clean slate) → $mac")
                 emit("deviceEvent", mapOf("hex" to "connect slow — retrying ($mac)"))
-                BleOperateManager.getInstance().connectDirectly(mac)
-                armConnectWatchdog()
+                cleanSlateConnect(mac)
                 return@Runnable
             }
             emit(
@@ -205,7 +293,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             emitConnectionState("disconnected")
         }
         connectWatchdog = r
-        main.postDelayed(r, 28_000L)
+        main.postDelayed(r, CONNECT_TIMEOUT_MS)
     }
 
     private fun cancelConnectWatchdog() {
@@ -242,10 +330,28 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     }
                     val mac = pendingMac
                     if (autoReconnectEnabled && !userDisconnected && mac != null) {
-                        emit("deviceEvent", mapOf("hex" to "auto-reconnecting to $mac"))
-                        connectAttempt = 1
-                        BleOperateManager.getInstance().connectDirectly(mac)
-                        armConnectWatchdog()
+                        // NOT immediately: the BLE stack is still booting and
+                        // the glasses' A2DP reattach contends with the LE
+                        // radio — an instant connectDirectly wedges (see
+                        // BT_ON_RECONNECT_DELAY_MS).
+                        emit(
+                            "deviceEvent",
+                            mapOf(
+                                "hex" to "auto-reconnecting to $mac in " +
+                                    "${BT_ON_RECONNECT_DELAY_MS} ms"
+                            )
+                        )
+                        main.postDelayed({
+                            if (userDisconnected || pendingMac != mac) {
+                                return@postDelayed
+                            }
+                            if (lastConnectionState == "connected" || isConnecting) {
+                                return@postDelayed
+                            }
+                            connectAttempt = 1
+                            BleOperateManager.getInstance().connectDirectly(mac)
+                            armConnectWatchdog()
+                        }, BT_ON_RECONNECT_DELAY_MS)
                     }
                 }
             }
@@ -350,7 +456,6 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 BleOperateManager.getInstance().unBindDevice()
                 return
             }
-            LargeDataHandler.getInstance().initEnable()
             BleOperateManager.getInstance().isReady = true
             val wasConnected = lastConnectionState == "connected"
             emitConnectionState(
@@ -361,6 +466,13 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             // listener + time sync + auto-reconnect only AFTER services are
             // discovered — once per transition, not on every re-broadcast.
             if (!wasConnected) {
+                // Once per FRESH transition only. The SDK re-broadcasts
+                // service-discovered every ~2.5 s on a live link, and repeat
+                // initEnable/listener registrations STACK inside the vendor
+                // SDK — every device report then arrives N times (seen
+                // 2026-07-11: battery/photoStored/wear all exactly 2x, which
+                // also double-fires fetchThumbnail on notify 0x02).
+                LargeDataHandler.getInstance().initEnable()
                 // Remember the device: the Lab lists it instantly on next
                 // open so Connect works without an 8 s scan (guide §3:
                 // saved MAC + connectDirectly).
@@ -375,6 +487,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                         DeviceManager.getInstance().deviceName ?: "L801",
                     )
                     .apply()
+                // Idempotent: remove before add, so reconnect cycles never
+                // leave a second listener behind (the duplicate-event bug).
+                LargeDataHandler.getInstance().removeOutDeviceListener(100)
                 LargeDataHandler.getInstance()
                     .addOutDeviceListener(100, notifyListener)
                 LargeDataHandler.getInstance().syncTime { _, _ -> }
@@ -414,6 +529,17 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 mapOf("hex" to "Bluetooth is OFF — asking Android to enable it")
             )
             requestEnableBluetooth()
+            main.post { onResult(emptyList()) }
+            return
+        }
+        if (isConnecting) {
+            // A BLE scan disrupts a pending GATT connect (radio contention) —
+            // seen 2026-07-11: scans issued mid-connect helped keep the
+            // attempt wedged. Let the connect finish or time out first.
+            emit(
+                "deviceEvent",
+                mapOf("hex" to "connect in progress — scan skipped; retry after it finishes")
+            )
             main.post { onResult(emptyList()) }
             return
         }
@@ -528,6 +654,15 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             emit("connectionState", mapOf("state" to "connected", "mac" to mac))
             return
         }
+        if (isConnecting && pendingMac == mac) {
+            // Serialize attempts: stacking another connectDirectly on top of
+            // the pending one wedges the SDK until unBindDevice (log-proven
+            // 2026-07-11: five overlapping connects hung for 3 minutes). The
+            // in-flight attempt already has a clean-slate retry + timeout.
+            Log.i(TAG, "connect: attempt to $mac already in progress — ignored")
+            emit("deviceEvent", mapOf("hex" to "already connecting to $mac — hang on"))
+            return
+        }
         if (op.isConnected && pendingMac != null && pendingMac != mac) {
             // Switching devices (seen on hardware: user connected to a TV,
             // then tapped the glasses): tear the old link down first or
@@ -542,8 +677,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         userDisconnected = false
         pendingMac = mac
         connectAttempt = 1
-        op.connectDirectly(mac)
-        armConnectWatchdog()
+        // Clean slate (unbind → pause → connect): recovers a wedged pending
+        // attempt, and also covers the silent-reconnect case where the SDK
+        // holds a live link the Lab never saw (connectDirectly on top of one
+        // tears it down and then fails until a power-cycle, LAB_NOTES 07-06).
+        cleanSlateConnect(mac)
     }
 
     override fun disconnect() {
@@ -815,8 +953,8 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             // Show the fresh glasses-memory state (normally 0). The glasses
             // mark media as synced LAZILY (measured: still stale 1.5 s after
             // completion), so query twice — the later one wins in the card.
-            main.postDelayed({ refreshMediaCount() }, 3000L)
-            main.postDelayed({ refreshMediaCount() }, 10_000L)
+            main.postDelayed({ refreshMediaCount() }, MEDIA_RECOUNT_FIRST_DELAY_MS)
+            main.postDelayed({ refreshMediaCount() }, MEDIA_RECOUNT_SECOND_DELAY_MS)
         }
 
         override fun fileDownloadError(fileType: Int, errorType: Int) {
@@ -982,7 +1120,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         @Suppress("DEPRECATION")
         am.isBluetoothScoOn = true
         emit("audio", mapOf("status" to "SCO route requested, recording in 1 s…"))
-        main.postDelayed({ recordHfp(am) }, 1000L)
+        main.postDelayed({ recordHfp(am) }, HFP_SCO_SETTLE_MS)
     }
 
     private fun recordHfp(am: AudioManager) {
@@ -1019,7 +1157,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             val out = FileOutputStream(f)
             val buf = ByteArray(4096)
             var total = 0L
-            val end = SystemClock.elapsedRealtime() + 10_000
+            val end = SystemClock.elapsedRealtime() + HFP_RECORD_DURATION_MS
             recorder.startRecording()
             while (hfpRecording && SystemClock.elapsedRealtime() < end) {
                 val n = recorder.read(buf, 0, buf.size)
@@ -1124,8 +1262,37 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
     }
 
+    /**
+     * Report a failed capture to Dart as a typed `captureFailed` event
+     * (machine-readable reason, correlated by requestId) and ALSO emit the
+     * empty-thumbnail marker that clears the Lab's capturing spinner.
+     * Reason codes are the wire contract shared with the app and the backend
+     * (`GlassesCaptureFailure` / PROTOCOL.md `capture_failed`).
+     */
+    private fun emitCaptureFailed(requestId: String, reason: String, detail: String) {
+        emit(
+            "captureFailed",
+            mapOf("requestId" to requestId, "reason" to reason, "detail" to detail)
+        )
+        emit(
+            "thumbnail",
+            mapOf("requestId" to requestId, "jpeg" to ByteArray(0), "elapsedMs" to -1)
+        )
+    }
+
     override fun takeAiPhoto(requestId: String) {
         Log.i(TAG, "takeAiPhoto $requestId")
+        // Single in-flight capture: the SDK has ONE thumbnail callback slot, so
+        // a second command mid-capture would corrupt/mix the streamed JPEG.
+        // Report the duplicate as busy; the first capture keeps its budget.
+        if (photoRequestId != null) {
+            Log.i(TAG, "takeAiPhoto: capture $photoRequestId already in flight")
+            emitCaptureFailed(
+                requestId, "busy",
+                "another capture ($photoRequestId) is already in flight"
+            )
+            return
+        }
         photoRequestId = requestId
         photoStartMs = SystemClock.elapsedRealtime()
         // Busy glasses (e.g. stuck in WiFi/transfer mode) silently ignore the
@@ -1135,38 +1302,68 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         val watchdog = Runnable {
             if (photoRequestId != requestId) return@Runnable
             photoRequestId = null
-            emit(
-                "deviceEvent",
-                mapOf(
-                    "hex" to "AI photo timeout (12 s) — glasses busy " +
-                        "(WiFi/transfer/recording mode?). Try again in a few seconds."
-                )
-            )
-            // Empty thumbnail clears the Lab's capturing spinner.
-            emit(
-                "thumbnail",
-                mapOf("requestId" to requestId, "jpeg" to ByteArray(0), "elapsedMs" to -1)
+            emitCaptureFailed(
+                requestId, "capture_timeout",
+                "no capture notify within ${PHOTO_CAPTURE_TIMEOUT_MS} ms — " +
+                    "glasses busy (WiFi/transfer/recording mode?)"
             )
         }
         photoWatchdog = watchdog
-        main.postDelayed(watchdog, 12_000L)
-        // Sample's btnThumbnail payload; thumbnailSize range is 0..6 — 0x02
-        // is the sample's default (resolution measured on hardware).
-        val size: Byte = 0x02
+        main.postDelayed(watchdog, PHOTO_CAPTURE_TIMEOUT_MS)
+        // Sample's btnThumbnail payload; THUMBNAIL_SIZE is the sample's default
+        // (resolution measured on hardware).
         LargeDataHandler.getInstance().glassesControl(
-            byteArrayOf(0x02, 0x01, 0x06, size, size, 0x02)
+            byteArrayOf(0x02, 0x01, 0x06, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 0x02)
         ) { _, rsp ->
             // See takePhoto: err=-1 is the send ack, not a rejection.
             if (rsp != null && rsp.errorCode > 0) {
-                emit(
-                    "deviceEvent",
-                    mapOf(
-                        "hex" to "takeAiPhoto refused err=${rsp.errorCode} " +
-                            describeWorkType(rsp.workTypeIng)
-                    )
+                Log.i(TAG, "takeAiPhoto refused err=${rsp.errorCode}")
+                cancelPhotoWatchdog()
+                if (photoRequestId == requestId) photoRequestId = null
+                emitCaptureFailed(
+                    requestId, "busy",
+                    "refused err=${rsp.errorCode} " +
+                        describeWorkType(rsp.workTypeIng)
                 )
             }
         }
+    }
+
+    /** Rolling watchdog for the BLE thumbnail transfer (re-armed per chunk). */
+    private var thumbnailWatchdog: Runnable? = null
+
+    /** Generation counter: invalidates a stalled/superseded transfer so a
+     *  late SDK callback can never emit into a newer request's stream. */
+    @Volatile private var thumbnailFetchGen = 0
+
+    /** True while a thumbnail transfer is running. The glasses sometimes fire
+     *  the "photo captured" notify (0x02) TWICE for one photo (hardware-seen
+     *  2026-07-11); a second getPictureThumbnails() call mid-transfer resets
+     *  the SDK's single stream and stalls it. Guard so the duplicate notify is
+     *  ignored while a transfer is already in flight. */
+    @Volatile private var thumbnailFetchActive = false
+
+    private fun cancelThumbnailWatchdog() {
+        thumbnailWatchdog?.let(main::removeCallbacks)
+        thumbnailWatchdog = null
+    }
+
+    private fun armThumbnailWatchdog(gen: Int, requestId: String) {
+        cancelThumbnailWatchdog()
+        val r = Runnable {
+            if (gen != thumbnailFetchGen) return@Runnable
+            // Abort: bump the generation so late chunks are ignored.
+            thumbnailFetchGen++
+            thumbnailFetchActive = false
+            photoRequestId = null
+            Log.i(TAG, "thumbnail transfer stalled ($requestId)")
+            emitCaptureFailed(
+                requestId, "transfer_stalled",
+                "no thumbnail chunk within ${THUMBNAIL_CHUNK_TIMEOUT_MS} ms"
+            )
+        }
+        thumbnailWatchdog = r
+        main.postDelayed(r, THUMBNAIL_CHUNK_TIMEOUT_MS)
     }
 
     /**
@@ -1175,13 +1372,34 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      * Hardware-verified 2026-07-05: the callback STREAMS the JPEG in ~1013-
      * byte BLE chunks with the boolean=false, then fires one final time with
      * boolean=true carrying the remainder — accumulate everything, emit once.
+     * A rolling per-chunk watchdog turns a mid-stream stall (BLE drop) into a
+     * typed failure instead of a silent forever-hang.
      */
     private fun fetchThumbnail() {
+        // Ignore a duplicate "photo captured" notify while a transfer is
+        // already running: a second getPictureThumbnails() resets the SDK's
+        // single stream and stalls it (hardware-seen 2026-07-11 — 0x02 fired
+        // twice, killing the transfer).
+        if (thumbnailFetchActive) {
+            Log.i(TAG, "fetchThumbnail: transfer already in flight — ignoring duplicate notify")
+            return
+        }
         cancelPhotoWatchdog()
+        thumbnailFetchActive = true
+        // Device-initiated captures (touch gesture) have no app-side request.
+        val requestId = photoRequestId ?: DEVICE_INITIATED_REQUEST_ID
+        val gen = ++thumbnailFetchGen
         val buffer = java.io.ByteArrayOutputStream()
+        armThumbnailWatchdog(gen, requestId)
         LargeDataHandler.getInstance().getPictureThumbnails { _, done, data ->
+            if (gen != thumbnailFetchGen) return@getPictureThumbnails // aborted
             if (data != null && data.isNotEmpty()) buffer.write(data)
-            if (!done) return@getPictureThumbnails
+            if (!done) {
+                armThumbnailWatchdog(gen, requestId)
+                return@getPictureThumbnails
+            }
+            cancelThumbnailWatchdog()
+            thumbnailFetchActive = false
             val jpeg = buffer.toByteArray()
             val elapsed = (SystemClock.elapsedRealtime() - photoStartMs).toInt()
             Log.i(TAG, "thumbnail complete: ${jpeg.size} bytes in $elapsed ms")
@@ -1197,14 +1415,13 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 emit(
                     "thumbnail",
                     mapOf(
-                        // Device-initiated captures (gesture) have no request.
-                        "requestId" to (photoRequestId ?: "device-initiated"),
+                        "requestId" to requestId,
                         "jpeg" to jpeg,
                         "elapsedMs" to if (photoRequestId != null) elapsed else -1,
                     )
                 )
             } else {
-                emit("deviceEvent", mapOf("hex" to "thumbnail fetch: 0 bytes"))
+                emitCaptureFailed(requestId, "empty_image", "thumbnail fetch: 0 bytes")
             }
             photoRequestId = null
         }
@@ -1266,11 +1483,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             if (!proceeded) {
                 emit(
                     "deviceEvent",
-                    mapOf("hex" to "media-count probe: no reply in 3 s — trying import anyway")
+                    mapOf(
+                        "hex" to "media-count probe: no reply in " +
+                            "${MEDIA_COUNT_PROBE_TIMEOUT_MS} ms — trying import anyway"
+                    )
                 )
                 proceed()
             }
-        }, 3000L)
+        }, MEDIA_COUNT_PROBE_TIMEOUT_MS)
     }
 
     /** Typed count for the Media sync card (also visible in the console). */
@@ -1310,7 +1530,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             )
         }
         syncWatchdog = r
-        main.postDelayed(r, 60_000L)
+        main.postDelayed(r, WIFI_SYNC_STALL_TIMEOUT_MS)
     }
 
     private fun cancelSyncWatchdog() {
@@ -1409,7 +1629,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
         // Guide §2.3: the notify listener (slot 100) registers AFTER
         // onServiceDiscovered, not here. Battery callback is a passive map
-        // entry — safe to add up front.
+        // entry — safe to add up front. Remove-before-add keeps it single
+        // even if this bridge is ever constructed twice in one process.
+        LargeDataHandler.getInstance().removeBatteryCallBack("glasses_lab")
         LargeDataHandler.getInstance().addBatteryCallBack("glasses_lab") { _, resp ->
             if (resp != null) {
                 // Battery reports only flow over a live link — if the SDK
@@ -1437,6 +1659,8 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
     override fun dispose() {
         cancelConnectWatchdog()
+        cancelPhotoWatchdog()
+        cancelThumbnailWatchdog()
         cancelSyncWatchdog()
         stopAudioTest()
         tts?.shutdown()

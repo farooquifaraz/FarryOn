@@ -757,8 +757,15 @@ class LiveController {
 
     // Voice flow: surface identify_image results so the UI can show the same
     // result sheet the scan button shows. The tool returns the full
-    // {ok, mode, result} envelope as its payload.
-    if (msg.name == 'identify_image' && msg.result != null) {
+    // {ok, mode, result} envelope as its payload. FAILED results stay out of
+    // the stream: opening the Finder sheet pauses the live mic, and doing
+    // that for a "couldn't get a fresh look" error left the session mute —
+    // with the screen off the sheet is invisible and never dismissed, so the
+    // mic never came back (device-proven 2026-07-11). Farry already speaks
+    // the error; there is nothing to show.
+    if (msg.name == 'identify_image' &&
+        msg.result != null &&
+        msg.result!['ok'] == true) {
       if (!_finderController.isClosed) {
         _finderController.add(FinderDetection.fromEnvelope(msg.result!));
       }
@@ -1091,6 +1098,17 @@ class LiveController {
       // Always keep the freshest frame for the scan button / identify_image,
       // even while the assistant is speaking.
       _lastFrame = jpeg;
+      // Glasses photos are one-shots: surface each captured frame as a chat
+      // preview so the user can see EXACTLY what was sent for recognition
+      // (confirms the photo matches where the glasses point — the diagnostic
+      // for "it described the wrong scene"). Phone frames stream ~1 fps, so we
+      // don't spam the preview with those.
+      if (oneShotCamera) {
+        _emit(_state.copyWith(
+          lastCapturedPhoto: jpeg,
+          lastCapturedAt: DateTime.now(),
+        ));
+      }
       // Don't feed CONTINUOUS frames while the assistant is speaking: they
       // can't influence the in-flight reply and would only pile up in the
       // realtime model's context. But a glasses photo is a one-shot the model
@@ -1117,6 +1135,11 @@ class LiveController {
   /// video pipeline (→ Gemini vision + backend last_frame). Triggered by the
   /// `capture_photo` voice tool or the on-screen shutter button. No-op if the
   /// selected camera isn't the glasses (the phone camera already streams).
+  ///
+  /// A failed capture is reported to the backend as a `capture_failed`
+  /// control message, so the waiting vision tool answers immediately with the
+  /// precise cause (glasses not connected / busy / transfer stalled) instead
+  /// of running out its frame timeout.
   Future<void> captureGlassesPhoto() async {
     final src = _videoSource;
     if (src is! GlassesCaptureSource) {
@@ -1126,7 +1149,24 @@ class LiveController {
     // Make sure the jpegFrames→sendVideo listener is attached so the photo
     // reaches Gemini (glasses have no continuous stream to start it for us).
     if (_videoSub == null) await _startVideo();
-    await src.capturePhoto();
+    final result = await src.capturePhoto();
+    if (!result.ok) {
+      final reason = result.failure!.wire;
+      _log.warn('glasses capture failed ($reason) — reporting to backend');
+      _client.send(CaptureFailedMessage(reason: reason));
+      return;
+    }
+    // Insurance: if the frame pipe was torn down while the capture was in
+    // flight (session teardown races, legacy background handling), the
+    // listener that ships frames no longer exists — ship the photo directly
+    // so it still reaches the model. No double-send: when the listener IS
+    // attached, it does the sending and this branch is skipped.
+    final jpeg = result.jpeg;
+    if (_videoSub == null && jpeg != null) {
+      _log.warn('glasses photo arrived with no frame pipe — sending directly');
+      _lastFrame = jpeg;
+      _client.sendVideo(jpeg);
+    }
   }
 
   /// Enable/disable the camera stream at runtime.
@@ -1145,7 +1185,15 @@ class LiveController {
 
   /// App went to the background: the OS invalidates the camera, so fully
   /// release it (a frozen dead controller is exactly the "camera stuck" hang).
+  ///
+  /// GLASSES EXCEPTION: the glasses camera is an external BLE device — the OS
+  /// does not invalidate it on background/screen-off, and tearing the pipe
+  /// down here drops a one-shot photo that lands moments later. Hit on-device
+  /// 2026-07-11: the screen turned off between the shutter and the thumbnail
+  /// (~4 s), the frame arrived with no listener attached, and the model
+  /// answered "couldn't get a fresh look" despite a perfect capture.
   Future<void> handleAppBackground() async {
+    if (_videoSource is GlassesCaptureSource) return;
     _cameraWasOn = _state.cameraOn;
     if (_state.cameraOn) {
       await _stopVideo();
@@ -1194,6 +1242,7 @@ class LiveController {
     _watchGlassesStatus();
     if (wasListening) await _startAudio();
     _emit(_state.copyWith(audioKind: kind.name));
+    _notifyDeviceUpdate();
   }
 
   /// Select the camera device (phone ⇄ glasses). Restarts only the video
@@ -1207,6 +1256,21 @@ class LiveController {
     await _videoSource.initialize();
     if (wasOn) await _startVideo();
     _emit(_state.copyWith(videoKind: kind.name));
+    // Tell the backend the camera changed so it re-picks the frame-wait
+    // budget: glasses connect AFTER hello (voice flow), so the photo-trigger
+    // camera is selected mid-session and the hello-time budget is wrong.
+    _notifyDeviceUpdate();
+  }
+
+  /// Send the backend the current audio/video device combo so it can size the
+  /// frame-wait budget correctly (photo-trigger glasses need longer than a
+  /// streaming phone camera). Sent on every device switch; no-op if the socket
+  /// is down (a fresh `hello` will carry the combo on reconnect anyway).
+  void _notifyDeviceUpdate() {
+    _client.send(DeviceUpdateMessage(
+      videoKind: _registry.videoKind.name,
+      audioKind: _registry.audioKind.name,
+    ));
   }
 
   // ---- Config / reconnect target ----------------------------------------

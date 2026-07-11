@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
@@ -50,11 +51,15 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
       unawaited(_connect());
       // Voice flow (#3): when identify_image returns, show the same result sheet
       // the scan button shows so the user can tap Maps/Wikipedia/shop links.
-      // Present failures too (no frame / Vision error / nothing found) — the
-      // sheet renders a friendly error state, otherwise the voice path would
-      // show nothing at all on failure.
+      // Only while the app is actually VISIBLE: presenting the sheet pauses
+      // the live mic, and with the screen off the sheet can never be
+      // dismissed — the session stayed mute until the user came back
+      // (device-proven 2026-07-11). Screen-off users get the spoken answer;
+      // the sheet is a bonus for when they're looking.
       _finderSub = ref.read(liveControllerProvider).finderEvents.listen((d) {
-        if (mounted) _presentFinder(detection: d);
+        final visible = WidgetsBinding.instance.lifecycleState ==
+            AppLifecycleState.resumed;
+        if (mounted && visible) _presentFinder(detection: d);
       });
     });
   }
@@ -312,6 +317,13 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                       onPermission: notifier.respondToolPermission,
                     ),
                   _TranscriptOverlay(entries: state.transcripts),
+                  // Just above the controls (never over the header): the last
+                  // glasses photo, so the user sees exactly what was captured.
+                  if (state.lastCapturedPhoto != null)
+                    _CapturedPhotoPreview(
+                      photo: state.lastCapturedPhoto!,
+                      at: state.lastCapturedAt,
+                    ),
                   _Controls(
                     state: state,
                     textController: _textController,
@@ -1573,6 +1585,91 @@ class _ZoomChip extends StatelessWidget {
 
 /// Recent transcript lines as a constrained, translucent overlay above the
 /// controls (hidden until there is something to show).
+/// Shows the most recent glasses photo (what was actually captured and sent
+/// for recognition) so the user can visually confirm it matches where the
+/// glasses point. Tap to view full-screen. This is the ground-truth check for
+/// "it described the wrong scene".
+class _CapturedPhotoPreview extends StatelessWidget {
+  const _CapturedPhotoPreview({required this.photo, required this.at});
+
+  final Uint8List photo;
+  final DateTime? at;
+
+  String _stamp(DateTime t) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(t.hour)}:${two(t.minute)}:${two(t.second)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: GestureDetector(
+          onTap: () => showDialog<void>(
+            context: context,
+            builder: (_) => Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.all(12),
+              child: InteractiveViewer(
+                child: Image.memory(photo, fit: BoxFit.contain),
+              ),
+            ),
+          ),
+          child: Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(9),
+                  child: Image.memory(
+                    photo,
+                    width: 88,
+                    height: 66,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true, // don't flash between captures
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Glasses captured',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.92),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      at == null ? 'tap to enlarge' : '${_stamp(at!)} · tap to enlarge',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.6),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 8),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _TranscriptOverlay extends StatelessWidget {
   const _TranscriptOverlay({required this.entries});
 

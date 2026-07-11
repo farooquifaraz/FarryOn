@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../data/live_client.dart';
 import '../protocol/protocol.dart';
 
@@ -80,6 +82,8 @@ class LiveSessionState {
     this.glassesBattery,
     this.glassesTalking = false,
     this.glassesWorn = false,
+    this.lastCapturedPhoto,
+    this.lastCapturedAt,
     this.lastError,
     this.permissionsGranted = false,
   });
@@ -130,6 +134,14 @@ class LiveSessionState {
   /// True while the glasses are being worn (wear-to-talk auto-listen).
   final bool glassesWorn;
 
+  /// The most recent glasses photo (raw JPEG), shown as a preview in the chat
+  /// so the user can visually confirm what was actually captured and sent for
+  /// recognition. Null until the first glasses capture.
+  final Uint8List? lastCapturedPhoto;
+
+  /// When [lastCapturedPhoto] was captured, for the preview caption.
+  final DateTime? lastCapturedAt;
+
   /// Last non-fatal error message for a transient banner, if any.
   final String? lastError;
 
@@ -153,6 +165,8 @@ class LiveSessionState {
     int? glassesBattery,
     bool? glassesTalking,
     bool? glassesWorn,
+    Uint8List? lastCapturedPhoto,
+    DateTime? lastCapturedAt,
     String? lastError,
     bool clearError = false,
     bool? permissionsGranted,
@@ -172,6 +186,8 @@ class LiveSessionState {
         glassesBattery: glassesBattery ?? this.glassesBattery,
         glassesTalking: glassesTalking ?? this.glassesTalking,
         glassesWorn: glassesWorn ?? this.glassesWorn,
+        lastCapturedPhoto: lastCapturedPhoto ?? this.lastCapturedPhoto,
+        lastCapturedAt: lastCapturedAt ?? this.lastCapturedAt,
         lastError: clearError ? null : (lastError ?? this.lastError),
         permissionsGranted: permissionsGranted ?? this.permissionsGranted,
       );

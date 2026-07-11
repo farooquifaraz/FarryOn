@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.agent.tool_engine import ToolEngine, ToolResult
 from app.ai.base import AIGateway
 from app.ai.events import ToolCallEvent
+from app.config import get_settings
 from app.db import repo
 from app.logging_conf import get_logger
 from app.observability import metrics
@@ -51,6 +52,7 @@ class Orchestrator:
         web_search: dict[str, Any] | None = None,
         email: dict[str, Any] | None = None,
         location: dict[str, Any] | None = None,
+        frame_wait_seconds: float | None = None,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -62,6 +64,10 @@ class Orchestrator:
                 JSON dicts to the client for UI display.
             session_id: Owning live-session id (for audit + tool context).
             user_id: Owning user id (for tool context).
+            frame_wait_seconds: Default budget for :meth:`wait_for_frame`.
+                Chosen by the session from the device kind (glasses need a
+                longer budget than a streaming phone camera). ``None`` falls
+                back to the server settings' phone-camera value.
         """
         self._engine = engine
         self._gateway = gateway
@@ -78,6 +84,21 @@ class Orchestrator:
         #: with the monotonic time it arrived so stale frames can be rejected.
         self.last_frame: bytes | None = None
         self.last_frame_at: float | None = None
+        #: Budget for :meth:`wait_for_frame`. Injected by the session from the
+        #: device kind, and UPDATED LIVE via :meth:`set_frame_wait_seconds`
+        #: when the client switches its active camera (``device_update``) —
+        #: glasses connect AFTER ``hello`` in the voice flow, so a photo-
+        #: trigger camera is often selected mid-session (see
+        #: ``Settings.frame_wait_seconds`` / ``Settings.glasses_frame_wait_seconds``).
+        self._frame_wait_seconds: float = (
+            frame_wait_seconds
+            if frame_wait_seconds is not None
+            else get_settings().frame_wait_seconds
+        )
+        #: Wire reason code of the most recent device-reported capture failure
+        #: (``capture_failed`` control message). Cleared when a frame arrives,
+        #: so it always describes the CURRENT capture attempt, not a past one.
+        self.last_capture_error: str | None = None
         #: In-flight device contact-resolution requests, keyed by requestId.
         #: ``request_contact_resolution`` creates a Future here and the session
         #: resolves it when the matching ``resolve_contact_result`` arrives.
@@ -144,13 +165,28 @@ class Orchestrator:
         if future is not None and not future.done():
             future.set_result(payload)
 
-    async def wait_for_frame(self, timeout: float = 8.0) -> bool:
+    def set_frame_wait_seconds(self, seconds: float) -> None:
+        """Update the frame-wait budget when the client switches its camera.
+
+        Called by the session on a ``device_update`` control message. Glasses
+        connect after ``hello`` in the voice flow, so the photo-trigger camera
+        (which needs the longer budget) is frequently selected mid-session.
+        """
+        self._frame_wait_seconds = seconds
+
+    async def wait_for_frame(self, timeout: float | None = None) -> bool:
         """Block until the next INPUT_VIDEO frame arrives (or ``timeout``).
 
-        Used by the ``capture_photo`` tool so a voice-triggered glasses photo
-        is in the model's context before it answers. Returns ``True`` if a
-        fresh frame landed, ``False`` on timeout.
+        Used by the ``capture_photo``/``identify_image`` tools so a
+        voice-triggered glasses photo is in the model's context before it
+        answers. ``timeout=None`` uses the session's device-appropriate
+        default (``frame_wait_seconds`` injected at construction). Returns
+        ``True`` if a fresh frame landed, ``False`` on timeout or when the
+        device reported a capture failure (see :attr:`last_capture_error`
+        for the reason).
         """
+        if timeout is None:
+            timeout = self._frame_wait_seconds
         loop = asyncio.get_running_loop()
         future: asyncio.Future[bool] = loop.create_future()
         self._frame_waiters.append(future)
@@ -165,9 +201,25 @@ class Orchestrator:
     def notify_new_frame(self) -> None:
         """Wake any tool awaiting a fresh frame (called by the session on an
         incoming INPUT_VIDEO frame)."""
+        # A real frame supersedes any earlier failure report.
+        self.last_capture_error = None
         for future in self._frame_waiters:
             if not future.done():
                 future.set_result(True)
+
+    def notify_capture_failed(self, reason: str) -> None:
+        """Record a device-reported capture failure and wake waiting tools.
+
+        Called by the session on a ``capture_failed`` control message. Waking
+        the waiters with ``False`` lets the tool answer IMMEDIATELY with the
+        device's precise reason (glasses not connected, camera busy, transfer
+        stalled, ...) instead of leaving the user hanging for the full frame
+        timeout.
+        """
+        self.last_capture_error = reason
+        for future in self._frame_waiters:
+            if not future.done():
+                future.set_result(False)
 
     def recall_resolved(self, name: str) -> str | None:
         """Contact id from a recent device resolution of ``name``, if any."""
@@ -226,6 +278,8 @@ class Orchestrator:
                 recall_phone=self.recall_phone,
                 note_phone=self.note_phone,
                 wait_for_frame=self.wait_for_frame,
+                capture_error=lambda: self.last_capture_error,
+                latest_frame=lambda: (self.last_frame, self.last_frame_at),
             )
             result = await self._engine.dispatch(event.name, event.args, ctx)
             try:

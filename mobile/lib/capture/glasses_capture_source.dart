@@ -5,6 +5,60 @@ import '../core/logger.dart';
 import '../features/glasses_lab/bridge/glasses_channel.dart';
 import '../protocol/messages.dart';
 import 'capture_source.dart';
+import 'glasses_capture_config.dart';
+
+/// Why a glasses photo request failed. The [wire] codes are the contract
+/// shared with the native bridge (`captureFailed` events) and the backend
+/// (`capture_failed` control message / `capture_feedback.py`) — keep the
+/// three in sync.
+enum GlassesCaptureFailure {
+  /// No BLE link (and none came up within the configured connect wait).
+  notConnected('not_connected'),
+
+  /// The glasses refused the command (already capturing / syncing / recording).
+  busy('busy'),
+
+  /// The glasses never reported the capture (native watchdog or Dart budget).
+  captureTimeout('capture_timeout'),
+
+  /// The photo was taken but the BLE thumbnail stream stalled mid-transfer.
+  transferStalled('transfer_stalled'),
+
+  /// The transfer completed but carried zero bytes.
+  emptyImage('empty_image'),
+
+  /// The capture command never reached the native side (channel error).
+  commandFailed('command_failed'),
+
+  /// A reason code this app build doesn't recognise (newer native side).
+  unknown('unknown');
+
+  const GlassesCaptureFailure(this.wire);
+
+  /// Machine-readable reason code sent to the backend.
+  final String wire;
+
+  static GlassesCaptureFailure fromWire(String? code) =>
+      GlassesCaptureFailure.values.firstWhere(
+        (f) => f.wire == code,
+        orElse: () => GlassesCaptureFailure.unknown,
+      );
+}
+
+/// Outcome of one [GlassesCaptureSource.capturePhoto] request: either the
+/// JPEG that was (also) emitted on [GlassesCaptureSource.jpegFrames], or a
+/// typed failure the caller can report.
+class GlassesCaptureResult {
+  const GlassesCaptureResult.success(Uint8List this.jpeg) : failure = null;
+
+  const GlassesCaptureResult.failed(GlassesCaptureFailure this.failure)
+      : jpeg = null;
+
+  final Uint8List? jpeg;
+  final GlassesCaptureFailure? failure;
+
+  bool get ok => failure == null;
+}
 
 /// Smart-glasses implementation of [CaptureSource], backed by the real HeyCyan
 /// bridge (`com.farryon/glasses`) proven in Stage A — the same transport the
@@ -26,12 +80,16 @@ class GlassesCaptureSource implements CaptureSource {
   GlassesCaptureSource({
     this.deviceId = 'heycyan-l801',
     GlassesBridgeApi? bridge,
+    this.config = const GlassesCaptureConfig(),
   }) : _bridge = bridge ?? GlassesChannel.shared;
 
   static final _log = Logger('GlassesCapture');
 
   /// Stable identifier reported in `hello.device.id`.
   final String deviceId;
+
+  /// Timing budgets for the capture pipeline (injectable for tests).
+  final GlassesCaptureConfig config;
 
   final GlassesBridgeApi _bridge;
 
@@ -47,6 +105,34 @@ class GlassesCaptureSource implements CaptureSource {
   StreamSubscription<GlassesLabEvent>? _eventSub;
   bool _audioRunning = false;
   String? _connectedMac;
+
+  /// The single in-flight capture request (see [capturePhoto]): the SDK has
+  /// one thumbnail callback slot, so requests are never issued concurrently —
+  /// duplicate triggers join the pending Future instead.
+  Completer<GlassesCaptureResult>? _inFlight;
+
+  /// Native requestId of the in-flight capture, used to correlate the
+  /// `thumbnail` / `captureFailed` events back to the awaiting Future.
+  String? _inFlightRequestId;
+
+  /// Last-resort budget timer above the native watchdogs.
+  Timer? _captureTimer;
+
+  /// Automatic re-captures left for the in-flight request after a retryable
+  /// failure (transfer stalled / busy / empty image).
+  int _retriesLeft = 0;
+
+  /// Delay timer before an automatic retry.
+  Timer? _retryTimer;
+
+  /// Failures worth an automatic re-capture: the photo itself is fine, only
+  /// the BLE fetch was disrupted (double-notify / contention). NOT
+  /// notConnected / captureTimeout / commandFailed — those need the user or a
+  /// fresh connection, so retrying would just hang.
+  static bool _isRetryable(GlassesCaptureFailure f) =>
+      f == GlassesCaptureFailure.transferStalled ||
+      f == GlassesCaptureFailure.busy ||
+      f == GlassesCaptureFailure.emptyImage;
 
   void _pushStatus(GlassesStatus s) {
     _lastStatus = s;
@@ -106,6 +192,12 @@ class GlassesCaptureSource implements CaptureSource {
           connected: _connectedMac != null,
           battery: _connectedMac == null ? null : _lastStatus.battery,
         ));
+        // A drop mid-capture means the thumbnail can never arrive — fail the
+        // awaiting request now instead of running out its budget.
+        if (_connectedMac == null && _inFlightRequestId != null) {
+          _completeCapture(const GlassesCaptureResult.failed(
+              GlassesCaptureFailure.notConnected));
+        }
       case 'battery':
         final pct = (event.data['pct'] as num?)?.toInt();
         if (pct != null) _pushStatus(_lastStatus.copyWith(battery: pct));
@@ -122,11 +214,44 @@ class GlassesCaptureSource implements CaptureSource {
         // B3: an AI/gesture photo finished — the JPEG thumbnail is exactly the
         // frame Stage B feeds to vision. Emit it on jpegFrames so it flows the
         // same path a phone-camera frame does (→ sendVideo → Gemini + backend
-        // last_frame cache).
+        // last_frame cache). An empty jpeg is only the native Lab-spinner
+        // marker; the typed `captureFailed` event carries the reason.
         final jpeg = event.data['jpeg'];
         if (jpeg is Uint8List && jpeg.isNotEmpty) {
           _log.info('glasses photo → ${jpeg.length} bytes (emitting as frame)');
           if (!_videoController.isClosed) _videoController.add(jpeg);
+          if (_inFlightRequestId != null &&
+              event.data['requestId'] == _inFlightRequestId) {
+            _completeCapture(GlassesCaptureResult.success(jpeg));
+          }
+        }
+      case 'captureFailed':
+        // Typed failure from the native bridge (busy / capture_timeout /
+        // transfer_stalled / empty_image), correlated by requestId.
+        final reason = event.data['reason'] as String?;
+        _log.warn('glasses captureFailed '
+            'requestId=${event.data['requestId']} reason=$reason');
+        if (_inFlightRequestId != null &&
+            event.data['requestId'] == _inFlightRequestId) {
+          final failure = GlassesCaptureFailure.fromWire(reason);
+          if (_isRetryable(failure) && _retriesLeft > 0) {
+            // The glasses double-fired the capture notify and stalled that
+            // transfer; a clean re-capture almost always works. Retry silently
+            // instead of surfacing an error the user has to react to.
+            _retriesLeft--;
+            _log.info('capture retry (${failure.wire}), $_retriesLeft left');
+            _captureTimer?.cancel();
+            _inFlightRequestId = null;
+            _retryTimer?.cancel();
+            _retryTimer = Timer(config.retryDelay, () {
+              final completer = _inFlight;
+              if (completer != null && !completer.isCompleted) {
+                unawaited(_issueCapture(completer));
+              }
+            });
+          } else {
+            _completeCapture(GlassesCaptureResult.failed(failure));
+          }
         }
       case 'audio':
         // voiceFromGlassesStatus 2 (mic off) arrives as an `audio` status.
@@ -141,17 +266,93 @@ class GlassesCaptureSource implements CaptureSource {
 
   /// B3: trigger an on-demand glasses photo. The capture runs on the headset
   /// (~3–4 s to the BLE thumbnail); when it lands it is emitted on
-  /// [jpegFrames]. Safe to call only while connected.
-  Future<void> capturePhoto() async {
+  /// [jpegFrames] AND returned here, correlated by the native requestId.
+  ///
+  /// Robustness contract:
+  ///  * Single in-flight request — a duplicate trigger (e.g. the model calling
+  ///    both `capture_photo` and `identify_image` in one turn) joins the
+  ///    pending Future instead of issuing a second BLE command, which would
+  ///    corrupt the SDK's single thumbnail stream.
+  ///  * If the link is still coming up (session-start auto-connect), the
+  ///    request waits up to [GlassesCaptureConfig.connectWait] before failing
+  ///    with [GlassesCaptureFailure.notConnected].
+  ///  * Always completes within [GlassesCaptureConfig.captureTimeout] — with
+  ///    the native side's precise failure reason when one was reported.
+  Future<GlassesCaptureResult> capturePhoto() {
+    final pending = _inFlight;
+    if (pending != null) {
+      _log.info('capturePhoto: joining the in-flight request');
+      return pending.future;
+    }
+    final completer = Completer<GlassesCaptureResult>();
+    _inFlight = completer;
+    unawaited(_runCapture(completer));
+    return completer.future;
+  }
+
+  Future<void> _runCapture(Completer<GlassesCaptureResult> completer) async {
+    // Session-start race: initialize()'s auto-connect may still be in
+    // progress — give the link a bounded chance to come up.
+    if (_connectedMac == null) {
+      _log.info(
+          'capturePhoto: not connected — waiting up to ${config.connectWait}');
+      try {
+        await status
+            .firstWhere((s) => s.connected)
+            .timeout(config.connectWait);
+      } catch (_) {
+        // Timeout or stream closed — the null check below reports it.
+      }
+    }
+    if (completer.isCompleted) return; // e.g. disposed while waiting
     if (_connectedMac == null) {
       _log.warn('capturePhoto: glasses not connected');
+      _completeCapture(const GlassesCaptureResult.failed(
+          GlassesCaptureFailure.notConnected));
       return;
     }
+    _retriesLeft = config.maxRetries;
+    await _issueCapture(completer);
+  }
+
+  /// Fire one AI-photo command and arm the budget timer. Called for the first
+  /// attempt and each automatic retry (see the `captureFailed` handler).
+  Future<void> _issueCapture(Completer<GlassesCaptureResult> completer) async {
+    if (completer.isCompleted) return;
+    final String requestId;
     try {
       _log.info('glasses: taking AI photo…');
-      await _bridge.takeAiPhoto();
+      requestId = await _bridge.takeAiPhoto();
     } catch (e) {
       _log.warn('glasses capturePhoto failed: $e');
+      _completeCapture(const GlassesCaptureResult.failed(
+          GlassesCaptureFailure.commandFailed));
+      return;
+    }
+    if (completer.isCompleted) return;
+    _inFlightRequestId = requestId;
+    // Last-resort net: the native watchdogs normally report a typed failure
+    // first (see GlassesCaptureConfig for the timeout ladder).
+    _captureTimer?.cancel();
+    _captureTimer = Timer(config.captureTimeout, () {
+      _log.warn('capturePhoto: no result within ${config.captureTimeout}');
+      _completeCapture(const GlassesCaptureResult.failed(
+          GlassesCaptureFailure.captureTimeout));
+    });
+  }
+
+  /// Resolve the in-flight request (idempotent) and clear its bookkeeping.
+  void _completeCapture(GlassesCaptureResult result) {
+    _captureTimer?.cancel();
+    _captureTimer = null;
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    _retriesLeft = 0;
+    _inFlightRequestId = null;
+    final completer = _inFlight;
+    _inFlight = null;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(result);
     }
   }
 
@@ -205,6 +406,9 @@ class GlassesCaptureSource implements CaptureSource {
 
   @override
   Future<void> dispose() async {
+    // Never leave a caller hanging on a request that can no longer complete.
+    _completeCapture(const GlassesCaptureResult.failed(
+        GlassesCaptureFailure.notConnected));
     await _eventSub?.cancel();
     _eventSub = null;
     try {

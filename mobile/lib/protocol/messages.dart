@@ -186,6 +186,35 @@ class LocationUpdateMessage extends ClientMessage {
   Map<String, dynamic> toJson() => {'type': type, 'location': location};
 }
 
+/// Reports that a device-side photo capture failed, so a vision tool waiting
+/// server-side for the frame can answer immediately with the precise cause
+/// instead of running out its frame timeout. [reason] is a machine-readable
+/// code from `GlassesCaptureFailure.wire` (e.g. `not_connected`, `busy`).
+class CaptureFailedMessage extends ClientMessage {
+  const CaptureFailedMessage({required this.reason});
+  final String reason;
+  @override
+  String get type => MsgType.captureFailed;
+  @override
+  Map<String, dynamic> toJson() => {'type': type, 'reason': reason};
+}
+
+/// Reports that the active capture device changed after `hello` (e.g. glasses
+/// connected by voice and became the camera). The backend re-picks the
+/// frame-wait budget from [videoKind]: a photo-trigger glasses camera needs a
+/// longer budget than a streaming phone camera. Without this the session keeps
+/// its hello-time budget and cuts off every glasses photo.
+class DeviceUpdateMessage extends ClientMessage {
+  const DeviceUpdateMessage({required this.videoKind, required this.audioKind});
+  final String videoKind;
+  final String audioKind;
+  @override
+  String get type => MsgType.deviceUpdate;
+  @override
+  Map<String, dynamic> toJson() =>
+      {'type': type, 'videoKind': videoKind, 'audioKind': audioKind};
+}
+
 /// Barge-in: stop the current TTS playback.
 class InterruptMessage extends ClientMessage {
   const InterruptMessage();

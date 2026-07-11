@@ -107,7 +107,10 @@ class GlassesDeviceHit {
 /// firmware events are never silently lost):
 /// `connectionState` {state}, `battery` {pct, charging}, `wearState` {worn},
 /// `gesture` {kind}, `deviceInfo` {btFirmware, wifiFirmware, hardware},
-/// `thumbnail` {requestId, jpeg, elapsedMs}, `pcmChunk` {bytes, sampleRate},
+/// `thumbnail` {requestId, jpeg, elapsedMs},
+/// `captureFailed` {requestId, reason, detail} (typed AI-photo failure;
+/// reason codes match `GlassesCaptureFailure.wire`),
+/// `pcmChunk` {bytes, sampleRate},
 /// `syncProgress` {file, pct, speedKbps}, `audio` {status}, `error` {message},
 /// `deviceEvent` {hex} (raw/unmapped notifications).
 class GlassesLabEvent {

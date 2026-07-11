@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.logging_conf import get_logger
 from app.services.vision import run_detection
 from app.tools.base import Tool, ToolContext
+from app.tools.capture_feedback import capture_failure_message
 
 logger = get_logger(__name__)
 
@@ -65,34 +66,40 @@ class IdentifyImageTool(Tool):
         # call; we wait for THAT frame (arrival time must be >= t0).
         t0 = time.monotonic()
 
+        def _current() -> tuple[bytes | None, float | None]:
+            # The LIVE frame, not the dispatch-time snapshot: the glasses
+            # photo lands ~5 s into the wait below, and only the orchestrator's
+            # live fields see it. Re-checking the snapshot here rejected a
+            # perfectly delivered photo (device-proven 2026-07-11).
+            if ctx.latest_frame is not None:
+                return ctx.latest_frame()
+            return (ctx.last_frame, ctx.last_frame_at)
+
         def _fresh() -> bool:
-            return (
-                ctx.last_frame is not None
-                and ctx.last_frame_at is not None
-                and ctx.last_frame_at >= t0
-            )
+            frame, arrived_at = _current()
+            return frame is not None and arrived_at is not None and arrived_at >= t0
 
         # Wait (once) for the just-triggered capture to land. Phone-camera
         # frames stream ~1 fps so this returns almost immediately; the glasses
-        # photo takes ~4-5 s.
+        # photo takes ~4-5 s. The timeout is the session's device-appropriate
+        # default (Settings.frame_wait_seconds / glasses_frame_wait_seconds);
+        # a device-reported capture failure wakes the wait early with the
+        # precise reason.
         if not _fresh() and ctx.wait_for_frame is not None:
-            await ctx.wait_for_frame(timeout=8.0)
+            await ctx.wait_for_frame()
 
         if not _fresh():
-            return {
-                "ok": False,
-                "error": (
-                    "I couldn't get a fresh look just now. Make sure the camera "
-                    "is on and pointed at it, then ask again."
-                ),
-            }
+            reason = ctx.capture_error() if ctx.capture_error is not None else None
+            return {"ok": False, "error": capture_failure_message(reason)}
 
         kind = kwargs.get("kind") or "auto"
         if kind not in ("landmark", "product", "auto"):
             kind = "auto"
         question = (kwargs.get("question") or "").strip() or None
 
-        image_data = base64.b64encode(ctx.last_frame).decode("utf-8")
+        frame, _ = _current()
+        assert frame is not None  # guaranteed by the _fresh() gate above
+        image_data = base64.b64encode(frame).decode("utf-8")
         # CHANGED (UX Spec §3.3): wrap the vision call so a Vision API outage,
         # bad credentials, or quota error becomes a friendly {ok:false,error}
         # the model can speak — instead of a raw "GoogleAPIError: ..." stack

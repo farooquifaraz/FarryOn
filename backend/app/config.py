@@ -121,6 +121,40 @@ class Settings(BaseSettings):
     # -- Tunables --------------------------------------------------------------
     tool_timeout_seconds: float = Field(default=20.0)
 
+    # -- Camera capture (identify_image / capture_photo) ------------------------
+    # How long a vision tool waits for a fresh camera frame before giving up.
+    # Phone cameras stream ~1 fps, so the wait normally resolves in ~1 s and
+    # this value only caps the failure path.
+    frame_wait_seconds: float = Field(
+        default=8.0,
+        description="Max seconds a vision tool waits for a fresh camera frame "
+        "on a streaming (phone) camera.",
+    )
+    # Smart glasses are photo-trigger only: capture (~2.2-2.4 s, firmware-fixed)
+    # plus the BLE thumbnail transfer. In the Glasses Lab (no other radio use)
+    # that transfer is 3.1-4.6 s, but in a LIVE voice session the glasses' A2DP
+    # audio link (TTS out) contends for the same 2.4 GHz radio and the transfer
+    # balloons to 10-12 s typical (measured 2026-07-11). The budget must outlast
+    # that so a genuine, if slow, photo is never cut off — the success path is
+    # event-driven (the frame wakes the wait early), so a longer budget only
+    # affects the failure backstop.
+    glasses_frame_wait_seconds: float = Field(
+        default=18.0,
+        description="Max seconds a vision tool waits for a fresh camera frame "
+        "when the active camera is smart glasses (photo-trigger capture).",
+    )
+    # After a one-shot photo arrives, capture_photo pauses this long before
+    # returning its result — which is what triggers the model to generate its
+    # "describe what you see" reply. The pause lets the model's realtime-video
+    # pipeline actually ingest the just-sent frame first; without it the model
+    # answers before it has "seen" the photo and hallucinates (device-proven
+    # 2026-07-11). Only affects the one-shot glasses path, not phone streaming.
+    frame_ingest_seconds: float = Field(
+        default=1.2,
+        description="Pause after a one-shot photo arrives before returning "
+        "capture_photo, so the model ingests the frame before replying.",
+    )
+
     @field_validator("allowed_origins", "allowed_providers", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:

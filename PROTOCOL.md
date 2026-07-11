@@ -93,6 +93,21 @@ All JSON messages have a `type` field.
 { "type": "text", "text": "..." }    // typed user input (no mic)
 { "type": "interrupt" }              // barge-in: stop current TTS playback
 { "type": "tool_permission", "id": "call-id", "granted": true }  // optional gate
+
+// A device-side photo capture failed (smart glasses). Sent so a vision tool
+// (capture_photo / identify_image) waiting server-side for the frame answers
+// immediately with the precise cause instead of running out its frame timeout.
+// reason: not_connected | busy | capture_timeout | transfer_stalled |
+//         empty_image | command_failed | unknown
+{ "type": "capture_failed", "reason": "not_connected" }
+
+// The active capture device changed after hello (e.g. glasses connected by
+// voice and became the camera). The server re-picks the camera frame-wait
+// budget from videoKind — a photo-trigger glasses camera needs a longer wait
+// than a streaming phone camera. Without this the session keeps its hello-time
+// budget and cuts off every glasses photo.
+{ "type": "device_update", "videoKind": "glasses", "audioKind": "phone" }
+
 { "type": "ping", "t": 1718764800000 }
 ```
 
