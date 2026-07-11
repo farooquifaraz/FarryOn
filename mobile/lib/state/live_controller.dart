@@ -382,6 +382,16 @@ class LiveController {
     await _startVideo();
 
     _client.start();
+    // Keep the mic legal + the CPU awake while the screen is off, so the user
+    // can talk to Farry hands-free without the phone in hand (Android 11+ mutes
+    // background mic capture unless a microphone foreground service is running).
+    unawaited(Future(() async {
+      try {
+        await _glassesBridge?.startMicService();
+      } catch (e) {
+        _log.warn('startMicService failed: $e');
+      }
+    }));
     // Wear-to-talk: auto-connect the saved glasses in the background so wear
     // events flow, then let put-on / take-off drive the mic. Best with the
     // mic on phone/earbuds (the glasses mic is push-to-talk by hardware).
@@ -423,6 +433,12 @@ class LiveController {
     await _stopVideo();
     await _player.stop();
     await _client.stop();
+    // Session over — drop the mic foreground service + wake-lock.
+    try {
+      await _glassesBridge?.stopMicService();
+    } catch (e) {
+      _log.warn('stopMicService failed: $e');
+    }
     _emit(_state.copyWith(
       micOpen: false,
       cameraOn: false,

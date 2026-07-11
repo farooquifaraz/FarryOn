@@ -20,12 +20,6 @@ from app.tools.base import Tool, ToolContext
 
 logger = get_logger(__name__)
 
-#: Frames older than this are treated as no-frame — the camera was likely
-#: lowered/turned off, so identifying the last frame would answer about a stale
-#: scene. The device streams ~1 fps while the camera is on.
-_FRAME_STALE_SECONDS = 10.0
-
-
 class IdentifyImageTool(Tool):
     """Identify the landmark or product currently in the camera view."""
 
@@ -64,26 +58,32 @@ class IdentifyImageTool(Tool):
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
         """Run detection on the cached camera frame and return the result."""
-        def _is_stale() -> bool:
+        # Only answer on a frame captured AFTER this request began. Otherwise a
+        # ≤10s-old frame from a PREVIOUS question (user has since looked
+        # elsewhere) passes a plain staleness check and we describe the wrong,
+        # stale scene. The client snaps a fresh photo when it sees this tool
+        # call; we wait for THAT frame (arrival time must be >= t0).
+        t0 = time.monotonic()
+
+        def _fresh() -> bool:
             return (
-                ctx.last_frame_at is None
-                or (time.monotonic() - ctx.last_frame_at) > _FRAME_STALE_SECONDS
+                ctx.last_frame is not None
+                and ctx.last_frame_at is not None
+                and ctx.last_frame_at >= t0
             )
 
-        # Photo-trigger cameras (smart glasses) have no continuous stream: the
-        # client snaps a fresh photo when it sees this tool call, so if there's
-        # no usable frame yet, wait briefly for that photo to land before giving
-        # up. On the phone camera a frame is already fresh, so this returns at
-        # once.
-        if (not ctx.last_frame or _is_stale()) and ctx.wait_for_frame is not None:
+        # Wait (once) for the just-triggered capture to land. Phone-camera
+        # frames stream ~1 fps so this returns almost immediately; the glasses
+        # photo takes ~4-5 s.
+        if not _fresh() and ctx.wait_for_frame is not None:
             await ctx.wait_for_frame(timeout=8.0)
 
-        if not ctx.last_frame or _is_stale():
+        if not _fresh():
             return {
                 "ok": False,
                 "error": (
-                    "I can't see a current camera frame. Make sure the camera is "
-                    "on and pointed at the subject, then ask again."
+                    "I couldn't get a fresh look just now. Make sure the camera "
+                    "is on and pointed at it, then ask again."
                 ),
             }
 

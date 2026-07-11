@@ -59,6 +59,10 @@ class _FakeBridge implements GlassesBridgeApi {
   Future<void> setVolume(String type, int level) async {}
   @override
   Future<void> enableBluetooth() async => calls.add('enableBluetooth');
+  @override
+  Future<void> startMicService() async => calls.add('startMicService');
+  @override
+  Future<void> stopMicService() async => calls.add('stopMicService');
 }
 
 void main() {

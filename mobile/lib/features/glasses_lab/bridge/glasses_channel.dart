@@ -61,6 +61,13 @@ abstract class GlassesBridgeApi {
   /// `enable_bluetooth` voice tool so the user can connect the glasses hands-free.
   Future<void> enableBluetooth();
 
+  /// Start/stop the microphone foreground service that keeps the live session's
+  /// mic alive while the phone screen is off (Android 11+ blocks background mic
+  /// without a microphone-type foreground service). Not glasses-specific, but
+  /// this bridge already owns the app context that can start the service.
+  Future<void> startMicService();
+  Future<void> stopMicService();
+
   /// Broadcast stream of device events (see [GlassesLabEvent.type] values).
   Stream<GlassesLabEvent> events();
 }
@@ -217,6 +224,14 @@ class GlassesChannel implements GlassesBridgeApi {
   @override
   Future<void> enableBluetooth() =>
       _method.invokeMethod<void>('enableBluetooth');
+
+  @override
+  Future<void> startMicService() =>
+      _method.invokeMethod<void>('startMicService');
+
+  @override
+  Future<void> stopMicService() =>
+      _method.invokeMethod<void>('stopMicService');
 
   @override
   Stream<GlassesLabEvent> events() => _rawEvents

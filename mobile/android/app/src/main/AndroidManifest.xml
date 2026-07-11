@@ -39,6 +39,9 @@
     <!-- Glasses Lab: keep the BLE link alive in the background (Task 2.6b). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Live session: keep the mic legal while the screen is off (Android 11+
+         blocks background mic without a microphone-type foreground service). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <!-- Reminders: post notifications + schedule exact alarms at the due time. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -84,6 +87,11 @@
             android:name="com.farryon.farryon.glasses.GlassesForegroundService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+        <!-- Live session: keeps the mic active with the screen off. -->
+        <service
+            android:name="com.farryon.farryon.glasses.SessionMicService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- flutter_local_notifications: fire scheduled reminders + reschedule
              after a reboot. -->

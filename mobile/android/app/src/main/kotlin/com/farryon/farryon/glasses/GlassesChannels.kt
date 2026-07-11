@@ -319,6 +319,14 @@ class GlassesChannels private constructor(
                     result.success(null)
                 }
                 "enableBluetooth" -> { enableBluetooth(); result.success(null) }
+                "startMicService" -> {
+                    appContext?.let { SessionMicService.start(it) }
+                    result.success(null)
+                }
+                "stopMicService" -> {
+                    appContext?.let { SessionMicService.stop(it) }
+                    result.success(null)
+                }
                 "stopAudioTest" -> { sdk.stopAudioTest(); result.success(null) }
                 "startWifiSync" -> { sdk.startWifiSync(); result.success(null) }
                 "stopWifiSync" -> { sdk.stopWifiSync(); result.success(null) }

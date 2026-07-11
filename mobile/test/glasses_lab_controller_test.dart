@@ -92,6 +92,12 @@ class _FakeBridge implements GlassesBridgeApi {
   Future<void> enableBluetooth() => _maybeFail('enableBluetooth');
 
   @override
+  Future<void> startMicService() => _maybeFail('startMicService');
+
+  @override
+  Future<void> stopMicService() => _maybeFail('stopMicService');
+
+  @override
   Stream<GlassesLabEvent> events() => eventController.stream;
 }
 

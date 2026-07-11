@@ -128,6 +128,10 @@ class FakeGlassesBridge implements GlassesBridgeApi {
   Future<void> setVolume(String type, int level) async {}
   @override
   Future<void> enableBluetooth() async {}
+  @override
+  Future<void> startMicService() async {}
+  @override
+  Future<void> stopMicService() async {}
 }
 
 class GrantingPermissions implements PermissionsService {
