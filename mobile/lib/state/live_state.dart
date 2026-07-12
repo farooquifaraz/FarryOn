@@ -73,6 +73,7 @@ class LiveSessionState {
     this.micOpen = false,
     this.cameraOn = false,
     this.cameraPortrait = true,
+    this.cameraFront = false,
     this.cameraZoom = 1.0,
     this.transcripts = const [],
     this.tools = const [],
@@ -102,6 +103,10 @@ class LiveSessionState {
 
   /// Whether the camera preview is in portrait (`true`) or landscape.
   final bool cameraPortrait;
+
+  /// Whether the phone's FRONT (selfie) lens is active (`false` = back lens).
+  /// Only meaningful for the phone camera; glasses have a single fixed lens.
+  final bool cameraFront;
 
   /// Current camera zoom magnification (1.0 = normal). Driven by pinch, the
   /// preset chips, or the model's `set_camera_zoom` tool.
@@ -156,6 +161,7 @@ class LiveSessionState {
     bool? micOpen,
     bool? cameraOn,
     bool? cameraPortrait,
+    bool? cameraFront,
     double? cameraZoom,
     List<TranscriptEntry>? transcripts,
     List<ToolActivity>? tools,
@@ -177,6 +183,7 @@ class LiveSessionState {
         micOpen: micOpen ?? this.micOpen,
         cameraOn: cameraOn ?? this.cameraOn,
         cameraPortrait: cameraPortrait ?? this.cameraPortrait,
+        cameraFront: cameraFront ?? this.cameraFront,
         cameraZoom: cameraZoom ?? this.cameraZoom,
         transcripts: transcripts ?? this.transcripts,
         tools: tools ?? this.tools,

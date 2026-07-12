@@ -139,6 +139,18 @@ class AIGateway(abc.ABC):
         Closes the turn window so the model replies. No-op by default.
         """
 
+    def set_camera_kind(self, kind: str | None) -> None:
+        """Tell the gateway which camera is active (``"phone"``, ``"glasses"``,
+        a combo like ``"phone+glasses"``, or ``None``).
+
+        Adapters that batch camera frames (e.g. OpenAI Realtime, which attaches
+        the latest frame on a turn) use this to size their frame-freshness
+        window: photo-trigger smart glasses deliver a still several seconds
+        after it is taken, so a phone-sized freshness window would drop it.
+        No-op by default; streaming adapters (Gemini) ignore it. Safe to call
+        before :meth:`connect` and again mid-session when the camera changes.
+        """
+
     @abc.abstractmethod
     async def interrupt(self) -> None:
         """Barge-in: cancel in-flight generation / TTS playback."""

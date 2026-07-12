@@ -36,12 +36,13 @@ class FinderResultView extends StatelessWidget {
     if (detection.isLandmark) {
       return Column(
         children: [
-          for (final lm in detection.landmarks) _LandmarkCard(lm),
+          for (final lm in detection.landmarks)
+            _LandmarkCard(lm, source: detection.source),
         ],
       );
     }
     if (detection.isProduct && detection.product != null) {
-      return _ProductCard(detection.product!);
+      return _ProductCard(detection.product!, source: detection.source);
     }
     if (detection.lensUrl != null) {
       return _Message(
@@ -66,8 +67,9 @@ Future<void> _open(String url) async {
 // ---- Landmark --------------------------------------------------------------
 
 class _LandmarkCard extends StatelessWidget {
-  const _LandmarkCard(this.lm);
+  const _LandmarkCard(this.lm, {this.source});
   final LandmarkResult lm;
+  final String? source;
 
   @override
   Widget build(BuildContext context) {
@@ -109,6 +111,7 @@ class _LandmarkCard extends StatelessWidget {
                 ),
             ],
           ),
+          if (source != null && source!.isNotEmpty) _SourceAttribution(source!),
         ],
       ),
     );
@@ -142,8 +145,9 @@ class _ConfidenceBadge extends StatelessWidget {
 // ---- Product ---------------------------------------------------------------
 
 class _ProductCard extends StatelessWidget {
-  const _ProductCard(this.p);
+  const _ProductCard(this.p, {this.source});
   final ProductResult p;
+  final String? source;
 
   @override
   Widget build(BuildContext context) {
@@ -245,6 +249,38 @@ class _ProductCard extends StatelessWidget {
               ),
             ),
           ],
+          if (source != null && source!.isNotEmpty) _SourceAttribution(source!),
+        ],
+      ),
+    );
+  }
+}
+
+/// A subtle "Identified via <source>" line crediting who recognised the
+/// subject — e.g. "Google Vision API" when Google Vision did the identifying.
+class _SourceAttribution extends StatelessWidget {
+  const _SourceAttribution(this.source);
+  final String source;
+
+  @override
+  Widget build(BuildContext context) {
+    final usesVision = source.contains('Vision');
+    return Padding(
+      padding: const EdgeInsets.only(top: 14),
+      child: Row(
+        children: [
+          Icon(
+            usesVision ? Icons.visibility_outlined : Icons.auto_awesome_outlined,
+            size: 14,
+            color: Aurora.textMuted,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'Identified via $source',
+              style: const TextStyle(color: Aurora.textMuted, fontSize: 12),
+            ),
+          ),
         ],
       ),
     );

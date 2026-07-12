@@ -65,6 +65,11 @@ abstract class CaptureSource {
   /// (so the UI can show an accurate read-out). A no-op source returns `1.0`.
   Future<double> setZoom(double level);
 
+  /// Switch between the front (selfie) and back lens. `true` → front. Only the
+  /// phone camera has two lenses; sources with a single fixed camera (e.g.
+  /// smart glasses) ignore this. Default: no-op.
+  Future<void> setFrontCamera(bool front) async {}
+
   /// Release all device resources. The source may be re-[initialize]d later.
   Future<void> dispose();
 }

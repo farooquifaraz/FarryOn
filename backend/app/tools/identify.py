@@ -21,6 +21,18 @@ from app.tools.capture_feedback import capture_failure_message
 
 logger = get_logger(__name__)
 
+
+def _first_landmark_maps_url(envelope: dict[str, Any]) -> str | None:
+    """Return the Google Maps link of the first landmark in a detection
+    envelope, or ``None`` if there is no landmark with a location."""
+    landmarks = (envelope.get("result") or {}).get("landmarks") or []
+    for lm in landmarks:
+        maps_url = lm.get("maps_url")
+        if maps_url:
+            return maps_url
+    return None
+
+
 class IdentifyImageTool(Tool):
     """Identify the landmark or product currently in the camera view."""
 
@@ -107,7 +119,7 @@ class IdentifyImageTool(Tool):
         # vision service already returns its own {ok,...} envelope on expected
         # failures; this catch is the last-resort net for the unexpected.
         try:
-            return await run_detection(
+            result = await run_detection(
                 kind,  # type: ignore[arg-type]
                 settings=get_settings(),
                 image_data=image_data,
@@ -122,3 +134,21 @@ class IdentifyImageTool(Tool):
                     "subject and try once more."
                 ),
             }
+        # For a recognised place/landmark that came with a location (a Google
+        # Maps link), offer to share it: after describing the place, the model
+        # asks if the user wants it sent to WhatsApp/Telegram, and on "yes" runs
+        # the normal send flow with the Maps link as the message.
+        if result.get("ok") and result.get("mode") == "landmark":
+            maps_url = _first_landmark_maps_url(result)
+            if maps_url:
+                result["_instruction"] = (
+                    "This place has a location. After you tell the user what "
+                    "place it is, ASK them exactly: 'Do you want to send this "
+                    "location to your WhatsApp or Telegram?' If they say yes, "
+                    "call send_whatsapp (or send_telegram if they prefer) with "
+                    "the message text set to the place name followed by its "
+                    f"Google Maps link: {maps_url} — then continue the normal "
+                    "send flow (ask who to send it to if you don't know yet). "
+                    "If they say no, just carry on."
+                )
+        return result

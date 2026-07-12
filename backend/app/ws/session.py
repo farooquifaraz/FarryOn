@@ -176,6 +176,10 @@ class Session:
             device = (self._hello or {}).get("device")
             device_kind = device.get("kind") if isinstance(device, dict) else None
             frame_wait_seconds = self._frame_wait_for_kind(device_kind)
+            # Size the gateway's frame-freshness window to the camera too, so a
+            # batching adapter (OpenAI) keeps a slow glasses still instead of
+            # dropping it. No-op for streaming adapters (Gemini).
+            self._gateway.set_camera_kind(device_kind)
             self._orchestrator = Orchestrator(
                 engine=self._engine,
                 gateway=self._gateway,
@@ -410,6 +414,10 @@ class Session:
             if self._orchestrator is not None and isinstance(new_kind, str):
                 budget = self._frame_wait_for_kind(new_kind)
                 self._orchestrator.set_frame_wait_seconds(budget)
+                # Keep the gateway's frame-freshness window in step with the
+                # new camera (glasses connected mid-session → widen it).
+                if self._gateway is not None:
+                    self._gateway.set_camera_kind(new_kind)
                 logger.info(
                     "device.updated",
                     session_id=self.session_id,

@@ -31,6 +31,7 @@ import httpx
 
 from app.config import Settings
 from app.logging_conf import get_logger
+from app.observability import metrics
 
 logger = get_logger(__name__)
 
@@ -53,6 +54,13 @@ MAX_DIMENSION = 1280
 _HTTP_TIMEOUT = 30.0
 
 DetectMode = Literal["web", "landmark", "product", "auto"]
+
+# Identification-source labels, surfaced in the result so the app can credit
+# *who* recognised the subject (the user asked to see "Vision API" when Google
+# Vision did the identifying, vs the multimodal model otherwise).
+SRC_VISION = "Google Vision API"
+SRC_GEMINI = "Gemini AI"
+SRC_VISION_GEMINI = "Google Vision API + Gemini AI"
 
 # Each marketplace's search-URL template; ``{q}`` is the URL-encoded query.
 MARKETPLACES: list[dict[str, str]] = [
@@ -170,14 +178,21 @@ async def _vision_annotate(
             {"image": image_req, "features": [{"type": feature, "maxResults": max_results}]}
         ]
     }
+    # Every POST below is one billed Vision unit — count it (by feature +
+    # outcome) so spend is visible on /metrics without the Cloud Console.
+    def _count(outcome: str) -> None:
+        metrics.VISION_API_CALLS.labels(feature=feature, outcome=outcome).inc()
+
     try:
         r = await client.post(
             f"{VISION_ENDPOINT}?key={api_key}", json=payload, timeout=_HTTP_TIMEOUT
         )
     except httpx.RequestError as exc:
+        _count("error")
         raise DetectionError(f"Network error: {exc}") from exc
 
     if r.status_code != 200:
+        _count("error")
         try:
             msg = r.json().get("error", {}).get("message", r.text)
         except Exception:  # noqa: BLE001
@@ -186,7 +201,9 @@ async def _vision_annotate(
 
     resp = r.json()["responses"][0]
     if "error" in resp:
+        _count("error")
         raise DetectionError(resp["error"].get("message", "API error"))
+    _count("ok")
     return resp
 
 
@@ -258,11 +275,12 @@ async def get_ai_explanation(
                 continue
             if r.status_code != 200:
                 return None
+            metrics.GEMINI_API_CALLS.labels(purpose="explain", outcome="ok").inc()
             data = r.json()
             return data["candidates"][0]["content"]["parts"][0]["text"].strip()
         except Exception as exc:  # noqa: BLE001 - explanation is optional
             logger.warning("vision.gemini_failed", model=model, error=str(exc))
-            return None
+            continue  # transient/parse error — try the next model, don't give up
     return None
 
 
@@ -334,6 +352,7 @@ async def gemini_vision_identify(
                 continue
             if r.status_code != 200:
                 return None
+            metrics.GEMINI_API_CALLS.labels(purpose="identify", outcome="ok").inc()
             text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             data = json.loads(text)
             return data if isinstance(data, dict) and data.get("name") else None
@@ -396,6 +415,7 @@ async def gemini_vision_answer(
                 continue
             if r.status_code != 200:
                 return None
+            metrics.GEMINI_API_CALLS.labels(purpose="answer", outcome="ok").inc()
             text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             return text.strip() or None
         except Exception as exc:  # noqa: BLE001 - best-effort
@@ -478,22 +498,31 @@ async def detect_landmarks(
 
     landmarks: list[dict[str, Any]] = []
     for lm, wiki in zip(anns, wikis):
+        name = lm.get("description")
         loc = (lm.get("locations") or [{}])[0].get("latLng", {})
         lat, lng = loc.get("latitude"), loc.get("longitude")
         has_loc = lat is not None and lng is not None
+        # A landmark ALWAYS gets a Google Maps link: precise pin when Vision
+        # returned GPS, else a name search so the user can still open it on the
+        # map (a recognised landmark without coordinates must never be link-less).
+        maps_url = (
+            f"https://www.google.com/maps?q={lat},{lng}"
+            if has_loc
+            else maps_search_url(name) if name else None
+        )
         landmarks.append(
             {
-                "name": lm.get("description"),
+                "name": name,
                 "confidence": round(lm.get("score", 0.0), 4),
                 "location": {"lat": lat, "lng": lng} if has_loc else None,
-                "maps_url": (
-                    f"https://www.google.com/maps?q={lat},{lng}" if has_loc else None
-                ),
+                "maps_url": maps_url,
                 "description": (wiki or {}).get("extract"),
                 "wikipedia_url": (wiki or {}).get("url"),
             }
         )
-    return {"count": len(landmarks), "landmarks": landmarks}
+    # Identified by Google Cloud Vision (LANDMARK_DETECTION) — surfaced to the
+    # user as the identification source.
+    return {"count": len(landmarks), "landmarks": landmarks, "source": SRC_VISION}
 
 
 async def detect_product(
@@ -510,12 +539,22 @@ async def detect_product(
     Gemini's image identification gives the best name + a rich explanation;
     Google's WEB_DETECTION adds matching pages / similar images and a fallback
     name. Marketplace links are built from the chosen name.
-    """
-    resp = await _vision_annotate(
-        client, image_req, "WEB_DETECTION", api_key, max_results=10
-    )
 
-    web = resp.get("webDetection", {})
+    WEB_DETECTION is *enrichment*, not the source of truth: when it fails (Vision
+    quota/403/network) but Gemini already identified the item, we degrade to a
+    Gemini-only product card rather than failing the whole request. Only when we
+    have neither Gemini nor web data does the error propagate.
+    """
+    try:
+        resp = await _vision_annotate(
+            client, image_req, "WEB_DETECTION", api_key, max_results=10
+        )
+        web = resp.get("webDetection", {})
+    except DetectionError as exc:
+        if gem is None:  # no fallback identity — nothing to show
+            raise
+        logger.warning("vision.web_detection_degraded", error=str(exc))
+        web = {}
     best = web.get("bestGuessLabels", [])
     entities = [
         e["description"] for e in web.get("webEntities", []) if e.get("description")
@@ -554,6 +593,15 @@ async def detect_product(
         i["url"] for i in web.get("visuallySimilarImages", [])[:6] if i.get("url")
     ]
 
+    # Who actually identified the product: Gemini named it (its vision call gave
+    # the specific name), else Google Vision's WEB_DETECTION best-guess did.
+    if gem_name:
+        source = SRC_VISION_GEMINI if web else SRC_GEMINI
+    elif web_query:
+        source = SRC_VISION
+    else:
+        source = None
+
     return {
         "product_name": query,
         "categories": categories[:8],
@@ -561,6 +609,7 @@ async def detect_product(
         "marketplaces": build_marketplace_links(query) if query else [],
         "matching_pages": pages,
         "similar_images": similar,
+        "source": source,
     }
 
 
@@ -646,39 +695,65 @@ async def run_detection(
             if img_b64 is None and image_url:
                 img_b64 = await _fetch_b64(client, image_url)
 
-            run_lm = mode in ("landmark", "auto")
-            # Gemini "sees" the image (identifies anything); Google landmark
-            # detection runs alongside for precise GPS on famous landmarks.
-            gem, google_lm = await asyncio.gather(
-                gemini_vision_identify(client, img_b64, gemini_key, lang)
-                if img_b64 else _async_none(),
-                detect_landmarks(client, image_req=image_req, api_key=vision_key)
-                if run_lm else _async_empty_landmarks(),
-            )
-
-            # 1) Google recognised a famous landmark → precise GPS + Wikipedia,
-            #    enriched with Gemini's richer description.
-            if google_lm["count"] > 0:
-                lm0 = google_lm["landmarks"][0]
-                extra = _gem_description(gem) if gem else ""
-                if extra:
-                    lm0["description"] = (
-                        f"{extra}\n\n{lm0['description']}".strip()
-                        if lm0.get("description") else extra
+            # COST: Gemini runs FIRST and identifies anything; its ``kind`` then
+            # decides which SINGLE Google Vision feature (if any) is worth a
+            # billed call — LANDMARK_DETECTION (precise GPS for a place) OR
+            # WEB_DETECTION (shopping links for a product), never both. Previously
+            # ``auto`` always ran landmark detection AND then web detection, so a
+            # product wasted a landmark call — doubling Vision spend on the most
+            # common request. Vision is only ever hit here (a user-triggered
+            # identify), never per-frame.
+            gem: dict[str, Any] | None = None
+            if img_b64:
+                try:
+                    gem = await gemini_vision_identify(
+                        client, img_b64, gemini_key, lang
                     )
-                return {"ok": True, "mode": "landmark", "result": google_lm}
+                except Exception as exc:  # noqa: BLE001 - degrade to Vision-only
+                    logger.warning("vision.gemini_identify_degraded", error=repr(exc))
+                    gem = None
+            gem_is_place = bool(gem and gem.get("kind") in _PLACE_KINDS)
 
-            # 2) Gemini says it's a place/landmark → landmark card with rich
-            #    detail + a Maps search link, even for non-famous places.
-            if run_lm and gem and gem.get("kind") in _PLACE_KINDS:
-                entry = await _gemini_place_landmark(client, gem)
-                return {
-                    "ok": True, "mode": "landmark",
-                    "result": {"count": 1, "landmarks": [entry]},
-                }
+            # LANDMARK path — explicit landmark mode, or auto when Gemini says
+            # the subject is a place. Only here do we spend a LANDMARK_DETECTION.
+            if mode == "landmark" or (mode == "auto" and gem_is_place):
+                try:
+                    google_lm = await detect_landmarks(
+                        client, image_req=image_req, api_key=vision_key
+                    )
+                except DetectionError as exc:
+                    logger.warning("vision.landmark_degraded", error=str(exc))
+                    google_lm = {"count": 0, "landmarks": []}
 
-            # 3) Otherwise it's a product/object → product card (Gemini name +
-            #    explanation, Google web links + marketplaces).
+                # 1) Google recognised a famous landmark → precise GPS + Wikipedia,
+                #    enriched with Gemini's richer description.
+                if google_lm["count"] > 0:
+                    lm0 = google_lm["landmarks"][0]
+                    extra = _gem_description(gem) if gem else ""
+                    if extra:
+                        lm0["description"] = (
+                            f"{extra}\n\n{lm0['description']}".strip()
+                            if lm0.get("description") else extra
+                        )
+                        google_lm["source"] = SRC_VISION_GEMINI
+                    return {"ok": True, "mode": "landmark", "result": google_lm}
+
+                # 2) Gemini says it's a place → landmark card with a Maps search
+                #    link (no extra Vision call), even for non-famous places.
+                if gem_is_place:
+                    entry = await _gemini_place_landmark(client, gem)
+                    return {
+                        "ok": True, "mode": "landmark",
+                        "result": {
+                            "count": 1, "landmarks": [entry], "source": SRC_GEMINI
+                        },
+                    }
+                # Explicit landmark mode but nothing found and not a place →
+                # fall through and treat it as a product.
+
+            # PRODUCT path — explicit product mode, or auto when it's not a place.
+            #    Product card: Gemini name + explanation, Vision web links +
+            #    marketplaces (one WEB_DETECTION call).
             product = await detect_product(
                 client, image_req=image_req, api_key=vision_key,
                 gemini_key=gemini_key, lang=lang, gem=gem,

@@ -61,3 +61,20 @@ AI_ERRORS = Counter(
     "Errors surfaced from the AI gateway, labelled by provider.",
     ["provider"],
 )
+
+# -- External billed vision APIs (cost tracking) -----------------------------
+# One increment == one billed unit. Watch these on /metrics to see exactly how
+# many Google Vision / Gemini calls the app makes, without the Cloud Console.
+VISION_API_CALLS = Counter(
+    "farryon_vision_api_calls_total",
+    "Google Cloud Vision images:annotate calls (1 billed unit each), "
+    "labelled by feature (LANDMARK_DETECTION | WEB_DETECTION) and outcome "
+    "(ok | error).",
+    ["feature", "outcome"],
+)
+GEMINI_API_CALLS = Counter(
+    "farryon_gemini_api_calls_total",
+    "Google Gemini generateContent calls, labelled by purpose "
+    "(identify | answer | explain) and outcome (ok | error).",
+    ["purpose", "outcome"],
+)

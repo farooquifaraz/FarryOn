@@ -398,6 +398,11 @@ class GlassesCaptureSource implements CaptureSource {
   }
 
   @override
+  Future<void> setFrontCamera(bool front) async {
+    // The glasses have a single fixed lens — no front/back to switch.
+  }
+
+  @override
   Future<double> setZoom(double level) async => level < 1.0 ? 1.0 : level;
 
   /// Whether the glasses link is currently up (for UI/debug).

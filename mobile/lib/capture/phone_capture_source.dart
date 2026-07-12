@@ -63,14 +63,16 @@ Uint8List? _downscaleJpegInIsolate(_JpegJob job) {
 class PhoneCaptureSource implements CaptureSource {
   PhoneCaptureSource({
     this.deviceId = 'phone-default',
-    this.preferredCamera = CameraLensDirection.back,
+    CameraLensDirection preferredCamera = CameraLensDirection.back,
     this.jpegQuality = 88,
-  });
+  }) : _facing = preferredCamera;
 
   static final _log = Logger('PhoneCapture');
 
   final String deviceId;
-  final CameraLensDirection preferredCamera;
+  /// Active lens. Mutable so the user can flip between back and front
+  /// (see [setFrontCamera]); the camera is reopened on the new lens.
+  CameraLensDirection _facing;
   final int jpegQuality;
 
   // --- Audio ---
@@ -177,7 +179,7 @@ class PhoneCaptureSource implements CaptureSource {
       return;
     }
     final selected = cameras.firstWhere(
-      (c) => c.lensDirection == preferredCamera,
+      (c) => c.lensDirection == _facing,
       orElse: () => cameras.first,
     );
     final controller = CameraController(
@@ -233,6 +235,10 @@ class PhoneCaptureSource implements CaptureSource {
       _log.warn('camera dispose failed: $e');
     }
     _camera = null;
+    // Clear a possibly-wedged in-flight capture flag (a takePicture awaiting a
+    // now-disposed controller may never resolve its finally) so the camera
+    // streams cleanly after the next startVideo.
+    _capturingFrame = false;
     _log.info('camera released (will reopen on next startVideo)');
   }
 
@@ -250,6 +256,36 @@ class PhoneCaptureSource implements CaptureSource {
     } catch (e) {
       _log.warn('setPortrait failed: $e');
     }
+  }
+
+  @override
+  Future<void> setFrontCamera(bool front) async {
+    final target =
+        front ? CameraLensDirection.front : CameraLensDirection.back;
+    if (target == _facing) return;
+    _facing = target;
+    // Reopen the camera on the new lens. If frames were streaming, tear the
+    // controller down and rebuild so the next capture uses the new lens, then
+    // resume the ~1 fps timer.
+    final wasStreaming = _frameTimer != null;
+    _frameTimer?.cancel();
+    _frameTimer = null;
+    try {
+      await _camera?.dispose();
+    } catch (e) {
+      _log.warn('camera dispose (flip) failed: $e');
+    }
+    _camera = null;
+    // Critical: a `takePicture()` that was in flight when we disposed the old
+    // controller may never resolve, so its `finally` never clears this flag —
+    // leaving the capture loop wedged (every `_captureFrame` early-returns and
+    // no frames reach the model). Reset it here before the new lens streams.
+    _capturingFrame = false;
+    await _openCamera();
+    if (wasStreaming && _camera != null) {
+      _frameTimer = Timer.periodic(_frameInterval, (_) => _captureFrame());
+    }
+    _log.info('lens → ${front ? "front" : "back"}');
   }
 
   @override

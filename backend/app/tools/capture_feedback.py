@@ -15,9 +15,10 @@ from __future__ import annotations
 #: Wire reason code -> user-facing guidance the model should relay.
 CAPTURE_FAILURE_MESSAGES: dict[str, str] = {
     "not_connected": (
-        "The smart glasses aren't connected right now. Ask the user to put "
-        "the glasses on / power them up (or say 'connect glasses'), then try "
-        "again."
+        "The smart glasses aren't connected over Bluetooth right now. Tell the "
+        "user clearly that the glasses' Bluetooth is not connected, and ask them "
+        "to turn Bluetooth on and connect the glasses (or say 'connect "
+        "glasses'), then try again."
     ),
     "busy": (
         "The glasses camera is busy (likely syncing media or recording). "

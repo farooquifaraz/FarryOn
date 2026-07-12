@@ -1059,7 +1059,20 @@ class LiveController {
     // Optimistically show the user's line.
     final list = List<TranscriptEntry>.of(_state.transcripts)
       ..add(TranscriptEntry(role: 'user', text: trimmed, isFinal: true));
-    _emit(_state.copyWith(transcripts: list));
+    var next = _state.copyWith(transcripts: list);
+    // Cross-verification: when the camera is on, surface the EXACT frame the
+    // model will look at for this turn as a chat preview, so the user can
+    // confirm the answer matches what was actually captured — the diagnostic
+    // for "it answered about the wrong / an old image" (e.g. after a camera
+    // flip). Mirrors the glasses one-shot preview, but on demand for the phone
+    // camera (which streams ~1 fps and would otherwise never show a preview).
+    if (_state.cameraOn && _lastFrame != null) {
+      next = next.copyWith(
+        lastCapturedPhoto: _lastFrame,
+        lastCapturedAt: DateTime.now(),
+      );
+    }
+    _emit(next);
   }
 
   /// Respond to a tool-permission gate.
@@ -1217,6 +1230,15 @@ class LiveController {
     if (portrait == _state.cameraPortrait) return;
     await _videoSource.setPortrait(portrait);
     _emit(_state.copyWith(cameraPortrait: portrait));
+  }
+
+  /// Flip the phone camera between the back and front (selfie) lens. No-op for
+  /// glasses (single fixed lens). Zoom resets to 1× since the new lens has its
+  /// own zoom range.
+  Future<void> setCameraFront(bool front) async {
+    if (front == _state.cameraFront) return;
+    await _videoSource.setFrontCamera(front);
+    _emit(_state.copyWith(cameraFront: front, cameraZoom: 1.0));
   }
 
   /// Zoom the camera and reflect the applied level in state (drives the UI

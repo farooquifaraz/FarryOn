@@ -90,6 +90,43 @@ async def test_question_is_passed_through(db_session, monkeypatch) -> None:
     assert seen["question"] == "what time does the clock show?"
 
 
+async def test_landmark_offers_to_send_location(db_session, monkeypatch) -> None:
+    """A landmark with a Maps link gets an instruction to offer WhatsApp/Telegram."""
+
+    async def fake_run(mode, *, settings, image_data=None, image_url=None, question=None):
+        return {
+            "ok": True,
+            "mode": "landmark",
+            "result": {
+                "count": 1,
+                "landmarks": [
+                    {"name": "Eiffel Tower", "maps_url": "https://maps.google/x"}
+                ],
+                "source": "Google Vision API",
+            },
+        }
+
+    monkeypatch.setattr(identify_mod, "run_detection", fake_run)
+    ctx = _fresh_frame_ctx(db_session, b"x")
+    res = await IdentifyImageTool().run(ctx, kind="landmark")
+    assert res["ok"] is True
+    instr = res.get("_instruction", "")
+    assert "WhatsApp or Telegram" in instr
+    assert "https://maps.google/x" in instr  # the exact location link to send
+
+
+async def test_product_has_no_send_location_instruction(db_session, monkeypatch) -> None:
+    """A product result is NOT given the send-location offer (places only)."""
+
+    async def fake_run(mode, *, settings, image_data=None, image_url=None, question=None):
+        return {"ok": True, "mode": "product", "result": {"product_name": "Mug"}}
+
+    monkeypatch.setattr(identify_mod, "run_detection", fake_run)
+    ctx = _fresh_frame_ctx(db_session, b"x")
+    res = await IdentifyImageTool().run(ctx, kind="auto")
+    assert "_instruction" not in res
+
+
 async def test_invalid_kind_coerces_to_auto(db_session, monkeypatch) -> None:
     seen: dict[str, object] = {}
 

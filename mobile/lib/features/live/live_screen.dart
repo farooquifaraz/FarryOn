@@ -311,19 +311,39 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                  if (state.tools.isNotEmpty)
-                    ToolActivityView(
-                      tools: state.tools,
-                      onPermission: notifier.respondToolPermission,
+                  // The result card + transcript can grow taller than the space
+                  // left when the keyboard is open (a rich product/landmark card
+                  // plus the typed-message field). Wrap them in a bottom-anchored
+                  // scroll view so they scroll instead of overflowing ("BOTTOM
+                  // OVERFLOWED BY … PIXELS"); the controls stay pinned below.
+                  Flexible(
+                    child: SingleChildScrollView(
+                      reverse: true,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (state.tools.isNotEmpty)
+                            ToolActivityView(
+                              tools: state.tools,
+                              onPermission: notifier.respondToolPermission,
+                            ),
+                          _TranscriptOverlay(entries: state.transcripts),
+                          // Just above the controls (never over the header): the
+                          // last glasses photo, so the user sees exactly what
+                          // was captured.
+                          if (state.lastCapturedPhoto != null)
+                            _CapturedPhotoPreview(
+                              photo: state.lastCapturedPhoto!,
+                              at: state.lastCapturedAt,
+                              label: state.videoKind == 'glasses'
+                                  ? 'Glasses captured'
+                                  : 'Image sent to AI',
+                            ),
+                        ],
+                      ),
                     ),
-                  _TranscriptOverlay(entries: state.transcripts),
-                  // Just above the controls (never over the header): the last
-                  // glasses photo, so the user sees exactly what was captured.
-                  if (state.lastCapturedPhoto != null)
-                    _CapturedPhotoPreview(
-                      photo: state.lastCapturedPhoto!,
-                      at: state.lastCapturedAt,
-                    ),
+                  ),
                   _Controls(
                     state: state,
                     textController: _textController,
@@ -335,6 +355,8 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                     },
                     onToggleCamera: () =>
                         notifier.setCameraEnabled(!state.cameraOn),
+                    onFlipCamera: () =>
+                        notifier.setCameraFront(!state.cameraFront),
                     onScan: _scanCurrentView,
                     onCapturePhoto: notifier.captureGlassesPhoto,
                   ),
@@ -1187,6 +1209,7 @@ class _Controls extends StatelessWidget {
     required this.onInterrupt,
     required this.onSendText,
     required this.onToggleCamera,
+    required this.onFlipCamera,
     required this.onScan,
     required this.onCapturePhoto,
   });
@@ -1197,6 +1220,7 @@ class _Controls extends StatelessWidget {
   final VoidCallback onInterrupt;
   final ValueChanged<String> onSendText;
   final VoidCallback onToggleCamera;
+  final VoidCallback onFlipCamera;
   final VoidCallback onScan;
   final VoidCallback onCapturePhoto;
 
@@ -1220,6 +1244,16 @@ class _Controls extends StatelessWidget {
                 tooltip: state.cameraOn ? 'Turn camera off' : 'Turn camera on',
                 onPressed: onToggleCamera,
               ),
+              // Front/back lens flip — only for the phone camera (glasses have a
+              // single fixed lens). Enabled while the camera is on.
+              if (state.videoKind != 'glasses')
+                _CircleButton(
+                  icon: Icons.flip_camera_ios,
+                  tooltip: state.cameraFront
+                      ? 'Switch to back camera'
+                      : 'Switch to front camera',
+                  onPressed: state.cameraOn ? onFlipCamera : null,
+                ),
               // B3: glasses shutter — take a still through the glasses camera
               // and let Farry look at it. Only shown when the glasses are the
               // vision source (the phone camera streams continuously, so it
@@ -1590,10 +1624,18 @@ class _ZoomChip extends StatelessWidget {
 /// glasses point. Tap to view full-screen. This is the ground-truth check for
 /// "it described the wrong scene".
 class _CapturedPhotoPreview extends StatelessWidget {
-  const _CapturedPhotoPreview({required this.photo, required this.at});
+  const _CapturedPhotoPreview({
+    required this.photo,
+    required this.at,
+    this.label = 'Glasses captured',
+  });
 
   final Uint8List photo;
   final DateTime? at;
+
+  /// Caption shown above the timestamp — names what this frame is (e.g.
+  /// "Glasses captured" vs the phone camera view sent to the AI).
+  final String label;
 
   String _stamp(DateTime t) {
     String two(int n) => n.toString().padLeft(2, '0');
@@ -1643,7 +1685,7 @@ class _CapturedPhotoPreview extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Glasses captured',
+                      label,
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.92),
                         fontSize: 13,
@@ -1681,7 +1723,11 @@ class _TranscriptOverlay extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.fromLTRB(10, 0, 10, 8),
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.5,
+        // Cap so the transcript yields room for the tool card, photo preview,
+        // and controls below it — otherwise the bottom column overflows (the
+        // yellow "BOTTOM OVERFLOWED" stripe) when all are shown at once.
+        maxHeight: (MediaQuery.of(context).size.height * 0.5)
+            .clamp(120.0, MediaQuery.of(context).size.height - 440),
       ),
       decoration: BoxDecoration(
         // A dark vertical gradient (no live blur — keeps it cheap) gives the
