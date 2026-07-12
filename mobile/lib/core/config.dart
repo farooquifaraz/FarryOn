@@ -32,6 +32,8 @@ class AppConfig {
     this.emailSmtpHost,
     this.emailSmtpPort = 587,
     this.handsFree = true,
+    this.saveCapturesToGallery = true,
+    this.glassesRetentionDays = 0,
   });
 
   /// Backend host (IP or DNS name), without scheme or port.
@@ -80,6 +82,17 @@ class AppConfig {
   /// until the user taps it, so background noise / a TV / the assistant's own
   /// voice can never trigger a phantom turn. Best in noisy rooms.
   final bool handsFree;
+
+  /// Save every live capture (phone camera / glasses still) into the phone
+  /// gallery (`Pictures/Farry`). Default on.
+  final bool saveCapturesToGallery;
+
+  /// Auto-delete photos from the SMART-GLASSES storage after they've synced to
+  /// the phone, to stop the glasses filling up. Value is a day count:
+  /// `0` = never delete, `-2` = delete right after each photo syncs to the
+  /// phone, `1` / `7` / `30` = delete synced photos older than that many days,
+  /// `-1` = only when the glasses report storage full.
+  final int glassesRetentionDays;
 
   /// Build the initial config from `--dart-define` values, falling back to
   /// localhost defaults suitable for an emulator talking to a host backend.
@@ -140,6 +153,8 @@ class AppConfig {
     String? emailSmtpHost,
     int? emailSmtpPort,
     bool? handsFree,
+    bool? saveCapturesToGallery,
+    int? glassesRetentionDays,
   }) =>
       AppConfig(
         host: host ?? this.host,
@@ -161,6 +176,10 @@ class AppConfig {
         emailSmtpHost: emailSmtpHost ?? this.emailSmtpHost,
         emailSmtpPort: emailSmtpPort ?? this.emailSmtpPort,
         handsFree: handsFree ?? this.handsFree,
+        saveCapturesToGallery:
+            saveCapturesToGallery ?? this.saveCapturesToGallery,
+        glassesRetentionDays:
+            glassesRetentionDays ?? this.glassesRetentionDays,
       );
 
   @override

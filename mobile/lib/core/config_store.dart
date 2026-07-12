@@ -38,6 +38,8 @@ class ConfigStore {
       emailSmtpHost: p.getString('cfg.email.smtp'),
       emailSmtpPort: p.getInt('cfg.email.smtpPort'),
       handsFree: p.getBool('cfg.handsFree'),
+      saveCapturesToGallery: p.getBool('cfg.saveCapturesToGallery'),
+      glassesRetentionDays: p.getInt('cfg.glassesRetentionDays'),
     );
   }
 
@@ -59,5 +61,7 @@ class ConfigStore {
     await p.setString('cfg.email.smtp', c.emailSmtpHost ?? '');
     await p.setInt('cfg.email.smtpPort', c.emailSmtpPort);
     await p.setBool('cfg.handsFree', c.handsFree);
+    await p.setBool('cfg.saveCapturesToGallery', c.saveCapturesToGallery);
+    await p.setInt('cfg.glassesRetentionDays', c.glassesRetentionDays);
   }
 }

@@ -13,6 +13,7 @@ import '../core/config.dart';
 import '../core/location.dart';
 import '../core/log_store.dart';
 import '../core/logger.dart';
+import '../core/media_saver.dart';
 import '../core/notifications.dart';
 import '../data/finder_api.dart';
 import '../data/live_client.dart';
@@ -60,6 +61,16 @@ class LiveController {
         platform = platform ?? defaultPlatform {
     _client = clientFactory(_config, _activeDeviceInfo);
     _bindClient();
+    // Push the glasses storage-retention policy to native up front. This only
+    // sets a field on the (singleton) native SDK — it does NOT need the glasses
+    // to be connected — so doing it here guarantees the policy is in place
+    // before ANY sync/download completes, regardless of how or where the
+    // glasses later connect (live session, Glasses Lab, or an auto-reconnect
+    // whose repeat 'connected' event is de-duplicated and never forwarded).
+    unawaited(
+      _glassesBridge?.setRetentionDays(_config.glassesRetentionDays) ??
+          Future<void>.value(),
+    );
   }
 
   static final _log = Logger('LiveController');
@@ -86,6 +97,15 @@ class LiveController {
   final GlassesBridgeApi? _glassesBridge;
   StreamSubscription<GlassesLabEvent>? _wearSub;
   bool _glassesWorn = false;
+
+  // Auto-sync glasses media (WiFi-P2P) so photos the user snaps on the glasses
+  // reach the phone gallery — and clear off the glasses per the retention
+  // policy — WITHOUT ever tapping "Start sync". Triggered on connect and,
+  // debounced, after each photo is stored. Deferred while the assistant is
+  // speaking so the WiFi-P2P bring-up can't hiccup mid-turn.
+  Timer? _autoSyncTimer;
+  Timer? _autoSyncWatchdog;
+  bool _autoSyncing = false;
 
   // Server stream plumbing.
   StreamSubscription<ServerMessage>? _eventSub;
@@ -283,6 +303,17 @@ class LiveController {
         // The connect attempt has resolved (either way) — release the in-flight
         // guard so a later reconnect (new session, or after a drop) can proceed.
         _connectingGlasses = false;
+        // Push the storage-retention policy to the freshly-connected glasses so
+        // synced photos are pruned per the user's Settings choice.
+        if (connected) {
+          unawaited(
+            _glassesBridge?.setRetentionDays(_config.glassesRetentionDays) ??
+                Future<void>.value(),
+          );
+          // Pull anything already sitting on the glasses (photos taken while
+          // disconnected) shortly after the link is up.
+          _scheduleAutoGlassesSync(const Duration(seconds: 3));
+        }
         // Auto-pick the camera on a connect/disconnect TRANSITION: glasses
         // become the default camera the moment they connect, and it falls back
         // to the phone camera when they drop. (setVideoDevice no-ops if already
@@ -313,7 +344,55 @@ class LiveController {
         } else {
           if (_state.micOpen) unawaited(stopListening());
         }
+      case 'deviceEvent':
+        // The firmware announces a freshly stored photo as a raw device event
+        // (`photoStored count=N`). Debounce so a burst of shots batches into a
+        // single sync instead of one WiFi bring-up per photo.
+        final hex = event.data['hex'] as String?;
+        if (hex != null && hex.startsWith('photoStored')) {
+          _scheduleAutoGlassesSync(const Duration(seconds: 8));
+        }
+      case 'syncProgress':
+        // A sync run reaching 100% (files done / nothing to sync) frees the
+        // in-flight guard so the next photo can trigger a fresh sync.
+        final pct = (event.data['pct'] as num?)?.toInt() ?? 0;
+        if (pct >= 100) {
+          _autoSyncing = false;
+          _autoSyncWatchdog?.cancel();
+        }
     }
+  }
+
+  /// (Re)arm the debounced glasses media auto-sync. Collapses rapid triggers
+  /// (photo bursts) into one run; the actual sync fires from [_runAutoGlassesSync].
+  void _scheduleAutoGlassesSync(Duration delay) {
+    if (_glassesBridge == null) return;
+    _autoSyncTimer?.cancel();
+    _autoSyncTimer = Timer(delay, _runAutoGlassesSync);
+  }
+
+  /// Kick a WiFi-P2P media sync if the glasses are connected and we're not
+  /// already syncing. Defers while the assistant is speaking (TTS active) so a
+  /// mid-turn WiFi-P2P bring-up can't drop the audio/backend link.
+  void _runAutoGlassesSync() {
+    final bridge = _glassesBridge;
+    if (bridge == null || _autoSyncing) return;
+    if (!_state.glassesConnected) return;
+    if (_ttsActive) {
+      _scheduleAutoGlassesSync(const Duration(seconds: 5)); // try again after
+      return;
+    }
+    _autoSyncing = true;
+    // Backstop: clear the guard even if a terminal syncProgress never lands
+    // (sync stalls / glasses drop mid-run), so future photos still sync.
+    _autoSyncWatchdog?.cancel();
+    _autoSyncWatchdog = Timer(const Duration(seconds: 90), () {
+      _autoSyncing = false;
+    });
+    unawaited(bridge.startWifiSync().catchError((Object e) {
+      _log.warn('auto glasses sync failed: $e');
+      _autoSyncing = false;
+    }));
   }
 
   /// Mirror the glasses status into state when glasses back the mic, so the
@@ -1071,8 +1150,23 @@ class LiveController {
         lastCapturedPhoto: _lastFrame,
         lastCapturedAt: DateTime.now(),
       );
+      _saveCaptureToGallery(_lastFrame!);
     }
     _emit(next);
+  }
+
+  /// Last capture written to the gallery — dedup so the same frame object isn't
+  /// saved twice (e.g. two text turns without a fresh frame in between).
+  Uint8List? _lastGallerySaved;
+
+  /// Save a capture (phone frame or glasses still) to the phone gallery. The
+  /// image the user "clicked" to identify is otherwise in-memory only. Fire and
+  /// forget — a gallery failure must never disrupt the live session.
+  void _saveCaptureToGallery(Uint8List jpeg) {
+    if (!_config.saveCapturesToGallery) return;
+    if (jpeg.isEmpty || identical(jpeg, _lastGallerySaved)) return;
+    _lastGallerySaved = jpeg;
+    unawaited(MediaSaver.saveImage(jpeg));
   }
 
   /// Respond to a tool-permission gate.
@@ -1121,6 +1215,9 @@ class LiveController {
           lastCapturedPhoto: jpeg,
           lastCapturedAt: DateTime.now(),
         ));
+        // A glasses still is a deliberate capture — save it to the gallery so
+        // it isn't lost when the glasses' own storage is later cleared.
+        _saveCaptureToGallery(jpeg);
       }
       // Don't feed CONTINUOUS frames while the assistant is speaking: they
       // can't influence the in-flight reply and would only pile up in the
@@ -1179,6 +1276,7 @@ class LiveController {
       _log.warn('glasses photo arrived with no frame pipe — sending directly');
       _lastFrame = jpeg;
       _client.sendVideo(jpeg);
+      _saveCaptureToGallery(jpeg); // listener skipped → save it here
     }
   }
 
@@ -1301,6 +1399,14 @@ class LiveController {
   void updateConfig(AppConfig config) {
     _config = config;
     _client.updateConfig(config);
+    // Apply the glasses storage-retention choice immediately. Pushed
+    // unconditionally (not gated on a live connection): it just updates a field
+    // on the native SDK, so it must land whenever the user changes the Setting —
+    // even if the glasses are currently linked only via the Glasses Lab.
+    unawaited(
+      _glassesBridge?.setRetentionDays(config.glassesRetentionDays) ??
+          Future<void>.value(),
+    );
   }
 
   AppConfig get config => _config;
@@ -1314,6 +1420,8 @@ class LiveController {
     await ChatHistoryStore.saveSession(_state.transcripts);
     _ttsClear?.cancel();
     _userLogTimer?.cancel();
+    _autoSyncTimer?.cancel();
+    _autoSyncWatchdog?.cancel();
     await _audioSub?.cancel();
     await _videoSub?.cancel();
     await _glassesSub?.cancel();

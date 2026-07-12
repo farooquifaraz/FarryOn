@@ -663,6 +663,8 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   late String _wsProvider = widget.current.webSearchProvider;
   late String _emailProvider = widget.current.emailProvider;
   late bool _handsFree = widget.current.handsFree;
+  late bool _saveCaptures = widget.current.saveCapturesToGallery;
+  late int _retentionDays = widget.current.glassesRetentionDays;
   bool _showEmailPw = false;
 
   @override
@@ -724,6 +726,8 @@ class _SettingsSheetState extends State<_SettingsSheet> {
       emailSmtpHost: smtpHost,
       emailSmtpPort: smtpPort,
       handsFree: _handsFree,
+      saveCapturesToGallery: _saveCaptures,
+      glassesRetentionDays: _retentionDays,
     ));
     Navigator.pop(context);
   }
@@ -871,6 +875,46 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                       ),
                       value: _handsFree,
                       onChanged: (v) => setState(() => _handsFree = v),
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      secondary: const Icon(Icons.photo_library_outlined,
+                          color: Aurora.textMuted),
+                      title: const Text('Save captures to gallery'),
+                      subtitle: const Text(
+                        'Every photo you identify (phone or glasses) is saved '
+                        'to Pictures/Farry.',
+                        style: TextStyle(color: Aurora.textMuted),
+                      ),
+                      value: _saveCaptures,
+                      onChanged: (v) => setState(() => _saveCaptures = v),
+                    ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.auto_delete_outlined,
+                          color: Aurora.textMuted),
+                      title: const Text('Auto-delete glasses photos'),
+                      subtitle: const Text(
+                        'Free up the glasses’ own storage after photos '
+                        'are synced to your phone.',
+                        style: TextStyle(color: Aurora.textMuted),
+                      ),
+                      trailing: DropdownButton<int>(
+                        value: _retentionDays,
+                        dropdownColor: Aurora.surfaceHigh,
+                        underline: const SizedBox.shrink(),
+                        items: const [
+                          DropdownMenuItem(value: 0, child: Text('Never')),
+                          DropdownMenuItem(
+                              value: -2, child: Text('Right after sync')),
+                          DropdownMenuItem(value: 1, child: Text('After 1 day')),
+                          DropdownMenuItem(value: 7, child: Text('After 7 days')),
+                          DropdownMenuItem(value: 30, child: Text('After 30 days')),
+                          DropdownMenuItem(value: -1, child: Text('When full')),
+                        ],
+                        onChanged: (v) =>
+                            setState(() => _retentionDays = v ?? 0),
+                      ),
                     ),
                     const Divider(height: 28, color: Aurora.glassBorder),
                     _label('AI provider'),

@@ -28,6 +28,10 @@ abstract class GlassesBridgeApi {
 
   Future<void> setAutoReconnect(bool enabled);
 
+  /// Retention policy for the glasses' photo storage: `0` never, `1/7/30`
+  /// days, `-1` when full. Applied when photos sync to the phone.
+  Future<void> setRetentionDays(int days);
+
   /// Ask for a battery report — answer arrives as a `battery` event.
   Future<void> requestBattery();
 
@@ -188,6 +192,10 @@ class GlassesChannel implements GlassesBridgeApi {
   @override
   Future<void> setAutoReconnect(bool enabled) =>
       _method.invokeMethod<void>('setAutoReconnect', {'enabled': enabled});
+
+  @override
+  Future<void> setRetentionDays(int days) =>
+      _method.invokeMethod<void>('setRetentionDays', {'days': days});
 
   @override
   Future<void> requestBattery() =>

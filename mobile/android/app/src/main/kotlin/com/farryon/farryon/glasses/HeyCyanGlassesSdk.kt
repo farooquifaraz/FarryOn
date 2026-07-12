@@ -32,6 +32,8 @@ import com.oudmon.ble.base.bluetooth.QCBluetoothCallbackCloneReceiver
 import com.oudmon.ble.base.communication.LargeDataHandler
 import com.oudmon.ble.base.communication.bigData.resp.GlassesDeviceNotifyListener
 import com.oudmon.ble.base.communication.bigData.resp.GlassesDeviceNotifyRsp
+import com.oudmon.ble.base.communication.file.FileHandle
+import com.oudmon.ble.base.communication.file.SimpleCallback
 import com.oudmon.ble.base.scan.BleScannerHelper
 import com.oudmon.ble.base.scan.ScanRecord
 import com.oudmon.ble.base.scan.ScanWrapperCallback
@@ -112,6 +114,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         /** HFP mic probe: SCO route settle time + recording duration. */
         private const val HFP_SCO_SETTLE_MS = 1_000L
         private const val HFP_RECORD_DURATION_MS = 10_000L
+
+        /** Delay after connect before sweeping aged retention files, so the BLE
+         *  MTU (which the delete command needs) is negotiated first. */
+        private const val RETENTION_SWEEP_DELAY_MS = 5_000L
     }
 
     override val implementationName = "heycyan"
@@ -382,9 +388,15 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         // Task 2.6b: the BLE link must survive backgrounding while connected.
         try {
             when (state) {
-                "connected" -> GlassesForegroundService.start(
-                    app, DeviceManager.getInstance().deviceName ?: "L801"
-                )
+                "connected" -> {
+                    GlassesForegroundService.start(
+                        app, DeviceManager.getInstance().deviceName ?: "L801"
+                    )
+                    // Prune any photos that aged past the retention window while we
+                    // were away. Delayed so the BLE MTU is negotiated first (the
+                    // delete command rides the same file-transfer channel).
+                    main.postDelayed({ sweepRetention() }, RETENTION_SWEEP_DELAY_MS)
+                }
                 "disconnected" -> GlassesForegroundService.stop(app)
             }
         } catch (e: Exception) {
@@ -787,7 +799,19 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                             0x0b -> "heartbeat"
                             0x0c -> "TOUCH pause gesture (voice broadcast paused)"
                             0x0d -> "unbindApp"
-                            0x0e -> "glasses storage FULL"
+                            0x0e -> {
+                                // Retention "When full": the glasses are out of
+                                // space — sync everything to the phone, then the
+                                // per-file retention hook purges it off the
+                                // glasses (fullCleanupActive makes it purge all).
+                                if (retentionDays == -1 && !syncActive) {
+                                    fullCleanupActive = true
+                                    syncActive = true
+                                    armSyncWatchdog()
+                                    GlassesControl.getInstance(app)?.importAlbum()
+                                }
+                                "glasses storage FULL"
+                            }
                             0x10 -> "translationPause"
                             0x12 -> {
                                 // Volume-change reports carry the full block
@@ -932,6 +956,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             armSyncWatchdog()
             emit("deviceEvent", mapOf("hex" to "downloaded ${entity.fileName}"))
             exportToGallery(entity.filePath, entity.fileName)
+            // Now that it's safely on the phone, honour the retention policy —
+            // free the glasses' storage by deleting old (or, on a full purge,
+            // all) synced photos.
+            applyRetention(entity)
         }
 
         override fun fileCount(index: Int, total: Int) {
@@ -942,6 +970,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         override fun fileDownloadComplete() {
             cancelSyncWatchdog()
             syncActive = false
+            fullCleanupActive = false // a storage-full purge (if any) is done
             emit(
                 "syncProgress",
                 mapOf(
@@ -1435,6 +1464,18 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     private var syncWatchdog: Runnable? = null
     @Volatile private var syncActive = false
 
+    /** Retention policy for the glasses' own photo storage (set from the app
+     * Settings): 0 = keep everything, N>0 = delete synced photos older than N
+     * days, -1 = purge synced photos when the glasses report storage full. */
+    @Volatile private var retentionDays = 0
+    /** True while a storage-FULL cleanup sync is running (retentionDays == -1),
+     * so downloaded files are deleted from the glasses regardless of age. */
+    @Volatile private var fullCleanupActive = false
+
+    /** Registered once so the firmware's delete ack/err for [FileHandle.executeFileDelete]
+     * surfaces in the event console (onDeletePlate = ok, onDeletePlateError = code). */
+    @Volatile private var deleteAckRegistered = false
+
     override fun startWifiSync() {
         Log.i(TAG, "startWifiSync")
         syncActive = true
@@ -1579,6 +1620,157 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     "call=${block[5]} system=${block[8]}"
             )
         )
+    }
+
+    override fun setRetentionDays(days: Int) {
+        Log.i(TAG, "setRetentionDays $days")
+        retentionDays = days
+        // A newly-tightened policy should prune already-synced photos right away
+        // (no-op if the glasses aren't connected yet — the next connect sweeps).
+        sweepRetention()
+    }
+
+    /** After a photo has been synced to the phone (and exported to the gallery),
+     * decide what the retention policy wants for it:
+     *  - 0  keep on glasses forever
+     *  - -2 delete right now ("right after sync")
+     *  - -1 delete now only during a storage-full purge
+     *  - N  ("older than N days") delete now if already ≥N days old, else
+     *       remember it in the persistent pending queue so a LATER connect
+     *       prunes it once it crosses the age line. Without this queue the
+     *       day-based policy could never fire — a freshly-synced photo is
+     *       always age≈0, and the firmware never re-lists it for us to re-check.
+     * Safe: the file is already backed up on the phone before we ever delete. */
+    private fun applyRetention(entity: com.oudmon.wifi.bean.GlassAlbumEntity) {
+        val policy = retentionDays
+        if (policy == 0) return // keep everything
+        val name = entity.fileName ?: return
+        // entity.timestamp may be seconds or millis — normalise to ms.
+        var ts = entity.timestamp
+        if (ts in 1..9_999_999_999L) ts *= 1000
+        when {
+            policy == -2 -> deleteFromGlasses(name)
+            policy == -1 -> if (fullCleanupActive) deleteFromGlasses(name)
+            else -> {
+                val ageDays = if (ts > 0) (System.currentTimeMillis() - ts) / 86_400_000L else 0
+                if (ts > 0 && ageDays >= policy) {
+                    deleteFromGlasses(name)
+                } else if (ts > 0) {
+                    addPendingRetention(name, ts)
+                    Log.i(TAG, "retention: $name kept (age ${ageDays}d < ${policy}d), queued for later")
+                }
+            }
+        }
+    }
+
+    /** Send the glasses-side delete for one file and drop the phone-local vendor
+     * cache copy. The vendor SDK exposes exactly one device-side per-file delete:
+     * FileHandle.executeFileDelete(name) → BLE command 0x39 (57) with payload
+     * [0x01]+UTF8(name), over the same link used to push watch-face/OTA files.
+     * Fire-and-forget; the firmware confirms via onDeletePlate/onDeletePlateError
+     * (surfaced by [ensureDeleteAck]). deleteFile() is local-only — it removes the
+     * phone's downloaded copy, never the glasses — so we call BOTH. */
+    private fun deleteFromGlasses(name: String): Boolean = try {
+        ensureDeleteAck()
+        FileHandle.getInstance().executeFileDelete(name)
+        val localDropped = GlassesControl.getInstance(app)?.deleteFile(name) ?: false
+        Log.i(TAG, "retention: sent glasses-delete for $name (local copy dropped=$localDropped)")
+        emit("deviceEvent", mapOf("hex" to "retention: delete requested for $name"))
+        true
+    } catch (e: Exception) {
+        Log.i(TAG, "retention delete failed: $e")
+        false
+    }
+
+    // ---- Age-based retention queue (persisted) ------------------------------
+    // Files backed up to the phone but intentionally kept on the glasses under an
+    // "older than N days" policy, awaiting deletion once they age out. Persisted
+    // so a photo taken today is still pruned N days later, even across restarts.
+    private val retentionQueueKey = "retention_pending"
+
+    private fun retentionPrefs() =
+        app.getSharedPreferences("glasses_lab", Context.MODE_PRIVATE)
+
+    /** name → capture-time millis. */
+    private fun loadPendingRetention(): LinkedHashMap<String, Long> {
+        val out = LinkedHashMap<String, Long>()
+        val raw = retentionPrefs().getStringSet(retentionQueueKey, emptySet()) ?: emptySet()
+        for (e in raw) {
+            val i = e.lastIndexOf('|')
+            if (i <= 0) continue
+            val ts = e.substring(i + 1).toLongOrNull() ?: continue
+            out[e.substring(0, i)] = ts
+        }
+        return out
+    }
+
+    private fun savePendingRetention(map: Map<String, Long>) {
+        retentionPrefs().edit()
+            .putStringSet(retentionQueueKey, map.entries.map { "${it.key}|${it.value}" }.toSet())
+            .apply()
+    }
+
+    private fun addPendingRetention(name: String, tsMs: Long) {
+        val map = loadPendingRetention()
+        map[name] = tsMs
+        savePendingRetention(map)
+    }
+
+    /** Prune already-backed-up photos we kept on the glasses, once they cross the
+     * retention age. Runs on every (re)connect so a day-based policy fires even
+     * for photos synced days ago. BLE-only — no WiFi needed. No-op unless the
+     * glasses are actually connected (executeFileDelete would otherwise be lost). */
+    private fun sweepRetention() {
+        if (lastConnectionState != "connected") return
+        val policy = retentionDays
+        if (policy == 0) return // keep everything — leave the queue intact
+        val pending = loadPendingRetention()
+        if (pending.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val survivors = LinkedHashMap<String, Long>()
+        var removed = 0
+        for ((name, ts) in pending) {
+            val expired = when {
+                policy == -2 -> true              // user tightened to "right after sync"
+                policy == -1 -> fullCleanupActive
+                else -> (now - ts) / 86_400_000L >= policy
+            }
+            if (expired) {
+                deleteFromGlasses(name)
+                removed++
+            } else {
+                survivors[name] = ts
+            }
+        }
+        if (removed > 0) {
+            savePendingRetention(survivors)
+            Log.i(TAG, "retention sweep: deleted $removed old file(s), ${survivors.size} still waiting")
+            emit("deviceEvent", mapOf("hex" to "retention sweep: removed $removed old photo(s)"))
+        }
+    }
+
+    /** Register the FileHandle delete ack listener exactly once. The firmware
+     * reports the result of [FileHandle.executeFileDelete] asynchronously, so
+     * without this the delete would be silent and unverifiable. */
+    private fun ensureDeleteAck() {
+        if (deleteAckRegistered) return
+        deleteAckRegistered = true
+        try {
+            FileHandle.getInstance().registerCallback(object : SimpleCallback() {
+                override fun onDeletePlate() {
+                    Log.i(TAG, "retention: glasses confirmed delete")
+                    emit("deviceEvent", mapOf("hex" to "retention: glasses confirmed delete"))
+                }
+
+                override fun onDeletePlateError(code: Int) {
+                    Log.i(TAG, "retention: glasses delete error code=$code")
+                    emit("deviceEvent", mapOf("hex" to "retention: glasses delete error=$code"))
+                }
+            })
+        } catch (e: Exception) {
+            Log.i(TAG, "ensureDeleteAck failed: $e")
+            deleteAckRegistered = false
+        }
     }
 
     override fun setVolume(type: String, level: Int) {

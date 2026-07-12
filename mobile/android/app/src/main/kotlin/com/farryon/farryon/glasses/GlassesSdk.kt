@@ -59,6 +59,12 @@ interface GlassesSdk {
     fun startWifiSync()
     fun stopWifiSync()
     fun setVolume(type: String, level: Int)
+
+    /** Auto-delete synced glasses photos to free the headset's storage.
+     * `0` = never, `1/7/30` = delete photos older than that many days after
+     * they sync to the phone, `-1` = only when the glasses report storage full. */
+    fun setRetentionDays(days: Int)
+
     fun dispose()
 }
 
@@ -226,6 +232,10 @@ class StubGlassesSdk : GlassesSdk {
 
     override fun setVolume(type: String, level: Int) {
         emit("deviceEvent", mapOf("hex" to "volume:$type=$level"))
+    }
+
+    override fun setRetentionDays(days: Int) {
+        emit("deviceEvent", mapOf("hex" to "retentionDays=$days (stub)"))
     }
 
     override fun dispose() {

@@ -15,6 +15,11 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             applicationContext,
         )
+        // Save live captures (phone/glasses JPEG bytes) into the phone gallery.
+        MediaChannel.register(
+            flutterEngine.dartExecutor.binaryMessenger,
+            applicationContext,
+        )
     }
 
     override fun onDestroy() {

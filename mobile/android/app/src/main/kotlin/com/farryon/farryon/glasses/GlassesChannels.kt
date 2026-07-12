@@ -305,6 +305,10 @@ class GlassesChannels private constructor(
                     sdk.setAutoReconnect(call.argument<Boolean>("enabled") ?: true)
                     result.success(null)
                 }
+                "setRetentionDays" -> {
+                    sdk.setRetentionDays((call.argument<Number>("days") ?: 0).toInt())
+                    result.success(null)
+                }
                 "requestBattery" -> { sdk.requestBattery(); result.success(null) }
                 "requestDeviceInfo" -> { sdk.requestDeviceInfo(); result.success(null) }
                 "takePhoto" -> { sdk.takePhoto(); result.success(null) }
