@@ -40,6 +40,14 @@ class TaskItem {
         dueDate: j['dueDate'] as String?,
         createdAt: j['createdAt'] as String?,
       );
+
+  TaskItem copyWith({bool? done}) => TaskItem(
+        id: id,
+        title: title,
+        done: done ?? this.done,
+        dueDate: dueDate,
+        createdAt: createdAt,
+      );
 }
 
 /// Thin REST client for the backend's Notes/Tasks endpoints. Points at the same

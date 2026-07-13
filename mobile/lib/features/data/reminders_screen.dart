@@ -22,9 +22,73 @@ class RemindersScreen extends ConsumerStatefulWidget {
 
 class _RemindersScreenState extends ConsumerState<RemindersScreen> {
   late final DataApi _api = ref.read(dataApiProvider);
-  late Future<List<TaskItem>> _future = _api.tasks();
+  List<TaskItem>? _tasks;
+  bool _loading = true;
+  bool _error = false;
 
-  void _reload() => setState(() => _future = _api.tasks());
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = _tasks == null;
+      _error = false;
+    });
+    try {
+      final t = await _api.tasks();
+      if (!mounted) return;
+      setState(() {
+        _tasks = t;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = true;
+        _loading = false;
+      });
+    }
+  }
+
+  int get _overdueCount {
+    final now = DateTime.now();
+    return (_tasks ?? const []).where((t) {
+      if (t.done || t.dueDate == null || t.dueDate!.isEmpty) return false;
+      final d = DateTime.tryParse(t.dueDate!)?.toLocal();
+      return d != null && d.isBefore(now);
+    }).length;
+  }
+
+  /// Optimistic toggle: flip the row instantly, roll back + warn on failure.
+  Future<void> _toggle(TaskItem t) async {
+    final prev = _tasks;
+    setState(() => _tasks = [
+          for (final x in _tasks ?? const <TaskItem>[])
+            if (x.id == t.id) x.copyWith(done: !x.done) else x,
+        ]);
+    try {
+      await _api.setTaskDone(t.id, !t.done);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _tasks = prev);
+      dataSnack(context, "Couldn't update — try again.", error: true);
+    }
+  }
+
+  Future<void> _delete(TaskItem t) async {
+    final prev = _tasks;
+    setState(() => _tasks = _tasks?.where((x) => x.id != t.id).toList());
+    try {
+      await _api.deleteTask(t.id);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _tasks = prev);
+      dataSnack(context, "Couldn't delete — try again.", error: true);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,92 +105,95 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
         ),
       ),
       body: RefreshIndicator(
-        onRefresh: () async => _reload(),
-        child: FutureBuilder<List<TaskItem>>(
-          future: _future,
-          builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snap.hasError) {
-              return _scrollable(DataErrorState(onRetry: _reload));
-            }
-            final tasks = snap.data ?? const [];
-            if (tasks.isEmpty) {
-              return _scrollable(const DataEmptyState(
-                icon: Icons.alarm_rounded,
-                gradient: Aurora.gradAmber,
-                label: 'No reminders yet.\nSay "remind me…" to add one.',
-              ));
-            }
-            final children = <Widget>[];
-            for (final g in groupTasksByDate(tasks)) {
-              children.add(_GroupHeader(label: g.label, count: g.items.length));
-              final accent = _groupColor(g.label);
-              children.addAll(g.items.map((t) => _tile(t, accent)));
-            }
-            return ListView(
-                padding: const EdgeInsets.all(14), children: children);
-          },
-        ),
+        onRefresh: _load,
+        child: _content(),
       ),
     );
+  }
+
+  Widget _content() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error) {
+      return _scrollable(DataErrorState(onRetry: _load));
+    }
+    final tasks = _tasks ?? const [];
+    if (tasks.isEmpty) {
+      return _scrollable(const DataEmptyState(
+        icon: Icons.alarm_rounded,
+        gradient: Aurora.gradAmber,
+        label: 'No reminders yet.\nSay "remind me…" to add one.',
+      ));
+    }
+    final overdue = _overdueCount;
+    final children = <Widget>[
+      DataCountHeader(
+        text: '${tasks.length} ${tasks.length == 1 ? "reminder" : "reminders"}'
+            '${overdue > 0 ? " · $overdue overdue" : ""}',
+        accent: overdue > 0 ? Aurora.danger : Aurora.amber,
+      ),
+    ];
+    for (final g in groupTasksByDate(tasks)) {
+      children.add(_GroupHeader(label: g.label, count: g.items.length));
+      final accent = _groupColor(g.label);
+      children.addAll(g.items.map((t) => _tile(t, accent)));
+    }
+    return ListView(
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 28), children: children);
   }
 
   Widget _tile(TaskItem t, Color accent) {
     final due = dataDueLabel(t.dueDate);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 12, 6, 12),
-        decoration: BoxDecoration(
-          color: Aurora.surfaceHigh,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Aurora.glassBorder),
+      child: SwipeToDelete(
+        dismissKey: ValueKey('task-${t.id}'),
+        confirm: () => confirmAction(
+          context,
+          title: 'Delete reminder?',
+          message: t.title,
         ),
-        child: Row(
-          children: [
-            _CheckCircle(
-              done: t.done,
-              accent: accent,
-              onTap: () async {
-                await _api.setTaskDone(t.id, !t.done);
-                _reload();
-              },
-            ),
-            const SizedBox(width: 13),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    t.title,
-                    style: TextStyle(
-                      color: t.done ? Aurora.textMuted : Aurora.textPrimary,
-                      fontSize: 15,
-                      decoration: t.done ? TextDecoration.lineThrough : null,
+        onDismissed: () => _delete(t),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
+          decoration: BoxDecoration(
+            color: Aurora.surfaceHigh,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Aurora.glassBorder),
+          ),
+          child: Row(
+            children: [
+              _CheckCircle(
+                done: t.done,
+                accent: accent,
+                onTap: () => _toggle(t),
+              ),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      t.title,
+                      style: TextStyle(
+                        color: t.done ? Aurora.textMuted : Aurora.textPrimary,
+                        fontSize: 15,
+                        decoration:
+                            t.done ? TextDecoration.lineThrough : null,
+                      ),
                     ),
-                  ),
-                  if (due != null) ...[
-                    const SizedBox(height: 7),
-                    _DuePill(label: due, accent: t.done ? Aurora.textMuted : accent),
+                    if (due != null) ...[
+                      const SizedBox(height: 7),
+                      _DuePill(
+                          label: due,
+                          accent: t.done ? Aurora.textMuted : accent),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-            InkWell(
-              borderRadius: BorderRadius.circular(20),
-              onTap: () async {
-                await _api.deleteTask(t.id);
-                _reload();
-              },
-              child: const Padding(
-                padding: EdgeInsets.all(6),
-                child: Icon(Icons.delete_outline_rounded,
-                    size: 20, color: Aurora.textMuted),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

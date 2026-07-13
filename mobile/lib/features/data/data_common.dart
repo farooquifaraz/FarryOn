@@ -123,6 +123,124 @@ class DataEmptyState extends StatelessWidget {
       );
 }
 
+/// A themed floating toast — used to report a failed mutation without a
+/// jarring dialog. [error] tints it danger-red.
+void dataSnack(BuildContext context, String message, {bool error = false}) {
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: error ? Aurora.danger : Aurora.surfaceHigh,
+        duration: const Duration(milliseconds: 2200),
+      ),
+    );
+}
+
+/// Ask before an irreversible action. Resolves true only on an explicit
+/// confirm. Themed to match the Midnight Aurora surfaces.
+Future<bool> confirmAction(
+  BuildContext context, {
+  required String title,
+  required String message,
+  String confirmLabel = 'Delete',
+  bool danger = true,
+}) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: Aurora.surfaceHigh,
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      title: Text(title, style: const TextStyle(color: Aurora.textPrimary)),
+      content: Text(message,
+          style: const TextStyle(color: Aurora.textMuted, height: 1.4)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child:
+              const Text('Cancel', style: TextStyle(color: Aurora.textMuted)),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: Text(
+            confirmLabel,
+            style: TextStyle(
+              color: danger ? Aurora.danger : Aurora.mint,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+  return ok ?? false;
+}
+
+/// A small uppercase count line above a list (e.g. "12 NOTES"), giving each
+/// screen a professional summary header instead of a bare list.
+class DataCountHeader extends StatelessWidget {
+  const DataCountHeader({super.key, required this.text, this.accent});
+  final String text;
+  final Color? accent;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 2, 4, 12),
+        child: Text(
+          text.toUpperCase(),
+          style: TextStyle(
+            color: accent ?? Aurora.mint,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.5,
+          ),
+        ),
+      );
+}
+
+/// Wraps a list row so it can be swiped away (end-to-start) onto a red
+/// gradient, with a confirm step. Cleaner than an always-visible trash icon.
+class SwipeToDelete extends StatelessWidget {
+  const SwipeToDelete({
+    super.key,
+    required this.dismissKey,
+    required this.child,
+    required this.confirm,
+    required this.onDismissed,
+    this.radius = 16,
+  });
+
+  final Key dismissKey;
+  final Widget child;
+
+  /// Return true to proceed with removal (e.g. after a confirm dialog).
+  final Future<bool> Function() confirm;
+  final VoidCallback onDismissed;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) => Dismissible(
+        key: dismissKey,
+        direction: DismissDirection.endToStart,
+        confirmDismiss: (_) => confirm(),
+        onDismissed: (_) => onDismissed(),
+        background: Container(
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.only(right: 22),
+          decoration: BoxDecoration(
+            gradient: Aurora.gradCoral,
+            borderRadius: BorderRadius.circular(radius),
+          ),
+          child: const Icon(Icons.delete_rounded,
+              color: Aurora.tealInk, size: 22),
+        ),
+        child: child,
+      );
+}
+
 /// A backend-error state with a retry button.
 class DataErrorState extends StatelessWidget {
   const DataErrorState({super.key, required this.onRetry});

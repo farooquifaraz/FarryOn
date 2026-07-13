@@ -90,6 +90,20 @@ class ChatHistoryStore {
     await p.remove(_key);
   }
 
+  /// Remove a single saved conversation, matched by its [ChatSession.startedAt]
+  /// timestamp (unique per save) so it's robust to list reordering. No-op if no
+  /// session matches.
+  static Future<void> deleteSession(DateTime startedAt) async {
+    final p = await SharedPreferences.getInstance();
+    final key = startedAt.toIso8601String();
+    final sessions = _read(p)
+      ..removeWhere((s) => s.startedAt.toIso8601String() == key);
+    await p.setString(
+      _key,
+      jsonEncode([for (final s in sessions) s.toJson()]),
+    );
+  }
+
   static List<ChatSession> _read(SharedPreferences p) {
     final raw = p.getString(_key);
     if (raw == null || raw.isEmpty) return [];
