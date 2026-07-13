@@ -1,24 +1,22 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../capture/device_registry.dart';
-import '../../core/config.dart';
 import '../../core/theme.dart';
+import '../../core/ui.dart';
 import '../../data/finder_api.dart';
 import '../../data/live_client.dart';
 import '../../protocol/protocol.dart';
 import '../../state/live_state.dart';
 import '../../state/permissions.dart';
 import '../../state/providers.dart';
-import '../data/notes_tasks_screen.dart';
-import '../debug/debug_logs_screen.dart';
+import '../data/your_stuff_screen.dart';
 import '../finder/finder_result_view.dart';
-import '../glasses_lab/glasses_lab_screen.dart';
 import '../finder/finder_screen.dart';
+import '../glasses_lab/glasses_lab_screen.dart';
+import '../settings/settings_screen.dart';
 import 'widgets/aurora_orb.dart';
 import 'widgets/camera_preview_view.dart';
 import 'widgets/status_indicator.dart';
@@ -41,6 +39,10 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
   double _zoomBase = 1.0; // zoom level when a pinch gesture begins
   StreamSubscription<FinderDetection>? _finderSub;
   bool _finderSheetOpen = false;
+  // Live transcript is hidden by default (clean camera view); the chat toggle
+  // in the top bar reveals it. Recording/saving is unaffected — it happens on
+  // session end regardless of whether the transcript is on screen.
+  bool _showChat = false;
 
   @override
   void initState() {
@@ -252,18 +254,14 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
               child: _TopOverlay(
                 state: state,
                 onSettings: _showSettingsSheet,
-                onOrientation: () =>
-                    notifier.setCameraPortrait(!state.cameraPortrait),
+                chatOn: _showChat,
+                onToggleChat: () => setState(() => _showChat = !_showChat),
                 onFinder: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => const FinderScreen(),
                   ),
                 ),
-                onNotes: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const NotesTasksScreen(),
-                  ),
-                ),
+                onNotes: () => YourStuffScreen.open(context),
               ),
             ),
           ),
@@ -328,7 +326,10 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                               tools: state.tools,
                               onPermission: notifier.respondToolPermission,
                             ),
-                          _TranscriptOverlay(entries: state.transcripts),
+                          // Chat is hidden until the user taps the chat toggle
+                          // (recording continues regardless).
+                          if (_showChat)
+                            _TranscriptOverlay(entries: state.transcripts),
                           // Just above the controls (never over the header): the
                           // last glasses photo, so the user sees exactly what
                           // was captured.
@@ -378,120 +379,31 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
     );
   }
 
-  void _showDeviceSheet(LiveNotifier notifier, LiveSessionState state) {
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const ListTile(
-              title: Text('Capture devices'),
-              subtitle: Text(
-                  'Mic and camera pick independently — e.g. earbuds mic + glasses camera'),
-            ),
-            // --- Microphone ---
-            const ListTile(
-              dense: true,
-              leading: Icon(Icons.mic, color: Aurora.textMuted),
-              title: Text('Microphone'),
-            ),
-            RadioGroup<CaptureDeviceKind>(
-              groupValue: _kindFromName(state.audioKind),
-              onChanged: (value) {
-                if (value != null) notifier.setAudioDevice(value);
-                Navigator.pop(context);
-              },
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (final kind in CaptureDeviceKind.values)
-                    RadioListTile<CaptureDeviceKind>(
-                      value: kind,
-                      dense: true,
-                      title: Text(kind == CaptureDeviceKind.phone
-                          ? 'Phone / earbuds mic'
-                          : 'Glasses mic (long-press to talk)'),
-                    ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            // --- Camera ---
-            const ListTile(
-              dense: true,
-              leading: Icon(Icons.photo_camera, color: Aurora.textMuted),
-              title: Text('Camera'),
-            ),
-            RadioGroup<CaptureDeviceKind>(
-              groupValue: _kindFromName(state.videoKind),
-              onChanged: (value) {
-                if (value != null) notifier.setVideoDevice(value);
-                Navigator.pop(context);
-              },
-              child: const Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  RadioListTile<CaptureDeviceKind>(
-                    value: CaptureDeviceKind.phone,
-                    dense: true,
-                    title: Text('Phone camera (live 1 fps)'),
-                  ),
-                  RadioListTile<CaptureDeviceKind>(
-                    value: CaptureDeviceKind.glasses,
-                    dense: true,
-                    title: Text('Glasses camera (say "what is this" or tap 📷)'),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
+  /// Open the redesigned, full-screen Settings hub. Every option inside writes
+  /// to the same [configProvider] / [liveProvider] as before — only the layout
+  /// changed. The glasses-lab teardown/reopen dance stays here (it must tear the
+  /// session down first) and is handed to the hub as a callback.
   void _showSettingsSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Aurora.base,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (sheetContext) => _SettingsSheet(
-        current: ref.read(configProvider),
-        onSave: (cfg) => ref.read(configProvider.notifier).state = cfg,
-        onOpenDevices: () {
-          Navigator.pop(sheetContext);
-          _showDeviceSheet(
-            ref.read(liveProvider.notifier),
-            ref.read(liveProvider),
-          );
-        },
-        onOpenGlassesLab: () async {
-          // The Lab owns the mic + Bluetooth while open: tear the live
-          // session down first so FarryOn doesn't keep listening/answering
-          // mid-hardware-test, then restore it when the Lab closes.
-          // Timeout guard: a session stuck in backend connect-retry never
-          // resolves disconnect() and must not block the Lab from opening
-          // (hit on-device 2026-07-06).
-          await ref
-              .read(liveProvider.notifier)
-              .disconnect()
-              .timeout(const Duration(seconds: 2), onTimeout: () {});
-          if (!mounted) return;
-          await GlassesLabScreen.open(context);
-          if (!mounted) return;
-          _connectRequested = false;
-          await _connect();
-        },
-      ),
+    SettingsScreen.open(
+      context,
+      onOpenGlassesLab: () async {
+        // The Lab owns the mic + Bluetooth while open: tear the live session
+        // down first so FarryOn doesn't keep listening/answering mid-hardware-
+        // test, then restore it when the Lab closes. Timeout guard: a session
+        // stuck in backend connect-retry never resolves disconnect() and must
+        // not block the Lab from opening (hit on-device 2026-07-06).
+        await ref
+            .read(liveProvider.notifier)
+            .disconnect()
+            .timeout(const Duration(seconds: 2), onTimeout: () {});
+        if (!mounted) return;
+        await GlassesLabScreen.open(context);
+        if (!mounted) return;
+        _connectRequested = false;
+        await _connect();
+      },
     );
   }
-
-  static CaptureDeviceKind _kindFromName(String name) =>
-      name == 'glasses' ? CaptureDeviceKind.glasses : CaptureDeviceKind.phone;
 }
 
 /// Always-visible chip telling the user which device the mic is using
@@ -609,640 +521,6 @@ class _GlassesPill extends StatelessWidget {
   }
 }
 
-/// The live, cloud-hosted FarryOn backend (Render). One tap fills these in so
-/// the user never has to know the host/port.
-const String _kCloudHost = 'farryon-backend.onrender.com';
-const int _kCloudPort = 443;
-
-/// Default local/dev backend (the user's PC on the LAN). Editable below the
-/// toggle, but one tap fills the common case.
-const String _kLocalHost = '192.168.1.107';
-const int _kLocalPort = 8000;
-
-/// A scrollable, keyboard-safe settings sheet with a pinned Save bar. Replaces
-/// the old fixed Column that pushed the Save button (and the lower fields) off
-/// screen once the keyboard opened.
-class _SettingsSheet extends StatefulWidget {
-  const _SettingsSheet({
-    required this.current,
-    required this.onSave,
-    required this.onOpenDevices,
-    required this.onOpenGlassesLab,
-  });
-
-  final AppConfig current;
-  final ValueChanged<AppConfig> onSave;
-  final VoidCallback onOpenDevices;
-  final VoidCallback onOpenGlassesLab;
-
-  @override
-  State<_SettingsSheet> createState() => _SettingsSheetState();
-}
-
-class _SettingsSheetState extends State<_SettingsSheet> {
-  late final _hostCtl = TextEditingController(text: widget.current.host);
-  late final _portCtl =
-      TextEditingController(text: widget.current.port.toString());
-  late final _wsKeyCtl =
-      TextEditingController(text: widget.current.webSearchApiKey ?? '');
-  late final _wsFbKeyCtl =
-      TextEditingController(text: widget.current.webSearchFallbackApiKey ?? '');
-  late final _emailCtl =
-      TextEditingController(text: widget.current.emailAddress ?? '');
-  late final _emailPwCtl =
-      TextEditingController(text: widget.current.emailAppPassword ?? '');
-  late final _imapCtl =
-      TextEditingController(text: widget.current.emailImapHost ?? '');
-  late final _smtpCtl =
-      TextEditingController(text: widget.current.emailSmtpHost ?? '');
-  late final _smtpPortCtl =
-      TextEditingController(text: widget.current.emailSmtpPort.toString());
-
-  late bool _secure = widget.current.secure;
-  late String _provider = widget.current.provider;
-  late String _wsProvider = widget.current.webSearchProvider;
-  late String _emailProvider = widget.current.emailProvider;
-  late bool _handsFree = widget.current.handsFree;
-  late bool _saveCaptures = widget.current.saveCapturesToGallery;
-  late int _retentionDays = widget.current.glassesRetentionDays;
-  bool _showEmailPw = false;
-
-  @override
-  void dispose() {
-    _hostCtl.dispose();
-    _portCtl.dispose();
-    _wsKeyCtl.dispose();
-    _wsFbKeyCtl.dispose();
-    _emailCtl.dispose();
-    _emailPwCtl.dispose();
-    _imapCtl.dispose();
-    _smtpCtl.dispose();
-    _smtpPortCtl.dispose();
-    super.dispose();
-  }
-
-  bool get _isCloud =>
-      _hostCtl.text.trim() == _kCloudHost && _secure && _portCtl.text == '443';
-
-  void _useCloud() {
-    setState(() {
-      _hostCtl.text = _kCloudHost;
-      _portCtl.text = '$_kCloudPort';
-      _secure = true;
-    });
-  }
-
-  void _useLocal() {
-    setState(() {
-      _hostCtl.text = _kLocalHost;
-      _portCtl.text = '$_kLocalPort';
-      _secure = false;
-    });
-  }
-
-  void _save() {
-    final port = int.tryParse(_portCtl.text.trim()) ?? widget.current.port;
-    // Resolve the mail hosts: presets fill them in; "custom" takes the fields.
-    final preset = EmailProviders.presets[_emailProvider] ??
-        EmailProviders.presets['gmail']!;
-    final custom = _emailProvider == 'custom';
-    final imapHost = custom ? _imapCtl.text.trim() : preset.imap;
-    final smtpHost = custom ? _smtpCtl.text.trim() : preset.smtp;
-    final smtpPort = custom
-        ? (int.tryParse(_smtpPortCtl.text.trim()) ?? 587)
-        : preset.port;
-    widget.onSave(widget.current.copyWith(
-      host: _hostCtl.text.trim(),
-      port: port,
-      secure: _secure,
-      provider: _provider,
-      webSearchProvider: _wsProvider,
-      webSearchApiKey: _wsKeyCtl.text.trim(),
-      webSearchFallbackApiKey: _wsFbKeyCtl.text.trim(),
-      emailAddress: _emailCtl.text.trim(),
-      emailAppPassword: _emailPwCtl.text.trim(),
-      emailProvider: _emailProvider,
-      emailImapHost: imapHost,
-      emailSmtpHost: smtpHost,
-      emailSmtpPort: smtpPort,
-      handsFree: _handsFree,
-      saveCapturesToGallery: _saveCaptures,
-      glassesRetentionDays: _retentionDays,
-    ));
-    Navigator.pop(context);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final maxH = MediaQuery.of(context).size.height * 0.9;
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: maxH),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Drag handle.
-            Container(
-              margin: const EdgeInsets.only(top: 10, bottom: 4),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Aurora.glassBorder,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 12, 4),
-              child: Row(
-                children: [
-                  Text('Settings', style: theme.textTheme.titleLarge),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Aurora.textMuted),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-            ),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _label('Connection'),
-                    const SizedBox(height: 8),
-                    _connectionStatus(),
-                    const SizedBox(height: 12),
-                    _modeToggle(),
-                    const SizedBox(height: 14),
-                    TextField(
-                      controller: _hostCtl,
-                      autocorrect: false,
-                      onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'Host',
-                        hintText: 'farryon-backend.onrender.com',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        SizedBox(
-                          width: 110,
-                          child: TextField(
-                            controller: _portCtl,
-                            keyboardType: TextInputType.number,
-                            onChanged: (_) => setState(() {}),
-                            decoration: const InputDecoration(
-                              labelText: 'Port',
-                              border: OutlineInputBorder(),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: SwitchListTile(
-                            value: _secure,
-                            title: const Text('Secure (TLS)'),
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            onChanged: (v) => setState(() => _secure = v),
-                          ),
-                        ),
-                      ],
-                    ),
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.devices_other,
-                          color: Aurora.textMuted),
-                      title: const Text('Capture device'),
-                      subtitle: Text(
-                        widget.current.provider == 'glasses'
-                            ? 'Smart glasses'
-                            : 'Phone (camera + mic)',
-                        style: const TextStyle(color: Aurora.textMuted),
-                      ),
-                      trailing: const Icon(Icons.chevron_right,
-                          color: Aurora.textMuted),
-                      onTap: widget.onOpenDevices,
-                    ),
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.bug_report_outlined,
-                          color: Aurora.textMuted),
-                      title: const Text('Debug logs'),
-                      subtitle: const Text(
-                        'View / share the tool + error trail to report issues',
-                        style: TextStyle(color: Aurora.textMuted),
-                      ),
-                      trailing: const Icon(Icons.chevron_right,
-                          color: Aurora.textMuted),
-                      onTap: () => DebugLogsScreen.open(context),
-                    ),
-                    // Hardware test bench for the L801 smart glasses. Debug
-                    // builds only — never visible in a release build.
-                    if (kDebugMode)
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.science_outlined,
-                            color: Aurora.textMuted),
-                        title: const Text('Glasses Lab'),
-                        subtitle: const Text(
-                          'L801 hardware test bench (debug builds only)',
-                          style: TextStyle(color: Aurora.textMuted),
-                        ),
-                        trailing: const Icon(Icons.chevron_right,
-                            color: Aurora.textMuted),
-                        onTap: widget.onOpenGlassesLab,
-                      ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      secondary: Icon(
-                        _handsFree ? Icons.hearing : Icons.touch_app,
-                        color: Aurora.textMuted,
-                      ),
-                      title: const Text('Hands-free mic'),
-                      subtitle: Text(
-                        _handsFree
-                            ? 'Always listening (best in a quiet room)'
-                            : 'Tap-to-talk: mic opens only when you tap it '
-                                '(best with background noise / a TV)',
-                        style: const TextStyle(color: Aurora.textMuted),
-                      ),
-                      value: _handsFree,
-                      onChanged: (v) => setState(() => _handsFree = v),
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      secondary: const Icon(Icons.photo_library_outlined,
-                          color: Aurora.textMuted),
-                      title: const Text('Save captures to gallery'),
-                      subtitle: const Text(
-                        'Every photo you identify (phone or glasses) is saved '
-                        'to Pictures/Farry.',
-                        style: TextStyle(color: Aurora.textMuted),
-                      ),
-                      value: _saveCaptures,
-                      onChanged: (v) => setState(() => _saveCaptures = v),
-                    ),
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.auto_delete_outlined,
-                          color: Aurora.textMuted),
-                      title: const Text('Auto-delete glasses photos'),
-                      subtitle: const Text(
-                        'Free up the glasses’ own storage after photos '
-                        'are synced to your phone.',
-                        style: TextStyle(color: Aurora.textMuted),
-                      ),
-                      trailing: DropdownButton<int>(
-                        value: _retentionDays,
-                        dropdownColor: Aurora.surfaceHigh,
-                        underline: const SizedBox.shrink(),
-                        items: const [
-                          DropdownMenuItem(value: 0, child: Text('Never')),
-                          DropdownMenuItem(
-                              value: -2, child: Text('Right after sync')),
-                          DropdownMenuItem(value: 1, child: Text('After 1 day')),
-                          DropdownMenuItem(value: 7, child: Text('After 7 days')),
-                          DropdownMenuItem(value: 30, child: Text('After 30 days')),
-                          DropdownMenuItem(value: -1, child: Text('When full')),
-                        ],
-                        onChanged: (v) =>
-                            setState(() => _retentionDays = v ?? 0),
-                      ),
-                    ),
-                    const Divider(height: 28, color: Aurora.glassBorder),
-                    _label('AI provider'),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      children: [
-                        // Grok (xAI) is intentionally omitted — its realtime
-                        // API is ~13x slower and streams choppy audio. Gemini
-                        // and OpenAI are the supported fast providers.
-                        for (final p in const [
-                          ('Gemini ⚡', 'gemini'),
-                          ('OpenAI ⚡', 'openai'),
-                          ('Mock', 'mock'),
-                        ])
-                          ChoiceChip(
-                            label: Text(p.$1),
-                            selected: _provider == p.$2,
-                            onSelected: (_) =>
-                                setState(() => _provider = p.$2),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'Gemini & OpenAI are fast with smooth voice + vision. '
-                      'Gemini is the best value (cheapest); OpenAI is premium.',
-                      style: TextStyle(color: Aurora.textMuted, fontSize: 12),
-                    ),
-                    const Divider(height: 28, color: Aurora.glassBorder),
-                    _label('Email — your own inbox (optional)'),
-                    const SizedBox(height: 4),
-                    Text(
-                      _emailProvider == 'gmail'
-                          ? 'Gmail: use a 16-digit App Password (not your login '
-                              'password) from myaccount.google.com/apppasswords '
-                              'after enabling 2-Step Verification.'
-                          : 'Use your mailbox password (or an app password if '
-                              'your provider requires one).',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: Aurora.textMuted),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      children: [
-                        for (final e in EmailProviders.presets.entries)
-                          ChoiceChip(
-                            label: Text(e.value.label),
-                            selected: _emailProvider == e.key,
-                            onSelected: (_) =>
-                                setState(() => _emailProvider = e.key),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: _emailCtl,
-                      keyboardType: TextInputType.emailAddress,
-                      autocorrect: false,
-                      decoration: const InputDecoration(
-                        labelText: 'Email address',
-                        hintText: 'you@example.com — blank to disable',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: _emailPwCtl,
-                      obscureText: !_showEmailPw,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      decoration: InputDecoration(
-                        labelText: 'App password',
-                        border: const OutlineInputBorder(),
-                        suffixIcon: IconButton(
-                          icon: Icon(
-                            _showEmailPw
-                                ? Icons.visibility_off
-                                : Icons.visibility,
-                            color: Aurora.textMuted,
-                          ),
-                          onPressed: () =>
-                              setState(() => _showEmailPw = !_showEmailPw),
-                        ),
-                      ),
-                    ),
-                    if (_emailProvider == 'custom') ...[
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: _imapCtl,
-                        autocorrect: false,
-                        decoration: const InputDecoration(
-                          labelText: 'IMAP host (incoming)',
-                          hintText: 'mail.yourdomain.com',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _smtpCtl,
-                              autocorrect: false,
-                              decoration: const InputDecoration(
-                                labelText: 'SMTP host (outgoing)',
-                                hintText: 'mail.yourdomain.com',
-                                border: OutlineInputBorder(),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          SizedBox(
-                            width: 92,
-                            child: TextField(
-                              controller: _smtpPortCtl,
-                              keyboardType: TextInputType.number,
-                              decoration: const InputDecoration(
-                                labelText: 'Port',
-                                hintText: '587',
-                                border: OutlineInputBorder(),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                    const Divider(height: 28, color: Aurora.glassBorder),
-                    _label('Web search (optional)'),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      children: [
-                        for (final p in const [
-                          ('Tavily', 'tavily'),
-                          ('Serper', 'serper'),
-                          ('SerpAPI', 'serpapi'),
-                        ])
-                          ChoiceChip(
-                            label: Text(p.$1),
-                            selected: _wsProvider == p.$2,
-                            onSelected: (_) =>
-                                setState(() => _wsProvider = p.$2),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: _wsKeyCtl,
-                      obscureText: true,
-                      decoration: InputDecoration(
-                        labelText: '$_wsProvider API key',
-                        hintText: 'blank = use server default',
-                        border: const OutlineInputBorder(),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            // Pinned Save bar — always reachable, even with the keyboard open.
-            Container(
-              padding: EdgeInsets.fromLTRB(
-                20,
-                10,
-                20,
-                10 + MediaQuery.of(context).padding.bottom,
-              ),
-              decoration: const BoxDecoration(
-                color: Aurora.surface,
-                border: Border(top: BorderSide(color: Aurora.glassBorder)),
-              ),
-              child: SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: _save,
-                  icon: const Icon(Icons.check),
-                  label: const Text('Save & reconnect'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Aurora.teal,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _label(String text) => Text(
-        text.toUpperCase(),
-        style: const TextStyle(
-          color: Aurora.mint,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.6,
-        ),
-      );
-
-  /// Live connection status pill (watches the session) + the target it points at.
-  Widget _connectionStatus() {
-    return Consumer(
-      builder: (context, ref, _) {
-        final status = ref.watch(liveProvider.select((s) => s.connection));
-        final (color, icon, label) = switch (status) {
-          ConnectionStatus.connected => (Aurora.teal, Icons.check_circle, 'Connected'),
-          ConnectionStatus.connecting => (Aurora.amber, Icons.sync, 'Connecting…'),
-          ConnectionStatus.reconnecting =>
-            (Aurora.amber, Icons.sync, 'Reconnecting…'),
-          ConnectionStatus.disconnected => (Aurora.danger, Icons.error_outline, 'Offline'),
-        };
-        final scheme = _secure ? 'https' : 'http';
-        final target = '$scheme://${_hostCtl.text.trim()}:${_portCtl.text.trim()}';
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            color: Aurora.tint(color, 0.14),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Aurora.tint(color, 0.3)),
-          ),
-          child: Row(
-            children: [
-              Icon(icon, color: color, size: 20),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(label,
-                        style: TextStyle(
-                            color: color, fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 2),
-                    Text(target,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            color: Aurora.textMuted, fontSize: 12)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  /// Cloud vs Local (Dev) target picker — either can be used; one tap fills
-  /// the host/port/TLS for that target (still editable below).
-  Widget _modeToggle() {
-    return Row(
-      children: [
-        Expanded(
-          child: _modeChip(
-            label: 'Cloud',
-            subtitle: 'Always online',
-            icon: Icons.cloud_outlined,
-            selected: _isCloud,
-            onTap: _useCloud,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _modeChip(
-            label: 'Local (Dev)',
-            subtitle: 'Your PC on Wi-Fi',
-            icon: Icons.lan_outlined,
-            selected: !_isCloud,
-            onTap: _useLocal,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _modeChip({
-    required String label,
-    required String subtitle,
-    required IconData icon,
-    required bool selected,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        decoration: BoxDecoration(
-          color: selected ? Aurora.teal.withValues(alpha: 0.18) : Aurora.glass,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: selected ? Aurora.teal : Aurora.glassBorder,
-            width: selected ? 1.5 : 1,
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon,
-                    size: 18,
-                    color: selected ? Aurora.teal : Aurora.textMuted),
-                const SizedBox(width: 8),
-                Text(label,
-                    style: TextStyle(
-                        color: selected ? Aurora.textPrimary : Aurora.textMuted,
-                        fontWeight: FontWeight.w600)),
-                if (selected) ...[
-                  const Spacer(),
-                  const Icon(Icons.check_circle, color: Aurora.teal, size: 16),
-                ],
-              ],
-            ),
-            const SizedBox(height: 2),
-            Text(subtitle,
-                style: const TextStyle(color: Aurora.textMuted, fontSize: 11)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /// Bottom control bar: camera toggle, push-to-talk mic, interrupt, and a text
 /// input for typed turns.
 class _Controls extends StatelessWidget {
@@ -1286,6 +564,7 @@ class _Controls extends StatelessWidget {
               _CircleButton(
                 icon: state.cameraOn ? Icons.videocam : Icons.videocam_off,
                 tooltip: state.cameraOn ? 'Turn camera off' : 'Turn camera on',
+                gradient: Aurora.gradBlue,
                 onPressed: onToggleCamera,
               ),
               // Front/back lens flip — only for the phone camera (glasses have a
@@ -1296,6 +575,7 @@ class _Controls extends StatelessWidget {
                   tooltip: state.cameraFront
                       ? 'Switch to back camera'
                       : 'Switch to front camera',
+                  gradient: Aurora.gradTeal,
                   onPressed: state.cameraOn ? onFlipCamera : null,
                 ),
               // B3: glasses shutter — take a still through the glasses camera
@@ -1306,11 +586,13 @@ class _Controls extends StatelessWidget {
                 _CircleButton(
                   icon: Icons.photo_camera,
                   tooltip: 'Take a photo through the glasses',
+                  gradient: Aurora.gradGreen,
                   onPressed: state.glassesConnected ? onCapturePhoto : null,
                 ),
               _CircleButton(
                 icon: Icons.center_focus_strong,
                 tooltip: 'Identify what the camera sees',
+                gradient: Aurora.gradPurple,
                 onPressed: state.cameraOn ? onScan : null,
               ),
               _MicButton(
@@ -1351,7 +633,8 @@ class _Controls extends StatelessWidget {
                 borderSide: const BorderSide(color: Aurora.teal),
               ),
               suffixIcon: IconButton(
-                icon: const Icon(Icons.send, color: Aurora.mint),
+                icon: const GradientIcon(Icons.send,
+                    gradient: Aurora.gradTeal, size: 22),
                 onPressed: () {
                   final text = textController.text;
                   if (text.trim().isNotEmpty) onSendText(text);
@@ -1372,20 +655,31 @@ class _CircleButton extends StatelessWidget {
     required this.icon,
     required this.tooltip,
     required this.onPressed,
+    this.gradient,
     this.danger = false,
   });
 
   final IconData icon;
   final String tooltip;
   final VoidCallback? onPressed;
+
+  /// Colourful fill for the glyph when the button is active. Skipped while
+  /// disabled (muted grey) so the disabled state stays obvious.
+  final Gradient? gradient;
   final bool danger;
 
   @override
   Widget build(BuildContext context) {
     final enabled = onPressed != null;
-    final fg = danger
-        ? Aurora.danger
-        : (enabled ? Aurora.textPrimary : Aurora.textMuted);
+    // Coral gradient for the active interrupt; the button's own gradient when
+    // enabled; a flat muted glyph while disabled.
+    final Widget glyph = danger
+        ? GradientIcon(icon, gradient: Aurora.gradCoral, size: 22)
+        : (enabled && gradient != null
+            ? GradientIcon(icon, gradient: gradient!, size: 22)
+            : Icon(icon,
+                size: 22,
+                color: enabled ? Aurora.textPrimary : Aurora.textMuted));
     return Tooltip(
       message: tooltip,
       child: Material(
@@ -1396,11 +690,7 @@ class _CircleButton extends StatelessWidget {
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onPressed,
-          child: SizedBox(
-            width: 52,
-            height: 52,
-            child: Icon(icon, size: 22, color: fg),
-          ),
+          child: SizedBox(width: 52, height: 52, child: glyph),
         ),
       ),
     );
@@ -1423,9 +713,10 @@ class _MicButton extends StatelessWidget {
   Widget build(BuildContext context) {
     // Hands-free: the mic is open by default (teal = actively listening); tap
     // to mute (red, mic-off). No more press-every-time.
-    final fill = !enabled
-        ? Aurora.surfaceHigh
-        : (micOpen ? Aurora.teal : Aurora.danger);
+    // Listening: teal→mint gradient fill (primary action). Muted: solid danger.
+    // Disabled: flat raised surface.
+    final open = enabled && micOpen;
+    final fill = !enabled ? Aurora.surfaceHigh : Aurora.danger;
     final fg = micOpen ? Aurora.tealInk : Colors.white;
     return Tooltip(
       message: micOpen ? 'Listening — tap to mute' : 'Muted — tap to listen',
@@ -1433,7 +724,8 @@ class _MicButton extends StatelessWidget {
         duration: const Duration(milliseconds: 200),
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: fill,
+          gradient: open ? Aurora.primaryGradient : null,
+          color: open ? null : fill,
           boxShadow: enabled
               ? [
                   BoxShadow(
@@ -1504,25 +796,39 @@ class _ReconnectOverlay extends StatelessWidget {
   }
 }
 
-/// Top overlay bar: status pills, the zoom read-out, and quick actions, on a
-/// dark translucent strip so it stays legible over the live camera.
-class _TopOverlay extends StatelessWidget {
+/// Top overlay bar: the connection status on the left, and a collapsible
+/// cluster of quick actions on the right — tap the round toggle to reveal
+/// Chat / Finder / Your stuff / Settings, tap again to tuck them away and keep
+/// the camera view clean.
+class _TopOverlay extends StatefulWidget {
   const _TopOverlay({
     required this.state,
     required this.onSettings,
-    required this.onOrientation,
     required this.onFinder,
     required this.onNotes,
+    required this.chatOn,
+    required this.onToggleChat,
   });
 
   final LiveSessionState state;
   final VoidCallback onSettings;
-  final VoidCallback onOrientation;
   final VoidCallback onFinder;
   final VoidCallback onNotes;
 
+  /// Whether the live transcript is currently shown (drives the chat icon).
+  final bool chatOn;
+  final VoidCallback onToggleChat;
+
+  @override
+  State<_TopOverlay> createState() => _TopOverlayState();
+}
+
+class _TopOverlayState extends State<_TopOverlay> {
+  bool _open = false;
+
   @override
   Widget build(BuildContext context) {
+    final state = widget.state;
     // A floating rounded bar (with a margin from the camera's rounded corners)
     // so nothing gets clipped by the 24px viewport radius and it reads as a
     // clean, intentional control bar.
@@ -1559,16 +865,41 @@ class _TopOverlay extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          _BarIcon(Icons.image_search, 'Finder — identify a photo', onFinder),
-          _BarIcon(Icons.checklist, 'Notes & tasks', onNotes),
-          _BarIcon(
-            state.cameraPortrait
-                ? Icons.screen_rotation
-                : Icons.screen_lock_rotation,
-            state.cameraPortrait ? 'Switch to landscape' : 'Switch to portrait',
-            onOrientation,
+          // Collapsible actions: only the toggle shows at rest; it slides the
+          // rest open on tap.
+          AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOut,
+            alignment: Alignment.centerRight,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_open) ...[
+                  _BarIcon(
+                    widget.chatOn
+                        ? Icons.chat_rounded
+                        : Icons.chat_bubble_outline_rounded,
+                    widget.chatOn ? 'Hide chat' : 'Show chat',
+                    widget.onToggleChat,
+                    gradient: Aurora.gradAmber,
+                  ),
+                  _BarIcon(Icons.image_search_rounded,
+                      'Finder — identify a photo', widget.onFinder,
+                      gradient: Aurora.gradBlue),
+                  _BarIcon(Icons.grid_view_rounded, 'Your stuff', widget.onNotes,
+                      gradient: Aurora.gradGreen),
+                  _BarIcon(Icons.settings_rounded, 'Settings', widget.onSettings,
+                      gradient: Aurora.gradPurple),
+                ],
+                _BarIcon(
+                  _open ? Icons.close_rounded : Icons.more_horiz_rounded,
+                  _open ? 'Close menu' : 'More actions',
+                  () => setState(() => _open = !_open),
+                  gradient: Aurora.gradTeal,
+                ),
+              ],
+            ),
           ),
-          _BarIcon(Icons.settings, 'Settings', onSettings),
         ],
       ),
     );
@@ -1578,15 +909,18 @@ class _TopOverlay extends StatelessWidget {
 /// Compact icon button for the floating top bar (so all icons fit even when the
 /// connection-status pill is wide, e.g. "Connecting").
 class _BarIcon extends StatelessWidget {
-  const _BarIcon(this.icon, this.tooltip, this.onTap);
+  const _BarIcon(this.icon, this.tooltip, this.onTap, {this.gradient});
   final IconData icon;
   final String tooltip;
   final VoidCallback onTap;
+  final Gradient? gradient;
 
   @override
   Widget build(BuildContext context) => IconButton(
         tooltip: tooltip,
-        icon: Icon(icon, color: Colors.white),
+        icon: gradient != null
+            ? GradientIcon(icon, gradient: gradient!, size: 22)
+            : Icon(icon, color: Colors.white),
         onPressed: onTap,
         iconSize: 22,
         visualDensity: VisualDensity.compact,

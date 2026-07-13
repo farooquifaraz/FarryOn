@@ -203,8 +203,9 @@ class WebSocketLiveClient {
   void _sendHandshake() {
     final device = _deviceInfoProvider();
     final wsKey = _config.webSearchApiKey;
-    final emailAddr = _config.emailAddress;
-    final emailPw = _config.emailAppPassword;
+    // Phase 1 wire: still a single `hello.email`, carrying the PRIMARY account.
+    // (Phase 2 upgrades this to send every configured account as `hello.emails`.)
+    final primaryEmail = _config.primaryEmailAccount;
     send(HelloMessage(
       platform: platform,
       appVersion: _config.appVersion,
@@ -222,22 +223,17 @@ class WebSocketLiveClient {
               'fallbackApiKey': _config.webSearchFallbackApiKey ?? '',
             }
           : null,
-      // Only send email config when both fields are set, so the backend's
-      // read_emails tool stays disabled until the user opts in.
-      email: (emailAddr != null &&
-              emailAddr.isNotEmpty &&
-              emailPw != null &&
-              emailPw.isNotEmpty)
+      // Only send email config when the primary account is fully set, so the
+      // backend's read_emails tool stays disabled until the user opts in.
+      email: (primaryEmail != null && primaryEmail.isComplete)
           ? {
-              'address': emailAddr,
-              'appPassword': emailPw,
-              if (_config.emailImapHost != null &&
-                  _config.emailImapHost!.isNotEmpty)
-                'host': _config.emailImapHost,
-              if (_config.emailSmtpHost != null &&
-                  _config.emailSmtpHost!.isNotEmpty)
-                'smtpHost': _config.emailSmtpHost,
-              'smtpPort': _config.emailSmtpPort,
+              'address': primaryEmail.address,
+              'appPassword': primaryEmail.appPassword,
+              if (primaryEmail.resolvedImapHost.isNotEmpty)
+                'host': primaryEmail.resolvedImapHost,
+              if (primaryEmail.resolvedSmtpHost.isNotEmpty)
+                'smtpHost': primaryEmail.resolvedSmtpHost,
+              'smtpPort': primaryEmail.resolvedSmtpPort,
             }
           : null,
     ));

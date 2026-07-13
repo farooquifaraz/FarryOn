@@ -25,12 +25,7 @@ class AppConfig {
     this.webSearchApiKey,
     this.webSearchFallbackProvider = 'serper',
     this.webSearchFallbackApiKey,
-    this.emailAddress,
-    this.emailAppPassword,
-    this.emailProvider = 'gmail',
-    this.emailImapHost,
-    this.emailSmtpHost,
-    this.emailSmtpPort = 587,
+    this.emailAccounts = const [],
     this.handsFree = true,
     this.saveCapturesToGallery = true,
     this.glassesRetentionDays = 0,
@@ -63,19 +58,26 @@ class AppConfig {
   final String webSearchFallbackProvider;
   final String? webSearchFallbackApiKey;
 
-  /// Email (IMAP) so the assistant can read the user's recent mail. The
-  /// address + an app-specific password (e.g. a Gmail App Password). Sent
-  /// per-session in `hello.email`; the backend never persists it.
-  final String? emailAddress;
-  final String? emailAppPassword;
+  /// Configured mail accounts (0, 1, or 2) so the assistant can read and send
+  /// from the user's OWN mailboxes. Farry uses [primaryEmailAccount] unless the
+  /// user names another by its [EmailAccount.label]. App passwords live in the
+  /// device keystore — they are NOT part of the persisted list, only carried in
+  /// memory on the loaded config and sent per-session in `hello`.
+  final List<EmailAccount> emailAccounts;
 
-  /// Mail provider preset (`gmail` | `outlook` | `yahoo` | `hostinger` |
-  /// `custom`) plus the resolved IMAP/SMTP hosts so any provider works — the
-  /// user reads and sends from their OWN mailbox.
-  final String emailProvider;
-  final String? emailImapHost;
-  final String? emailSmtpHost;
-  final int emailSmtpPort;
+  /// The account Farry reads/sends from unless told otherwise: the one flagged
+  /// primary, else the first configured, else null (no mailbox set up).
+  EmailAccount? get primaryEmailAccount {
+    if (emailAccounts.isEmpty) return null;
+    return emailAccounts.firstWhere(
+      (a) => a.primary,
+      orElse: () => emailAccounts.first,
+    );
+  }
+
+  /// The accounts that are actually usable (address + app password present).
+  List<EmailAccount> get usableEmailAccounts =>
+      emailAccounts.where((a) => a.isComplete).toList();
 
   /// Hands-free (default): the mic opens automatically and the provider's VAD
   /// handles turn-taking. When false, it's TAP-TO-TALK — the mic stays closed
@@ -146,12 +148,7 @@ class AppConfig {
     String? webSearchApiKey,
     String? webSearchFallbackProvider,
     String? webSearchFallbackApiKey,
-    String? emailAddress,
-    String? emailAppPassword,
-    String? emailProvider,
-    String? emailImapHost,
-    String? emailSmtpHost,
-    int? emailSmtpPort,
+    List<EmailAccount>? emailAccounts,
     bool? handsFree,
     bool? saveCapturesToGallery,
     int? glassesRetentionDays,
@@ -169,12 +166,7 @@ class AppConfig {
             webSearchFallbackProvider ?? this.webSearchFallbackProvider,
         webSearchFallbackApiKey:
             webSearchFallbackApiKey ?? this.webSearchFallbackApiKey,
-        emailAddress: emailAddress ?? this.emailAddress,
-        emailAppPassword: emailAppPassword ?? this.emailAppPassword,
-        emailProvider: emailProvider ?? this.emailProvider,
-        emailImapHost: emailImapHost ?? this.emailImapHost,
-        emailSmtpHost: emailSmtpHost ?? this.emailSmtpHost,
-        emailSmtpPort: emailSmtpPort ?? this.emailSmtpPort,
+        emailAccounts: emailAccounts ?? this.emailAccounts,
         handsFree: handsFree ?? this.handsFree,
         saveCapturesToGallery:
             saveCapturesToGallery ?? this.saveCapturesToGallery,
@@ -184,6 +176,112 @@ class AppConfig {
 
   @override
   String toString() => 'AppConfig(${secure ? "wss" : "ws"}://$host:$port)';
+}
+
+/// One configured mailbox. The [label] ("Personal", "Work") is how the user
+/// and Farry refer to it; [primary] marks the default account.
+///
+/// [appPassword] is deliberately NOT part of [toMap]/[fromMap] — it is stored
+/// in the device keystore and injected onto the loaded account in memory. So a
+/// persisted account JSON never contains a secret.
+class EmailAccount {
+  const EmailAccount({
+    required this.id,
+    required this.label,
+    required this.address,
+    this.appPassword,
+    this.provider = 'gmail',
+    this.imapHost,
+    this.smtpHost,
+    this.smtpPort = 587,
+    this.primary = false,
+  });
+
+  /// Stable per-account id, also the keystore key suffix. Never reused.
+  final String id;
+  final String label;
+  final String address;
+
+  /// App-specific password / mailbox password. In memory only; keystore-backed.
+  final String? appPassword;
+
+  /// `gmail` | `outlook` | `yahoo` | `hostinger` | `custom`.
+  final String provider;
+  final String? imapHost;
+  final String? smtpHost;
+  final int smtpPort;
+  final bool primary;
+
+  /// Usable = we have both an address and a password to log in with.
+  bool get isComplete =>
+      address.trim().isNotEmpty && (appPassword?.trim().isNotEmpty ?? false);
+
+  /// Resolve the IMAP/SMTP hosts, filling from the provider preset unless this
+  /// is a `custom` account (which carries its own typed hosts).
+  String get resolvedImapHost {
+    if (provider == 'custom') return imapHost ?? '';
+    return EmailProviders.presets[provider]?.imap ?? imapHost ?? '';
+  }
+
+  String get resolvedSmtpHost {
+    if (provider == 'custom') return smtpHost ?? '';
+    return EmailProviders.presets[provider]?.smtp ?? smtpHost ?? '';
+  }
+
+  int get resolvedSmtpPort {
+    if (provider == 'custom') return smtpPort;
+    return EmailProviders.presets[provider]?.port ?? smtpPort;
+  }
+
+  EmailAccount copyWith({
+    String? id,
+    String? label,
+    String? address,
+    String? appPassword,
+    String? provider,
+    String? imapHost,
+    String? smtpHost,
+    int? smtpPort,
+    bool? primary,
+  }) =>
+      EmailAccount(
+        id: id ?? this.id,
+        label: label ?? this.label,
+        address: address ?? this.address,
+        appPassword: appPassword ?? this.appPassword,
+        provider: provider ?? this.provider,
+        imapHost: imapHost ?? this.imapHost,
+        smtpHost: smtpHost ?? this.smtpHost,
+        smtpPort: smtpPort ?? this.smtpPort,
+        primary: primary ?? this.primary,
+      );
+
+  /// Non-secret fields only — safe to persist in plain `shared_preferences`.
+  Map<String, Object?> toMap() => {
+        'id': id,
+        'label': label,
+        'address': address,
+        'provider': provider,
+        'imapHost': imapHost,
+        'smtpHost': smtpHost,
+        'smtpPort': smtpPort,
+        'primary': primary,
+      };
+
+  factory EmailAccount.fromMap(Map<String, Object?> m) => EmailAccount(
+        id: (m['id'] as String?) ?? newId(),
+        label: (m['label'] as String?) ?? 'Email',
+        address: (m['address'] as String?) ?? '',
+        provider: (m['provider'] as String?) ?? 'gmail',
+        imapHost: m['imapHost'] as String?,
+        smtpHost: m['smtpHost'] as String?,
+        smtpPort: (m['smtpPort'] as num?)?.toInt() ?? 587,
+        primary: (m['primary'] as bool?) ?? false,
+      );
+
+  /// A fresh, collision-resistant id for a newly-added account.
+  static String newId() =>
+      'a${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}';
 }
 
 /// Known mail-provider presets so users connect their OWN mailbox in one tap.

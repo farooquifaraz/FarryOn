@@ -35,6 +35,55 @@ class Aurora {
   static Color tint(Color c, [double opacity = 0.16]) =>
       c.withValues(alpha: opacity);
 
+  // -- Gradients -----------------------------------------------------------
+  // The redesign keeps every colour above but evolves flat fills into soft
+  // two/three-stop gradients. `primary` fills the main CTA + mic; the category
+  // gradients tint the settings icon glyphs (via [GradientIcon]) so each group
+  // reads at a glance. Angles ≈ 135° (topLeft → bottomRight).
+
+  /// Primary call-to-action / mic fill (teal → mint). Ink text = [tealInk].
+  static const LinearGradient primaryGradient = LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: [Color(0xFF0F6E56), Color(0xFF1D9E75), Color(0xFF5DCAA5)],
+  );
+
+  static const LinearGradient gradTeal = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF1D9E75), Color(0xFF5DCAA5)],
+  );
+  static const LinearGradient gradPurple = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF7F77DD), Color(0xFFAFA9EC)],
+  );
+  static const LinearGradient gradBlue = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF378ADD), Color(0xFF85B7EB)],
+  );
+  static const LinearGradient gradCoral = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFFD85A30), Color(0xFFF0997B)],
+  );
+  static const LinearGradient gradAmber = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFFEF9F27), Color(0xFFFAC775)],
+  );
+  static const LinearGradient gradGreen = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF639922), Color(0xFF97C459)],
+  );
+  static const LinearGradient gradPink = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFFD4537E), Color(0xFFED93B1)],
+  );
+
   /// The assembled dark theme.
   static ThemeData theme() {
     final scheme = ColorScheme.fromSeed(

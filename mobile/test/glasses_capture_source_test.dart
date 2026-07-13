@@ -39,6 +39,9 @@ class _FakeBridge implements GlassesBridgeApi {
       const [];
   @override
   Future<void> setAutoReconnect(bool enabled) async {}
+
+  @override
+  Future<void> setRetentionDays(int days) async {}
   @override
   Future<void> requestBattery() async {}
   @override

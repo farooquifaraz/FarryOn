@@ -55,6 +55,9 @@ class _FakeBridge implements GlassesBridgeApi {
       _maybeFail('setAutoReconnect:$enabled');
 
   @override
+  Future<void> setRetentionDays(int days) => _maybeFail('setRetentionDays:$days');
+
+  @override
   Future<void> requestBattery() => _maybeFail('requestBattery');
 
   @override

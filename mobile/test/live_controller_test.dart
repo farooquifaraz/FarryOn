@@ -51,6 +51,9 @@ class FakeCaptureSource implements CaptureSource {
   Future<void> stopVideo() async => videoStarted = false;
   @override
   Future<void> releaseCamera() async {}
+
+  @override
+  Future<void> setFrontCamera(bool front) async {}
   @override
   Future<void> setPortrait(bool portrait) async => this.portrait = portrait;
   @override
@@ -106,6 +109,9 @@ class FakeGlassesBridge implements GlassesBridgeApi {
   Future<void> disconnect() async {}
   @override
   Future<void> setAutoReconnect(bool enabled) async {}
+
+  @override
+  Future<void> setRetentionDays(int days) async {}
   @override
   Future<void> requestBattery() async {}
   @override
