@@ -72,8 +72,17 @@ All JSON messages have a `type` field.
   "webSearch": {                          // optional; per-session search keys.
     "provider": "tavily", "apiKey": "…",
     "fallbackProvider": "serper", "fallbackApiKey": "…" },
-  "email": {                              // optional; enables read_emails.
+  "email": {                              // optional; PRIMARY mailbox (legacy).
     "address": "you@gmail.com", "appPassword": "…" },  // never persisted
+  "emails": [                             // optional; ALL mailboxes (0–2).
+    { "label": "Personal", "address": "you@gmail.com", "appPassword": "…",
+      "host": "imap.gmail.com", "smtpHost": "smtp.gmail.com",
+      "smtpPort": 587, "primary": true },              // never persisted.
+    { "label": "Work", "address": "you@work.com", "appPassword": "…",
+      "host": "imap.hostinger.com", "smtpHost": "smtp.hostinger.com",
+      "smtpPort": 465, "primary": false } ],
+  // The email tools take an `account` arg (a label, or "all" for reads);
+  // omitted → the primary. send_email confirms the sender when >1 mailbox.
   "location": { "lat": 25.2, "lng": 55.27, "address": "…" }  // optional initial
 }
 

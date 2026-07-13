@@ -170,6 +170,7 @@ class Session:
 
             web_search = (self._hello or {}).get("webSearch")
             email = (self._hello or {}).get("email")
+            emails = (self._hello or {}).get("emails")
             location = (self._hello or {}).get("location")
             # Vision tools wait longer for a frame on photo-trigger glasses
             # than on a streaming phone camera (see Settings for the budgets).
@@ -189,6 +190,9 @@ class Session:
                 user_id=self._user_id,
                 web_search=web_search if isinstance(web_search, dict) else None,
                 email=email if isinstance(email, dict) else None,
+                emails=[e for e in emails if isinstance(e, dict)]
+                if isinstance(emails, list)
+                else None,
                 location=location if isinstance(location, dict) else None,
                 frame_wait_seconds=frame_wait_seconds,
             )

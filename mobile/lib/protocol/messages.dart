@@ -40,6 +40,7 @@ class HelloMessage extends ClientMessage {
     this.provider,
     this.webSearch,
     this.email,
+    this.emails,
     this.clientTime,
   });
 
@@ -60,9 +61,17 @@ class HelloMessage extends ClientMessage {
   /// fallbackApiKey}`); omitted when null so the backend uses its env settings.
   final Map<String, dynamic>? webSearch;
 
-  /// Per-session email (IMAP) config (`{address, appPassword}`); omitted when
-  /// not configured so the backend's `read_emails` tool stays disabled.
+  /// Per-session email (IMAP) config for the PRIMARY account
+  /// (`{address, appPassword}`); omitted when not configured so the backend's
+  /// `read_emails` tool stays disabled. Kept for backward compatibility — the
+  /// full set of mailboxes is in [emails].
   final Map<String, dynamic>? email;
+
+  /// All configured mailboxes (0–2), each
+  /// `{label, address, appPassword, host?, smtpHost?, smtpPort, primary}`. The
+  /// backend reads/sends from the one the user names (by `label`), else the
+  /// primary. Omitted when no mailbox is set up.
+  final List<Map<String, dynamic>>? emails;
 
   /// The device's current local date-time as ISO-8601 with offset (e.g.
   /// `2026-06-21T22:30:00+05:30`). Lets the model resolve relative reminder
@@ -82,6 +91,7 @@ class HelloMessage extends ClientMessage {
         if (provider != null) 'provider': provider,
         if (webSearch != null) 'webSearch': webSearch,
         if (email != null) 'email': email,
+        if (emails != null) 'emails': emails,
         if (clientTime != null) 'clientTime': clientTime,
       };
 }

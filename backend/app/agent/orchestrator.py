@@ -51,6 +51,7 @@ class Orchestrator:
         user_id: int | None = None,
         web_search: dict[str, Any] | None = None,
         email: dict[str, Any] | None = None,
+        emails: list[dict[str, Any]] | None = None,
         location: dict[str, Any] | None = None,
         frame_wait_seconds: float | None = None,
     ) -> None:
@@ -77,6 +78,7 @@ class Orchestrator:
         self._user_id = user_id
         self._web_search = web_search
         self._email = email
+        self._emails = emails
         #: Mutable — updated in place when the client sends a ``location_update``.
         self.location = location
         #: Mutable — set to the latest INPUT_VIDEO JPEG by the session so the
@@ -270,6 +272,7 @@ class Orchestrator:
                 user_id=self._user_id,
                 web_search=self._web_search,
                 email=self._email,
+                emails=self._emails,
                 location=self.location,
                 last_frame=self.last_frame,
                 last_frame_at=self.last_frame_at,

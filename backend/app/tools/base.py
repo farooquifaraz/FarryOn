@@ -27,9 +27,13 @@ class ToolContext:
         web_search: Optional per-session web-search config supplied by the
             client (``{provider, apiKey, fallbackProvider, fallbackApiKey}``).
             When present it overrides the server's env settings for this session.
-        email: Optional per-session email (IMAP) config supplied by the client
-            (``{address, appPassword, host?}``). Used by the ``read_emails``
-            tool to read the user's recent mail. Never persisted server-side.
+        email: Optional per-session email config for the PRIMARY mailbox
+            (``{address, appPassword, host?}``). Kept for backward compatibility;
+            the full set is in ``emails``. Never persisted server-side.
+        emails: Optional per-session list of ALL configured mailboxes, each
+            ``{label, address, appPassword, host?, smtpHost?, smtpPort, primary}``.
+            The email tools resolve which one to use by the ``account`` label
+            (defaulting to the primary). Never persisted server-side.
         location: Optional last-known device location supplied by the client
             (``{lat, lng, address?}``). Updated via ``location_update`` and read
             by the ``get_location`` tool to answer "where am I?".
@@ -46,6 +50,7 @@ class ToolContext:
     user_id: int | None = None
     web_search: dict[str, Any] | None = None
     email: dict[str, Any] | None = None
+    emails: list[dict[str, Any]] | None = None
     location: dict[str, Any] | None = None
     last_frame: bytes | None = None
     last_frame_at: float | None = None

@@ -19,6 +19,7 @@ from typing import Any
 
 from app.logging_conf import get_logger
 from app.tools.base import Tool, ToolContext
+from app.tools.email_accounts import account_labels, resolve_account, usable_accounts
 from app.tools.idempotency import already_sent, mark_sent  # UX Spec §3.4
 from app.tools.validators import valid_email  # UX Spec §3.1
 
@@ -26,6 +27,19 @@ logger = get_logger(__name__)
 
 _DEFAULT_SMTP_HOST = "smtp.gmail.com"
 _DEFAULT_SMTP_PORT = 587
+
+
+def _smtp_creds(account: dict[str, Any]) -> tuple[str, int, str, str, str]:
+    """``(host, port, address, password, label)`` for one mailbox dict."""
+    address = (account.get("address") or "").strip()
+    password = (account.get("appPassword") or "").strip()
+    host = (account.get("smtpHost") or _DEFAULT_SMTP_HOST).strip() \
+        or _DEFAULT_SMTP_HOST
+    try:
+        port = int(account.get("smtpPort") or _DEFAULT_SMTP_PORT)
+    except (TypeError, ValueError):
+        port = _DEFAULT_SMTP_PORT
+    return host, port, address, password, (account.get("label") or address)
 
 
 def _send(host: str, port: int, address: str, password: str, to: str,
@@ -59,7 +73,9 @@ class SendEmailTool(Tool):
     description = (
         "Send an email from the user's account. IMPORTANT: only call this "
         "AFTER reading the recipient, subject and body back to the user and "
-        "getting their explicit confirmation — never send without a clear yes."
+        "getting their explicit confirmation — never send without a clear yes. "
+        "If the user has more than one mailbox, also confirm WHICH account to "
+        "send from and pass its label as 'account'."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -70,21 +86,20 @@ class SendEmailTool(Tool):
             },
             "subject": {"type": "string"},
             "body": {"type": "string"},
+            "account": {
+                "type": "string",
+                "description": "Which mailbox to send FROM: the account label "
+                "(e.g. 'Personal', 'Work'). Required when the user has more "
+                "than one mailbox; omit if they have only one.",
+            },
         },
         "required": ["to", "body"],
     }
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
-        cfg = ctx.email or {}
-        address = (cfg.get("address") or "").strip()
-        password = (cfg.get("appPassword") or "").strip()
-        host = (cfg.get("smtpHost") or _DEFAULT_SMTP_HOST).strip() \
-            or _DEFAULT_SMTP_HOST
-        try:
-            port = int(cfg.get("smtpPort") or _DEFAULT_SMTP_PORT)
-        except (TypeError, ValueError):
-            port = _DEFAULT_SMTP_PORT
-        if not address or not password:
+        account_arg = (kwargs.get("account") or "").strip()
+        accts = usable_accounts(ctx)
+        if not accts:
             return {
                 "ok": False,
                 "message": (
@@ -92,6 +107,20 @@ class SendEmailTool(Tool):
                     "address and app password in Settings."
                 ),
             }
+        # Send-safety: never guess the sender when there's more than one mailbox.
+        if not account_arg and len(accts) > 1:
+            labels = ", ".join(account_labels(ctx))
+            return {
+                "ok": False,
+                "message": (
+                    f"The user has more than one mailbox ({labels}). Ask which "
+                    "account to send FROM, then call again with 'account' set."
+                ),
+            }
+        account, err = resolve_account(ctx, account_arg or None)
+        if err:
+            return {"ok": False, "message": err}
+        host, port, address, password, label = _smtp_creds(account)
         to = (kwargs.get("to") or "").strip()
         # CHANGED (UX Spec §3.1): real email validation instead of `"@" in to`,
         # which accepted "@", "a@" and "a@b" (no TLD).
@@ -118,6 +147,7 @@ class SendEmailTool(Tool):
             logger.info("send_email.deduped", to=to)
             return {
                 "ok": True, "to": to, "subject": subject,
+                "from": address, "account": label,
                 "sent": True, "deduped": True,
             }
 
@@ -138,5 +168,8 @@ class SendEmailTool(Tool):
             logger.warning("send_email.failed", error=str(exc))
             return {"ok": False, "message": "Couldn't send the email right now."}
         mark_sent(fingerprint)  # UX Spec §3.4: block an identical resend
-        logger.info("send_email.sent", to=to)
-        return {"ok": True, "to": to, "subject": subject, "sent": True}
+        logger.info("send_email.sent", to=to, account=label)
+        return {
+            "ok": True, "to": to, "subject": subject,
+            "from": address, "account": label, "sent": True,
+        }
