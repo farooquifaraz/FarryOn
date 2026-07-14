@@ -87,6 +87,13 @@ class Session:
         self._orchestrator: Orchestrator | None = None
         # Tracks active tool-call tasks so they are awaited/cancelled cleanly.
         self._tool_tasks: set[asyncio.Task[Any]] = set()
+        # Monotonic time the last video frame was actually forwarded to the
+        # model — drives the cost-saving frame gate (see _handle_binary).
+        self._last_video_sent: float = 0.0
+        # Frame accounting for cost visibility: how many video frames the client
+        # sent vs how many actually reached the model (the gate drops the rest).
+        self._frames_in_video: int = 0
+        self._frames_sent_video: int = 0
 
     # -- Public entrypoint ----------------------------------------------------
 
@@ -347,19 +354,33 @@ class Session:
             await self._gateway.send_audio(payload, ts_ms=ts)
         elif tag == FrameTag.INPUT_VIDEO:
             metrics.FRAMES_IN.labels(kind="video").inc()
-            # Cache the latest frame (+ arrival time) so the identify_image tool
-            # can inspect what the camera currently sees and reject a stale frame
-            # from before the camera was lowered/turned off.
+            self._frames_in_video += 1
+            now = time.monotonic()
+            # Always cache the latest frame (+ arrival time): identify_image and
+            # the typed-turn attach read from here, and it lets us reject a
+            # stale frame from before the camera was lowered/turned off.
             if self._orchestrator is not None:
                 self._orchestrator.last_frame = payload
-                self._orchestrator.last_frame_at = time.monotonic()
-            # Push the frame to the model BEFORE waking any waiting tool. Order
-            # matters: capture_photo's result triggers the model to generate a
-            # "describe what you see" reply, so the frame must already be in the
-            # model's realtime-input queue or the model answers blind and
-            # hallucinates (device-proven 2026-07-11: it described a "grey
-            # gradient" while the glasses had captured a clear room photo).
-            await self._gateway.send_video(payload, ts_ms=ts)
+                self._orchestrator.last_frame_at = now
+            # Cost gate: only a fraction of the ~1 fps stream reaches the model.
+            # Every frame is re-billed on every LATER turn, so streaming them all
+            # is the biggest Live-API cost driver.
+            #
+            # EXCEPTION — a frame a tool is waiting for (capture_photo) always
+            # goes through: its result makes the model describe what it sees, so
+            # the frame must already be in the model's realtime-input queue or it
+            # answers blind (device-proven 2026-07-11: described a "grey gradient"
+            # while the glasses had captured a clear room photo).
+            awaited = (
+                self._orchestrator is not None
+                and self._orchestrator.is_awaiting_frame()
+            )
+            if awaited or self._should_forward_frame(now):
+                await self._forward_frame(
+                    payload,
+                    ts_ms=ts,
+                    reason="awaited" if awaited else self._settings.vision_frame_mode,
+                )
             if self._orchestrator is not None:
                 # Wake any tool (capture_photo) waiting for a fresh frame — now
                 # that the frame is on its way to the model.
@@ -386,6 +407,10 @@ class Session:
             text = (message.get("text") or "").strip()
             if text:
                 await self._send_state("thinking")
+                # A typed turn has no audio VAD, so give the model the current
+                # camera view for "what is this?"-style questions even when
+                # continuous streaming is gated off.
+                await self._attach_frame_if_fresh()
                 await self._gateway.send_text(text)
                 await repo_safe_transcript(self.session_id, "user", text)
         elif mtype == "audio_start":
@@ -461,6 +486,57 @@ class Session:
             pass
         else:
             logger.warning("control.unknown_type", type=mtype)
+
+    def _should_forward_frame(self, now: float) -> bool:
+        """Whether the cost gate lets this video frame through to the model."""
+        mode = self._settings.vision_frame_mode
+        if mode == "off":
+            return False
+        interval = (
+            self._settings.vision_frame_min_interval_s
+            if mode == "continuous"
+            else self._settings.vision_frame_heartbeat_s
+        )
+        return now - self._last_video_sent >= interval
+
+    async def _forward_frame(
+        self, jpeg: bytes, *, ts_ms: int | None = None, reason: str
+    ) -> None:
+        """Send ONE video frame to the model, counting and logging it.
+
+        The single choke-point for every frame that reaches the model, so the
+        log line below is an exact, auditable count of billed camera frames
+        (``sent`` vs ``received`` shows how much the cost gate saved).
+        """
+        self._last_video_sent = time.monotonic()
+        self._frames_sent_video += 1
+        metrics.FRAMES_SENT_TO_MODEL.inc()
+        logger.info(
+            "vision.frame_forwarded",
+            session_id=self.session_id,
+            reason=reason,  # on_turn | continuous | awaited | typed_turn
+            sent=self._frames_sent_video,
+            received=self._frames_in_video,
+            bytes=len(jpeg),
+        )
+        await self._gateway.send_video(jpeg, ts_ms=ts_ms)
+
+    async def _attach_frame_if_fresh(self) -> None:
+        """Forward the latest cached camera frame once, if it is recent.
+
+        Used at the start of a typed turn so visual questions still work when
+        continuous frame streaming is gated off (``vision_frame_mode`` !=
+        ``continuous``). Stale frames (camera lowered/off) are skipped.
+        """
+        if self._gateway is None or self._orchestrator is None:
+            return
+        frame = self._orchestrator.last_frame
+        if frame is None:
+            return
+        arrived = self._orchestrator.last_frame_at or 0.0
+        if time.monotonic() - arrived > 10.0:  # stale — camera likely off
+            return
+        await self._forward_frame(frame, reason="typed_turn")
 
     async def _handle_interrupt(self) -> None:
         """Barge-in: cancel TTS/generation and reset state to listening."""
@@ -605,6 +681,19 @@ class Session:
         logger.info(
             "session.closing", session_id=self.session_id, reason=reason
         )
+        # Cost summary: how many camera frames the gate saved this session.
+        if self._frames_in_video:
+            saved_pct = round(
+                100 * (1 - self._frames_sent_video / self._frames_in_video)
+            )
+            logger.info(
+                "vision.frame_summary",
+                session_id=self.session_id,
+                mode=self._settings.vision_frame_mode,
+                received=self._frames_in_video,
+                sent_to_model=self._frames_sent_video,
+                saved_pct=saved_pct,
+            )
 
         for task in list(self._tool_tasks):
             task.cancel()

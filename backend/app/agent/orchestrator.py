@@ -200,6 +200,16 @@ class Orchestrator:
             if future in self._frame_waiters:
                 self._frame_waiters.remove(future)
 
+    def is_awaiting_frame(self) -> bool:
+        """Whether a tool (capture_photo / identify_image) is blocked on a fresh
+        frame right now.
+
+        The session's cost gate consults this: a frame someone is waiting for
+        must ALWAYS reach the model — that one-shot is the whole point of the
+        capture, and dropping it makes the model answer blind.
+        """
+        return bool(self._frame_waiters)
+
     def notify_new_frame(self) -> None:
         """Wake any tool awaiting a fresh frame (called by the session on an
         incoming INPUT_VIDEO frame)."""

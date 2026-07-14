@@ -70,6 +70,26 @@ class Settings(BaseSettings):
     # explanation, so no separate key is needed for that.
     vision_api_key: str | None = Field(default=None)
 
+    # -- Live vision frame forwarding (cost control) ---------------------------
+    # Camera frames are the single biggest Gemini Live cost driver (the model
+    # re-bills the whole session history every turn, so streaming ~1 frame/sec
+    # snowballs). This gate decides how many of those frames actually reach the
+    # model. Vision still works in every mode — `identify_image` always reads
+    # the latest cached frame, and typed turns attach a fresh frame.
+    #   "continuous" — forward frames, throttled to vision_frame_min_interval_s
+    #   "on_turn"    — forward at most one frame per vision_frame_heartbeat_s
+    #                  (a low-rate heartbeat that keeps voice vision current)
+    #   "off"        — never stream; frames are cached for identify_image only
+    vision_frame_mode: Literal["continuous", "on_turn", "off"] = Field(
+        default="on_turn"
+    )
+    # Minimum seconds between two frames forwarded in "continuous" mode.
+    vision_frame_min_interval_s: float = Field(default=2.0)
+    # Minimum seconds between two frames forwarded in "on_turn" mode — larger,
+    # since voice turns can't be detected server-side (automatic VAD lives in
+    # the provider), so a slow heartbeat keeps a recent frame available.
+    vision_frame_heartbeat_s: float = Field(default=6.0)
+
     # -- Web search tool -------------------------------------------------------
     web_search_api_key: str | None = Field(default=None)
     web_search_provider: str = Field(

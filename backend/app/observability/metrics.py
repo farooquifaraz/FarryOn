@@ -29,6 +29,11 @@ FRAMES_IN = Counter(
     "Inbound binary media frames, labelled by stream kind.",
     ["kind"],  # audio | video | unknown
 )
+FRAMES_SENT_TO_MODEL = Counter(
+    "farryon_frames_sent_to_model_total",
+    "Video frames actually forwarded to the AI model (after gating). Compare "
+    "against FRAMES_IN{kind=video} to confirm the cost-saving frame gate works.",
+)
 AUDIO_BYTES_IN = Counter(
     "farryon_audio_bytes_in_total",
     "Inbound audio payload bytes (PCM16).",
