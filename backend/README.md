@@ -139,6 +139,35 @@ production schema evolution, introduce **Alembic**: point `alembic.ini`
 `target_metadata = app.db.base.Base.metadata` in `env.py`. (No Alembic files are
 shipped here to keep the bootstrap dependency-free.)
 
+## Known limitation: the data endpoints are single-user
+
+`GET /notes`, `GET /tasks`, `POST /tasks/{id}/done`, `DELETE /notes/{id}` and
+`DELETE /tasks/{id}` are **unauthenticated and not scoped to a user** — the
+reads list the whole table and the writes take a bare row id without any
+ownership check.
+
+This is harmless today because there is exactly one user: every live session
+resolves to the shared `_ANON_USER` row
+(`app/ws/session.py::_persist_session_start`), so all notes and tasks already
+carry the same `user_id`. Adding a `user_id=` filter to the reads would
+therefore be cosmetic.
+
+The actual gap is that the client sends **no identity at all** — no token and
+no device id, on either the WS `hello` or these REST calls. Closing it needs,
+in order:
+
+1. a per-install (or per-account) identity on the client, sent on `hello` and
+   as a credential on the REST calls;
+2. `_ANON_USER` replaced by that identity in `_persist_session_start`;
+3. these endpoints resolving the caller and scoping every read *and* write by
+   it — `app/core/deps.py::get_current_user` already does step 3 for
+   `Authorization: Bearer` tokens.
+
+**Fix this before the admin/user module serves more than one real account**,
+and pick the identity model first (a device-scoped id keeps the current
+no-login UX; the admin module's JWT gives real auth but needs a login flow in
+the app). Deferred deliberately on 2026-07-14.
+
 ## Docker
 
 ```bash

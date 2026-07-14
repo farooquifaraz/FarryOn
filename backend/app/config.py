@@ -107,13 +107,70 @@ class Settings(BaseSettings):
     # -- Security / HTTP -------------------------------------------------------
     jwt_secret: str = Field(
         default="dev-insecure-change-me",
-        description="HMAC secret for verifying the ?token= JWT on /ws/live. "
-        "Auth is best-effort in dev and skipped when left at the default.",
+        description="HMAC secret for signing/verifying JWTs: the ?token= "
+        "handshake on /ws/live, and (from the admin/user module onward) "
+        "access + refresh tokens issued by /auth/*. Auth is best-effort on "
+        "/ws/live and skipped when left at the default; the admin/user "
+        "module MUST NOT be exposed with the default secret in production.",
     )
     allowed_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["*"],
         description="CORS allow-list. Comma-separated in the environment.",
     )
+
+    # -- Admin/User module: auth tokens -----------------------------------
+    access_token_expire_minutes: int = Field(
+        default=15,
+        description="Admin/User-module JWT access token lifetime.",
+    )
+    refresh_token_expire_days: int = Field(
+        default=30,
+        description="Admin/User-module refresh token lifetime.",
+    )
+
+    # -- Admin/User module: seed (first super_admin, env-driven) ----------
+    first_super_admin_email: str | None = Field(
+        default=None,
+        description="If set (with the password below), the seed script "
+        "creates/promotes this account to super_admin. Unset in production "
+        "after the first successful seed run.",
+    )
+    first_super_admin_password: str | None = Field(default=None)
+
+    # -- Admin/User module: SSO (Google / Microsoft OIDC) ------------------
+    # Unset by default — /auth/sso/{provider}/* returns 503 SSO_NOT_CONFIGURED
+    # until both id+secret for a given provider are set.
+    google_client_id: str | None = Field(default=None)
+    google_client_secret: str | None = Field(default=None)
+    microsoft_client_id: str | None = Field(default=None)
+    microsoft_client_secret: str | None = Field(default=None)
+    microsoft_tenant: str = Field(
+        default="common",
+        description="Azure AD tenant id, or 'common' for any Microsoft account.",
+    )
+    sso_redirect_base_url: str = Field(
+        default="http://localhost:8000",
+        description="Base URL used to build the OAuth callback redirect_uri "
+        "(must exactly match a redirect URI registered with the provider).",
+    )
+    sso_frontend_success_url: str | None = Field(
+        default=None,
+        description="If set, the callback redirects here with "
+        "?access_token=&refresh_token= instead of returning JSON — point "
+        "this at the admin/mobile app's own callback route.",
+    )
+    # Required by Starlette's SessionMiddleware, which authlib's OAuth client
+    # uses to store CSRF state between the /login redirect and /callback.
+    # Reuses jwt_secret by default so no separate secret needs managing.
+    session_secret: str | None = Field(default=None)
+
+    # -- Admin/User module: billing webhooks --------------------------------
+    # Shared secret the payment provider webhook must present in the
+    # X-Webhook-Secret header. Placeholder until a real provider is chosen —
+    # Stripe/Razorpay each have their own HMAC signature scheme, which should
+    # replace this check in modules/billing/router.py when integrating.
+    # Webhooks are rejected (503) while this is unset.
+    billing_webhook_secret: str | None = Field(default=None)
 
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)

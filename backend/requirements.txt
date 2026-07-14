@@ -10,6 +10,16 @@ pydantic-settings>=2.2,<3.0
 SQLAlchemy[asyncio]>=2.0,<3.0
 aiosqlite>=0.20            # dev / CI driver
 asyncpg>=0.29             # Postgres driver (production)
+alembic>=1.13,<2.0          # schema migrations (admin/user module onward)
+
+# --- Auth (admin/user module) ---
+argon2-cffi>=23.1           # password hashing (argon2id)
+PyJWT>=2.8,<3.0              # access/refresh token encode+decode
+email-validator>=2.1         # pydantic EmailStr
+pyotp>=2.9,<3.0               # TOTP 2FA
+qrcode>=7.4,<8.0               # 2FA enrollment QR code (uses Pillow, already a dep)
+Authlib>=1.3,<2.0               # Google/Microsoft OIDC SSO
+itsdangerous>=2.1,<3.0            # required by Starlette's SessionMiddleware (SSO CSRF state)
 
 # --- HTTP client (web_search tool, TestClient WebSocket support) ---
 httpx>=0.27,<1.0

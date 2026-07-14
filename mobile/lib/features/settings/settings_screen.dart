@@ -8,6 +8,7 @@ import '../../core/theme.dart';
 import '../../core/ui.dart';
 import '../../data/email_probe.dart';
 import '../../data/live_client.dart';
+import '../../state/auth.dart';
 import '../../state/providers.dart';
 import '../data/conversations_screen.dart';
 import '../data/notes_screen.dart';
@@ -55,6 +56,7 @@ class SettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final cfg = ref.watch(configProvider);
     final live = ref.watch(liveProvider);
+    final auth = ref.watch(authProvider);
 
     final audioGlasses = live.audioKind == 'glasses';
     final videoGlasses = live.videoKind == 'glasses';
@@ -170,6 +172,61 @@ class SettingsScreen extends ConsumerWidget {
               subtitle: 'Read your past chats',
               onTap: () => ConversationsScreen.open(context),
               showDivider: false,
+            ),
+          ]),
+          const SizedBox(height: 20),
+
+          const SectionLabel('Account'),
+          SettingsGroup(children: [
+            SettingsRow(
+              icon: Icons.account_circle_rounded,
+              gradient: Aurora.gradPink,
+              title: auth.displayName?.trim().isNotEmpty == true
+                  ? auth.displayName!
+                  : (auth.email.isNotEmpty ? auth.email : 'Signed in'),
+              subtitle: auth.email,
+              trailing: const SizedBox.shrink(),
+            ),
+            SettingsRow(
+              icon: Icons.logout_rounded,
+              gradient: Aurora.gradCoral,
+              title: 'Sign out',
+              subtitle: 'Ends this device\'s session',
+              showDivider: false,
+              onTap: () async {
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: Aurora.surfaceHigh,
+                    title: const Text('Sign out?',
+                        style: TextStyle(color: Aurora.textPrimary)),
+                    content: const Text(
+                        'You\'ll need to sign in again to use Farry.',
+                        style: TextStyle(color: Aurora.textMuted)),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(false),
+                        child: const Text('Cancel',
+                            style: TextStyle(color: Aurora.textMuted)),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(true),
+                        child: const Text('Sign out',
+                            style: TextStyle(color: Aurora.danger)),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed != true || !context.mounted) return;
+                // signOut() tears the live session down itself (timeout-
+                // guarded) before dropping the token — see AuthNotifier.
+                await ref.read(authProvider.notifier).signOut();
+                // The auth gate now shows LoginScreen underneath — unwind
+                // the settings stack back to it.
+                if (context.mounted) {
+                  Navigator.of(context).popUntil((r) => r.isFirst);
+                }
+              },
             ),
           ]),
           const SizedBox(height: 20),

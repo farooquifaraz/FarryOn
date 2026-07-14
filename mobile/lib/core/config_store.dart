@@ -22,15 +22,86 @@ class ConfigStore {
   static const String _accountsKey = 'cfg.email.accounts';
   static String _pwKey(String id) => 'email.pw.$id';
 
+  // Auth session (FarryOn account) — tokens in the keystore, identity in prefs.
+  static const String _authAccessKey = 'auth.access';
+  static const String _authRefreshKey = 'auth.refresh';
+  static const String _authEmailKey = 'auth.email';
+  static const String _authNameKey = 'auth.name';
+  static const String _authUserIdKey = 'auth.userId';
+
   /// account id -> app password, hydrated from the keystore during [init] so
   /// the synchronous [load] can attach secrets without an await.
   static final Map<String, String> _pwCache = {};
+
+  /// Auth tokens, hydrated from the keystore during [init] (same pattern as
+  /// [_pwCache]) so the synchronous [authSession] works without an await.
+  static String? _accessCache;
+  static String? _refreshCache;
 
   /// Must be awaited once at startup (in `main`) before [load].
   static Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
     await _migrateLegacyEmail();
     await _hydrateSecrets();
+    _accessCache = await _secure.read(key: _authAccessKey);
+    _refreshCache = await _secure.read(key: _authRefreshKey);
+  }
+
+  // ---- Auth session --------------------------------------------------------
+
+  /// The persisted sign-in, or null when signed out. Synchronous — tokens are
+  /// hydrated in [init].
+  static ({
+    String access,
+    String refresh,
+    String email,
+    String? displayName,
+    int? userId,
+  })? authSession() {
+    final access = _accessCache;
+    final refresh = _refreshCache;
+    if (access == null || access.isEmpty || refresh == null || refresh.isEmpty) {
+      return null;
+    }
+    return (
+      access: access,
+      refresh: refresh,
+      email: _prefs?.getString(_authEmailKey) ?? '',
+      displayName: _prefs?.getString(_authNameKey),
+      userId: _prefs?.getInt(_authUserIdKey),
+    );
+  }
+
+  static Future<void> saveAuthSession({
+    required String access,
+    required String refresh,
+    String? email,
+    String? displayName,
+    int? userId,
+  }) async {
+    await _secure.write(key: _authAccessKey, value: access);
+    await _secure.write(key: _authRefreshKey, value: refresh);
+    _accessCache = access;
+    _refreshCache = refresh;
+    final p = _prefs;
+    if (p != null) {
+      if (email != null) await p.setString(_authEmailKey, email);
+      if (displayName != null) await p.setString(_authNameKey, displayName);
+      if (userId != null) await p.setInt(_authUserIdKey, userId);
+    }
+  }
+
+  static Future<void> clearAuthSession() async {
+    await _secure.delete(key: _authAccessKey);
+    await _secure.delete(key: _authRefreshKey);
+    _accessCache = null;
+    _refreshCache = null;
+    final p = _prefs;
+    if (p != null) {
+      await p.remove(_authEmailKey);
+      await p.remove(_authNameKey);
+      await p.remove(_authUserIdKey);
+    }
   }
 
   static AppConfig load() {

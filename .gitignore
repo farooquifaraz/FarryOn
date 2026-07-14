@@ -41,6 +41,11 @@ mobile/android/key.properties
 # Built APKs (large binaries; rebuild from mobile/). Keep the folder's README.
 apk/*.apk
 
+# ---------- Web admin panel (React + Vite) ----------
+admin/node_modules/
+# `*.lock` above would exclude the npm lockfile; keep it for reproducible builds.
+!admin/package-lock.json
+
 # Local design mockups (dev artifacts).
 mockups/
 

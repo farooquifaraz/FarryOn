@@ -45,6 +45,63 @@ jobs:
       - name: Run tests
         run: pytest -q
 
+  # ------------------------------------------- backend (admin module, Postgres)
+  backend-postgres:
+    # The admin/user module's schema uses Postgres-enforced constructs
+    # (partial unique index on users.email, tz-aware datetimes via asyncpg)
+    # that SQLite doesn't exercise — run that module's suites against the
+    # real thing. Scoped to those test files so the job stays green
+    # independently of the SQLite job above.
+    name: Backend admin module (pytest, Postgres 16)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: farryon
+          POSTGRES_PASSWORD: farryon
+          POSTGRES_DB: farryon_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U farryon"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AI_PROVIDER: mock
+      DATABASE_URL: postgresql+asyncpg://farryon:farryon@localhost:5432/farryon_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run admin/user module tests
+        run: >
+          pytest -q
+          tests/test_auth.py
+          tests/test_rbac.py
+          tests/test_users.py
+          tests/test_sessions.py
+          tests/test_twofa.py
+          tests/test_sso.py
+          tests/test_audit.py
+          tests/test_impersonation.py
+          tests/test_billing.py
+
   # ------------------------------------------------------------------- mobile
   mobile:
     name: Mobile (flutter analyze + test)

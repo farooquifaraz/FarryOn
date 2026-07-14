@@ -63,10 +63,21 @@ class DataApi {
 
   Uri _uri(String path) => _config.httpBase.replace(path: path);
 
+  /// Bearer header when a FarryOn session token exists. The Notes/Tasks
+  /// endpoints don't enforce auth yet, but sending it now means they start
+  /// returning per-user data the moment the backend scopes them.
+  Map<String, String> get _headers {
+    final token = _config.authToken;
+    return (token == null || token.isEmpty)
+        ? const {}
+        : {'Authorization': 'Bearer $token'};
+  }
+
   static const _timeout = Duration(seconds: 20);
 
   Future<List<NoteItem>> notes() async {
-    final r = await _client.get(_uri('/notes')).timeout(_timeout);
+    final r =
+        await _client.get(_uri('/notes'), headers: _headers).timeout(_timeout);
     final list = jsonDecode(r.body) as List<dynamic>;
     return list
         .map((e) => NoteItem.fromJson(e as Map<String, dynamic>))
@@ -74,7 +85,8 @@ class DataApi {
   }
 
   Future<List<TaskItem>> tasks() async {
-    final r = await _client.get(_uri('/tasks')).timeout(_timeout);
+    final r =
+        await _client.get(_uri('/tasks'), headers: _headers).timeout(_timeout);
     final list = jsonDecode(r.body) as List<dynamic>;
     return list
         .map((e) => TaskItem.fromJson(e as Map<String, dynamic>))
@@ -83,18 +95,25 @@ class DataApi {
 
   Future<void> setTaskDone(int id, bool done) async {
     await _client
-        .post(_uri('/tasks/$id/done').replace(queryParameters: {
-          'done': done.toString(),
-        }))
+        .post(
+          _uri('/tasks/$id/done').replace(queryParameters: {
+            'done': done.toString(),
+          }),
+          headers: _headers,
+        )
         .timeout(_timeout);
   }
 
   Future<void> deleteNote(int id) async {
-    await _client.delete(_uri('/notes/$id')).timeout(_timeout);
+    await _client
+        .delete(_uri('/notes/$id'), headers: _headers)
+        .timeout(_timeout);
   }
 
   Future<void> deleteTask(int id) async {
-    await _client.delete(_uri('/tasks/$id')).timeout(_timeout);
+    await _client
+        .delete(_uri('/tasks/$id'), headers: _headers)
+        .timeout(_timeout);
   }
 
   void dispose() => _client.close();

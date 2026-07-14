@@ -20,11 +20,27 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 from sqlalchemy import text
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import Settings, get_settings
+from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
+from app.core.responses import AppError, app_error_handler
 from app.db import repo
 from app.db.base import dispose_db, get_sessionmaker, init_db
 from app.logging_conf import configure_logging, get_logger
+from app.modules.audit.router import router as audit_router
+from app.modules.billing.router import router as billing_router
+from app.modules.billing.router import webhook_router as billing_webhook_router
+from app.modules.auth.router import me_router as auth_me_router
+from app.modules.auth.router import router as auth_router
+from app.modules.impersonation.router import router as impersonation_router
+from app.modules.rbac.router import router as rbac_router
+from app.modules.sessions.router import admin_router as sessions_admin_router
+from app.modules.sessions.router import me_router as sessions_me_router
+from app.modules.sso.router import router as sso_router
+from app.modules.twofa.router import admin_router as twofa_admin_router
+from app.modules.twofa.router import me_router as twofa_me_router
+from app.modules.users.router import router as users_router
 from app.services.vision import run_detection
 from app.ws.live import router as ws_router
 
@@ -93,7 +109,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    # SessionMiddleware: required by authlib's Starlette OAuth client to
+    # store CSRF state between /auth/sso/{provider}/login and .../callback.
+    # Harmless when SSO is unconfigured — the routes themselves 503 before
+    # touching the session in that case (see modules/sso/router.py).
+    app.add_middleware(
+        SessionMiddleware, secret_key=settings.session_secret or settings.jwt_secret
+    )
+
+    # Hardening (admin/user module Phase 9): request-id correlation in every
+    # log line + response header, and standard security headers everywhere.
+    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
+
     app.include_router(ws_router)
+
+    # Admin/User module — additive only: new prefix, own error envelope
+    # (AppError -> app_error_handler), zero effect on any existing route.
+    app.add_exception_handler(AppError, app_error_handler)
+    app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(auth_me_router, prefix="/api/v1")
+    app.include_router(rbac_router, prefix="/api/v1")
+    app.include_router(users_router, prefix="/api/v1")
+    app.include_router(sessions_me_router, prefix="/api/v1")
+    app.include_router(sessions_admin_router, prefix="/api/v1")
+    app.include_router(twofa_me_router, prefix="/api/v1")
+    app.include_router(twofa_admin_router, prefix="/api/v1")
+    app.include_router(sso_router, prefix="/api/v1")
+    app.include_router(audit_router, prefix="/api/v1")
+    app.include_router(impersonation_router, prefix="/api/v1")
+    app.include_router(billing_router, prefix="/api/v1")
+    app.include_router(billing_webhook_router, prefix="/api/v1")
 
     @app.get("/healthz", response_class=JSONResponse, tags=["ops"])
     async def healthz() -> JSONResponse:
@@ -151,10 +197,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     # ---- Notes & tasks (read/manage what the agent created) ----------------
+    #
+    # SINGLE-USER ONLY — must be fixed before the admin/user module goes live.
+    #
+    # These six endpoints are unauthenticated and return/mutate rows across
+    # every user: the reads below deliberately omit `user_id`, so they list the
+    # whole table. That is currently harmless only because there is exactly one
+    # user: every live session resolves to the shared `_ANON_USER` row (see
+    # ws/session.py::_persist_session_start), so all notes/tasks already carry
+    # the same user_id.
+    #
+    # Adding a `user_id=` filter here alone would therefore change nothing —
+    # the real gap is that the client sends no identity at all (no token, no
+    # device id, on either the WS hello or these REST calls). Closing it needs,
+    # in order: (1) a per-install/user identity on the client, sent on hello and
+    # as a REST credential; (2) `_ANON_USER` replaced by that identity; (3) these
+    # endpoints resolving the caller (app/core/deps.py::get_current_user already
+    # does this for Bearer tokens) and scoping every read *and* write by it —
+    # note the delete/done handlers take a bare row id and check no ownership.
+    #
+    # Deferred deliberately (2026-07-14): single-user today, and the choice
+    # between a device-scoped id and real login is a product decision.
 
     @app.get("/notes", tags=["data"])
     async def list_notes_endpoint() -> JSONResponse:
-        """List saved notes (newest first) for the app's Notes view."""
+        """List saved notes (newest first) for the app's Notes view.
+
+        Unscoped: returns every user's notes. See the section comment above.
+        """
         async with get_sessionmaker()() as db:
             notes = await repo.list_notes(db, limit=200)
             return JSONResponse(
@@ -170,7 +240,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/tasks", tags=["data"])
     async def list_tasks_endpoint() -> JSONResponse:
-        """List tasks (open first, then newest) for the app's Tasks view."""
+        """List tasks (open first, then newest) for the app's Tasks view.
+
+        Unscoped: returns every user's tasks. See the section comment above.
+        """
         async with get_sessionmaker()() as db:
             tasks = await repo.list_tasks(db, include_done=True, limit=200)
             return JSONResponse(

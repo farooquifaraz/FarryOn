@@ -5,11 +5,11 @@ Uses SQLAlchemy 2.0's async ORM. The engine is created lazily from
 database. ``aiosqlite`` backs local/dev/CI; switch ``DATABASE_URL`` to an
 ``asyncpg`` URL for Postgres.
 
-Migrations: this project ships a simple :func:`init_db` / ``create_all``
-bootstrap so it runs with no migration tooling. For production schema evolution,
-introduce Alembic — point ``alembic.ini`` ``sqlalchemy.url`` at the *sync*
-driver equivalent (``postgresql://``) and target :data:`Base.metadata`. The
-``env.py`` ``target_metadata`` should be ``app.db.base.Base.metadata``.
+Migrations: dev/CI keep using :func:`init_db` / ``create_all`` (fast, no
+migration step for throwaway SQLite). Production Postgres is schema-managed by
+Alembic instead — see ``backend/alembic/`` (``alembic upgrade head``);
+``env.py`` targets this module's :data:`Base.metadata` via an async engine, so
+there's no separate sync-driver connection string to maintain.
 """
 
 from __future__ import annotations
