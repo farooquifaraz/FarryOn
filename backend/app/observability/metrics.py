@@ -34,6 +34,12 @@ FRAMES_SENT_TO_MODEL = Counter(
     "Video frames actually forwarded to the AI model (after gating). Compare "
     "against FRAMES_IN{kind=video} to confirm the cost-saving frame gate works.",
 )
+TOKENS_USED = Counter(
+    "farryon_tokens_used_total",
+    "Model tokens billed this process, read from the provider's usage_metadata. "
+    "Labelled by kind so input/output cost can be tracked over time.",
+    ["kind"],  # total | input | output
+)
 AUDIO_BYTES_IN = Counter(
     "farryon_audio_bytes_in_total",
     "Inbound audio payload bytes (PCM16).",
