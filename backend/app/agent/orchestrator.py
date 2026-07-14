@@ -117,6 +117,10 @@ class Orchestrator:
         #: Recently device-resolved names -> real phone, for send_telegram's
         #: user-account (MTProto) path which dials the number server-side.
         self._resolved_phones: dict[str, str] = {}
+        #: contact_id -> real phone for EVERY device candidate (including the
+        #: ones in an ambiguous list), so whichever match the user picks can be
+        #: dialled by send_telegram(contact_id=...).
+        self._resolved_id_phones: dict[str, str] = {}
 
     async def request_contact_resolution(
         self, name: str, channel: str
@@ -142,16 +146,30 @@ class Orchestrator:
                 }
             )
             result = await asyncio.wait_for(future, timeout=8.0)
-            # Remember a single unambiguous match so a later send_* call can
-            # still find it by name if the model didn't pass the contact_id.
             cands = result.get("candidates") or []
+            # Cache EVERY candidate so a follow-up send works by either handle,
+            # on ANY channel, without re-resolving:
+            #   * contact_id -> phone   (send_telegram dials it server-side)
+            #   * displayName -> contact_id / phone  (so "send the same to Ahsan
+            #     Bhai on WhatsApp" works after he was picked from a Telegram
+            #     ambiguous list — a contact_id identifies a PERSON, not a
+            #     channel). The device sends the real phone for telegram.
+            for c in cands:
+                cid, ph = c.get("contactId"), c.get("phone")
+                disp = (c.get("displayName") or "").strip().lower()
+                if cid and ph:
+                    self._resolved_id_phones[cid] = ph
+                if disp and cid:
+                    self._resolved_ids[disp] = cid
+                if disp and ph:
+                    self._resolved_phones[disp] = ph
+            # A single unambiguous match is also cached under the QUERY name
+            # ("beautiful wife"), since that's the word the user actually said.
             if result.get("status") == "found" and len(cands) == 1:
                 key = name.strip().lower()
                 cid = cands[0].get("contactId")
                 if cid:
                     self._resolved_ids[key] = cid
-                # The device includes the real phone for telegram (the user's
-                # own account needs it to dial); cache it for send_telegram.
                 ph = cands[0].get("phone")
                 if ph:
                     self._resolved_phones[key] = ph
@@ -247,6 +265,10 @@ class Orchestrator:
         if name and phone:
             self._resolved_phones[name.strip().lower()] = phone
 
+    def recall_phone_by_id(self, contact_id: str) -> str | None:
+        """Phone for a device contact_id the user picked out of a resolve list."""
+        return self._resolved_id_phones.get(contact_id or "")
+
     async def handle_tool_call(self, event: ToolCallEvent) -> ToolResult:
         """Execute one model-requested tool call end-to-end.
 
@@ -289,6 +311,7 @@ class Orchestrator:
                 resolve_contact=self.request_contact_resolution,
                 recall_resolved=self.recall_resolved,
                 recall_phone=self.recall_phone,
+                recall_phone_by_id=self.recall_phone_by_id,
                 note_phone=self.note_phone,
                 wait_for_frame=self.wait_for_frame,
                 capture_error=lambda: self.last_capture_error,

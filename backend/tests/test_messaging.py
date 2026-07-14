@@ -317,6 +317,75 @@ async def test_telegram_bot_send_with_token(db_session, monkeypatch):
     assert res["to"] == "12345"
 
 
+async def test_telegram_contact_id_sends_via_account(db_session, monkeypatch):
+    """The user picks a match from an ambiguous list -> that contact_id maps to
+    the cached phone and the user-account (MTProto) path delivers it. Without
+    this, contact_id was ignored and every device-contact send dead-ended on
+    "I need a @username or a saved contact"."""
+    monkeypatch.setattr(tg_mod.telegram_user, "is_configured", lambda s: True)
+
+    captured: dict[str, str] = {}
+
+    async def fake_user_send(settings, *, message, username=None, phone=None, **kw):
+        captured["phone"] = phone
+        return {"ok": True, "to": "Beautiful Wife"}
+
+    monkeypatch.setattr(tg_mod.telegram_user, "user_send", fake_user_send)
+    monkeypatch.setattr(
+        tg_mod, "get_settings", lambda: SimpleNamespace(telegram_bot_token=None)
+    )
+    ctx = ToolContext(
+        session=db_session,
+        recall_phone_by_id=lambda cid: "+971501234567" if cid == "c0" else None,
+    )
+    res = await SendTelegramTool().run(ctx, message="Hi", contact_id="c0")
+    assert res["ok"] is True and res["delivered"] is True
+    assert res["via"] == "account" and res["to"] == "Beautiful Wife"
+    assert captured["phone"] == "+971501234567"
+
+
+async def test_resolve_ambiguous_is_capped(db_session):
+    """A huge ambiguous match is trimmed (so the assistant doesn't recite 17
+    names) but reports how many more there are."""
+    big = [
+        {"displayName": f"Wife {i}", "maskedNumber": "•••12",
+         "contactId": f"c{i}"} for i in range(17)
+    ]
+
+    async def fake_resolve(name, channel):
+        return {"status": "ambiguous", "candidates": big}
+
+    ctx = ToolContext(session=db_session, resolve_contact=fake_resolve)
+    res = await ResolveContactTool().run(ctx, name="wife", channel="whatsapp")
+    assert res["status"] == "ambiguous"
+    assert len(res["options"]) == 6   # capped
+    assert res["more"] == 11          # ...and N more
+
+
+async def test_resolve_telegram_device_single_returns_contact_id(
+    db_session, monkeypatch
+):
+    """A single device match for telegram returns a contact_id, so the model
+    sends by id (robust) instead of by a name that can mismatch."""
+    import app.tools.contacts as contacts_mod
+
+    monkeypatch.setattr(
+        contacts_mod.telegram_user, "is_configured", lambda s: True
+    )
+
+    async def fake_resolve(name, channel):
+        return {"status": "found", "candidates": [
+            {"displayName": "Beautiful Wife🌹", "maskedNumber": "+971•••96",
+             "contactId": "c0", "phone": "+971500000096"},
+        ]}
+
+    ctx = ToolContext(session=db_session, resolve_contact=fake_resolve)
+    res = await ResolveContactTool().run(ctx, name="wife", channel="telegram")
+    assert res["status"] == "found" and res["via"] == "account"
+    assert res["contact_id"] == "c0"
+    assert res["masked_number"] == "+971•••96"
+
+
 async def test_telegram_needs_target(db_session, monkeypatch):
     monkeypatch.setattr(
         tg_mod, "get_settings",

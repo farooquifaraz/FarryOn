@@ -72,6 +72,10 @@ class ToolContext:
     #: later send_telegram by name can use it. Signature:
     #: ``note_phone(name, phone) -> None``.
     note_phone: Callable[[str, str], None] | None = None
+    #: Recall the real phone for a device contact_id the user picked out of a
+    #: resolve_contact list — lets send_telegram dial exactly that match.
+    #: Signature: ``recall_phone_by_id(contact_id) -> phone | None``.
+    recall_phone_by_id: Callable[[str], str | None] | None = None
     #: Await the NEXT camera frame (INPUT_VIDEO). Used by ``capture_photo`` so a
     #: voice-triggered glasses photo is in context before the model answers.
     #: Signature: ``await wait_for_frame(timeout=None) -> bool`` (True if a
