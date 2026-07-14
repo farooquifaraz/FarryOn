@@ -94,6 +94,10 @@ class Session:
         # sent vs how many actually reached the model (the gate drops the rest).
         self._frames_in_video: int = 0
         self._frames_sent_video: int = 0
+        # Cost caps: session start + last real user activity (audio/text), used
+        # by the watchdog to end runaway or forgotten-open sessions.
+        self._session_started: float = time.monotonic()
+        self._last_activity: float = time.monotonic()
 
     # -- Public entrypoint ----------------------------------------------------
 
@@ -208,8 +212,12 @@ class Session:
             event_task = asyncio.create_task(
                 self._event_pump(), name="event_pump"
             )
+            watchdog_task = asyncio.create_task(
+                self._session_watchdog(), name="watchdog"
+            )
             done, pending = await asyncio.wait(
-                {read_task, event_task}, return_when=asyncio.FIRST_COMPLETED
+                {read_task, event_task, watchdog_task},
+                return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
                 task.cancel()
@@ -351,6 +359,7 @@ class Session:
         if tag == FrameTag.INPUT_AUDIO:
             metrics.FRAMES_IN.labels(kind="audio").inc()
             metrics.AUDIO_BYTES_IN.inc(len(payload))
+            self._last_activity = time.monotonic()  # real user turn (idle reset)
             await self._gateway.send_audio(payload, ts_ms=ts)
         elif tag == FrameTag.INPUT_VIDEO:
             metrics.FRAMES_IN.labels(kind="video").inc()
@@ -403,6 +412,7 @@ class Session:
     async def _dispatch_control(self, message: dict[str, Any]) -> None:
         """Handle a client control message by ``type`` (``PROTOCOL.md`` §3)."""
         mtype = message.get("type")
+        self._last_activity = time.monotonic()  # any control msg = still alive
         if mtype == "text":
             text = (message.get("text") or "").strip()
             if text:
@@ -486,6 +496,39 @@ class Session:
             pass
         else:
             logger.warning("control.unknown_type", type=mtype)
+
+    async def _session_watchdog(self) -> None:
+        """End runaway or idle sessions to bound cost.
+
+        A live session re-bills its whole history every turn, so one left open
+        (or forgotten in a pocket) keeps burning tokens. On a limit we tell the
+        client (``session_expired``) and return; run()'s FIRST_COMPLETED wait
+        then tears the session down and closes the socket, and the app
+        reconnects fresh with a cheap, empty context. Both caps are generous and
+        configurable; 0 disables one.
+        """
+        max_s = self._settings.max_session_seconds
+        idle_s = self._settings.idle_disconnect_seconds
+        if max_s <= 0 and idle_s <= 0:
+            return  # no caps → let the read/event pumps own the lifetime
+        while not self._closing:
+            await asyncio.sleep(5)
+            now = time.monotonic()
+            if max_s > 0 and now - self._session_started >= max_s:
+                await self._expire_session("max_duration")
+                return
+            if idle_s > 0 and now - self._last_activity >= idle_s:
+                await self._expire_session("idle")
+                return
+
+    async def _expire_session(self, reason: str) -> None:
+        """Tell the client why the session is ending (best-effort)."""
+        logger.info(
+            "session.expired", session_id=self.session_id, reason=reason,
+            duration_s=round(time.monotonic() - self._session_started),
+        )
+        with contextlib.suppress(Exception):
+            await self._send_json({"type": "session_expired", "reason": reason})
 
     def _should_forward_frame(self, now: float) -> bool:
         """Whether the cost gate lets this video frame through to the model."""

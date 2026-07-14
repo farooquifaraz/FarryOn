@@ -195,8 +195,27 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)
 
+    # -- Live session cost control (P0-2) --------------------------------------
+    # Live re-bills the whole session history every turn. A sliding context
+    # window caps that: past `trigger_tokens`, only the most recent
+    # `target_tokens` are kept/re-billed. 8k of recent context is plenty for a
+    # long conversation's memory. (It also lifts the native-audio session limit.)
+    context_compression_enabled: bool = Field(default=True)
+    context_trigger_tokens: int = Field(default=16000)
+    context_target_tokens: int = Field(default=8000)
+    # Bound runaway sessions. On reaching a limit the server sends a JSON
+    # `session_expired` event and closes; the app reconnects fresh (cheap,
+    # empty context). 0 disables a cap. Defaults are generous so normal use
+    # is never cut off mid-conversation.
+    max_session_seconds: int = Field(default=1800)     # 30 min hard cap
+    idle_disconnect_seconds: int = Field(default=300)  # 5 min with no audio/text
+
     # -- Tunables --------------------------------------------------------------
     tool_timeout_seconds: float = Field(default=20.0)
+    # Tool results are fed back into the model's context and re-billed on every
+    # later turn. Truncate long ones (web_search, read_emails) for the MODEL
+    # only — the client UI still receives the full result. 0 disables the cap.
+    tool_result_max_chars: int = Field(default=2000)
 
     # -- Camera capture (identify_image / capture_photo) ------------------------
     # How long a vision tool waits for a fresh camera frame before giving up.

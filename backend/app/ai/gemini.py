@@ -116,6 +116,25 @@ class GeminiGateway(AIGateway):
             )
         except Exception:  # noqa: BLE001 - field optional across SDK versions
             pass
+        # Cost control: cap what gets re-billed every turn. Live re-bills the
+        # WHOLE session history on each turn, so a long chat (and its piled-up
+        # audio/video tokens) snowballs. A sliding window keeps only recent
+        # context past the trigger, cutting text-input tokens sharply. Bonus:
+        # it also lifts the native-audio 15-minute session limit. Guarded like
+        # the other optional fields so an older SDK still connects.
+        s = get_settings()
+        if s.context_compression_enabled:
+            try:
+                config_kwargs["context_window_compression"] = (
+                    types.ContextWindowCompressionConfig(
+                        trigger_tokens=s.context_trigger_tokens,
+                        sliding_window=types.SlidingWindow(
+                            target_tokens=s.context_target_tokens
+                        ),
+                    )
+                )
+            except Exception:  # noqa: BLE001 - field optional across SDK versions
+                pass
         return types.LiveConnectConfig(**config_kwargs)
 
     async def connect(self) -> None:

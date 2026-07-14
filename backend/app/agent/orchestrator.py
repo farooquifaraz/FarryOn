@@ -16,6 +16,7 @@ which:
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -367,6 +368,10 @@ class Orchestrator:
                 }
             else:
                 payload = result.result if result.ok else (result.error or "error")
+            # The client already has the full result; the model gets a
+            # size-capped copy, since a tool result is re-billed on every turn
+            # for the rest of the session.
+            payload = self._truncate_for_model(payload)
             await self._gateway.send_tool_result(
                 event.id, event.name, payload, ok=result.ok
             )
@@ -374,6 +379,29 @@ class Orchestrator:
             logger.error("tool_call.feedback_failed", error=str(exc))
 
         return result
+
+    def _truncate_for_model(self, payload: Any) -> Any:
+        """Cap the size of a tool result handed back to the model.
+
+        Live re-bills the whole context each turn, so a huge web_search or
+        read_emails payload keeps costing tokens for the rest of the session.
+        Returns the payload untouched when it's small; otherwise a truncated
+        string (the client already received the full result). 0 disables.
+        """
+        limit = get_settings().tool_result_max_chars
+        if limit <= 0:
+            return payload
+        try:
+            text = (
+                payload if isinstance(payload, str)
+                else json.dumps(payload, ensure_ascii=False, default=str)
+            )
+        except Exception:  # noqa: BLE001 - fall back to a plain string form
+            text = str(payload)
+        if len(text) <= limit:
+            return payload
+        dropped = len(text) - limit
+        return text[:limit] + f"\n…[truncated {dropped} chars for brevity]"
 
     _SEND_TOOLS = {"send_whatsapp", "send_message", "send_telegram"}
 
