@@ -226,9 +226,14 @@ class Settings(BaseSettings):
     # -- Tunables --------------------------------------------------------------
     tool_timeout_seconds: float = Field(default=20.0)
     # Tool results are fed back into the model's context and re-billed on every
-    # later turn. Truncate long ones (web_search, read_emails) for the MODEL
-    # only — the client UI still receives the full result. 0 disables the cap.
-    tool_result_max_chars: int = Field(default=2000)
+    # later turn, so an unbounded one (web_search returns tens of KB) keeps
+    # costing tokens for the rest of the session. This is a BACKSTOP for tools
+    # that don't limit themselves — it must sit ABOVE the largest deliberate
+    # per-tool limit, or it would silently clip a tool that already sized its
+    # own payload (read_email caps a full body at 4000 chars by design, and
+    # halving that would break "read me the whole email"). The client UI always
+    # receives the full, untruncated result either way. 0 disables the cap.
+    tool_result_max_chars: int = Field(default=6000)
 
     # -- Camera capture (identify_image / capture_photo) ------------------------
     # How long a vision tool waits for a fresh camera frame before giving up.

@@ -1340,8 +1340,9 @@ class LiveController {
   /// (~4 s), the frame arrived with no listener attached, and the model
   /// answered "couldn't get a fresh look" despite a perfect capture.
   Future<void> handleAppBackground() async {
-    if (_videoSource is GlassesCaptureSource) return;
+    // Track this even for glasses, so the flag always reflects reality.
     _foreground = false;
+    if (_videoSource is GlassesCaptureSource) return;
     if (_state.cameraOn) {
       await _stopVideo();
       await _videoSource.releaseCamera();

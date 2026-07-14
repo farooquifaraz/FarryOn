@@ -55,6 +55,28 @@ async def test_large_tool_result_is_truncated() -> None:
     assert "truncated" in out
 
 
+async def test_cap_does_not_clip_a_tools_own_deliberate_limit() -> None:
+    """The cap is a backstop for tools that DON'T size their own payload. It
+    must stay above the largest deliberate per-tool limit, or it silently clips
+    a tool that already thought about this — read_email caps a full body at
+    _BODY_CHARS by design, and halving that breaks "read me the whole email"."""
+    from app.tools.email_read import _BODY_CHARS
+
+    limit = get_settings().tool_result_max_chars
+    assert limit > _BODY_CHARS, (
+        f"tool_result_max_chars ({limit}) must exceed read_email's own body "
+        f"cap ({_BODY_CHARS}) plus room for its metadata"
+    )
+
+    # A realistic full-body read_email result must pass through untouched.
+    orch = _orch()
+    email = {
+        "ok": True, "from": "a@b.com", "subject": "Statement",
+        "body": "x" * _BODY_CHARS,
+    }
+    assert orch._truncate_for_model(email) == email
+
+
 async def test_usage_metadata_is_recorded_and_accumulates() -> None:
     """P1-7: per-turn token counts from usage_metadata accumulate on the
     session so the cost log/metric is accurate."""
