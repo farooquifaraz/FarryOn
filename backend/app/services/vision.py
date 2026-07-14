@@ -529,7 +529,7 @@ async def detect_product(
     client: httpx.AsyncClient,
     *,
     image_req: dict[str, Any],
-    api_key: str,
+    api_key: str | None,
     gemini_key: str | None = None,
     lang: str | None = None,
     gem: dict[str, Any] | None = None,
@@ -545,16 +545,22 @@ async def detect_product(
     Gemini-only product card rather than failing the whole request. Only when we
     have neither Gemini nor web data does the error propagate.
     """
-    try:
-        resp = await _vision_annotate(
-            client, image_req, "WEB_DETECTION", api_key, max_results=10
-        )
-        web = resp.get("webDetection", {})
-    except DetectionError as exc:
-        if gem is None:  # no fallback identity — nothing to show
-            raise
-        logger.warning("vision.web_detection_degraded", error=str(exc))
-        web = {}
+    web: dict[str, Any] = {}
+    if not api_key:
+        # No Cloud Vision configured at all — Gemini's identification alone
+        # still yields a full card (name + explanation + marketplace links).
+        if gem is None:
+            raise DetectionError("No vision capability configured.")
+    else:
+        try:
+            resp = await _vision_annotate(
+                client, image_req, "WEB_DETECTION", api_key, max_results=10
+            )
+            web = resp.get("webDetection", {})
+        except DetectionError as exc:
+            if gem is None:  # no fallback identity — nothing to show
+                raise
+            logger.warning("vision.web_detection_degraded", error=str(exc))
     best = web.get("bestGuessLabels", [])
     entities = [
         e["description"] for e in web.get("webEntities", []) if e.get("description")
@@ -677,9 +683,15 @@ async def run_detection(
                 raise DetectionError("Web mode needs an image URL.")
             return {"ok": True, "mode": "web", "result": {"lens_url": build_lens_link(image_url)}}
 
-        if not vision_key:
+        # Cloud Vision is ENRICHMENT, not a hard requirement: Gemini alone can
+        # identify anything (Vision only adds a landmark's precise GPS and a
+        # product's web links, and both already degrade gracefully below). So we
+        # only need SOME vision capability — that keeps identify working on a
+        # deployment with no VISION_API_KEY, or while its billing is off.
+        if not vision_key and not gemini_key:
             raise DetectionError(
-                "Vision API key is not set (add VISION_API_KEY on the server)."
+                "No vision capability configured (add GEMINI_API_KEY, and "
+                "optionally VISION_API_KEY for landmark GPS)."
             )
 
         if mode not in ("landmark", "product", "auto"):
@@ -717,13 +729,14 @@ async def run_detection(
             # LANDMARK path — explicit landmark mode, or auto when Gemini says
             # the subject is a place. Only here do we spend a LANDMARK_DETECTION.
             if mode == "landmark" or (mode == "auto" and gem_is_place):
-                try:
-                    google_lm = await detect_landmarks(
-                        client, image_req=image_req, api_key=vision_key
-                    )
-                except DetectionError as exc:
-                    logger.warning("vision.landmark_degraded", error=str(exc))
-                    google_lm = {"count": 0, "landmarks": []}
+                google_lm: dict[str, Any] = {"count": 0, "landmarks": []}
+                if vision_key:
+                    try:
+                        google_lm = await detect_landmarks(
+                            client, image_req=image_req, api_key=vision_key
+                        )
+                    except DetectionError as exc:
+                        logger.warning("vision.landmark_degraded", error=str(exc))
 
                 # 1) Google recognised a famous landmark → precise GPS + Wikipedia,
                 #    enriched with Gemini's richer description.

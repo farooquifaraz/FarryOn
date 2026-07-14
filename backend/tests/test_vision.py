@@ -431,3 +431,62 @@ async def test_gemini_falls_back_on_throttle(monkeypatch) -> None:
     )
     assert env["ok"] is True
     assert env["result"]["ai_explanation"] == "fallback ok"
+
+
+def _gem_product_handler(gem_json: str):
+    """Every Cloud Vision call 403s (billing off); Gemini identifies fine."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "vision.googleapis.com" in url:
+            return httpx.Response(
+                403,
+                json={"error": {"message": "This API method requires billing "
+                                           "to be enabled."}},
+            )
+        if "generativelanguage.googleapis.com" in url:
+            return httpx.Response(
+                200,
+                json={"candidates": [{"content": {"parts": [{"text": gem_json}]}}]},
+            )
+        return httpx.Response(404, json={})
+
+    return handle
+
+
+async def test_cloud_vision_403_falls_back_to_gemini(monkeypatch) -> None:
+    """Cloud Vision billing off (403) must NOT sink the scan: Gemini still
+    identifies the product and we return a full card + marketplace links."""
+    gem_json = json.dumps({
+        "kind": "product",
+        "name": "Yellow Soccer Ball",
+        "description": "A size-5 football.",
+        "where": None,
+        "details": ["round", "yellow and white"],
+    })
+    _install_handler(monkeypatch, _gem_product_handler(gem_json))
+    env = await vision.run_detection(
+        "auto", settings=_settings(), image_data=_tiny_jpeg_b64()
+    )
+    assert env["ok"] is True
+    assert env["mode"] == "product"
+    assert env["result"]["product_name"] == "Yellow Soccer Ball"
+    assert any(m["region"] == "Gulf" for m in env["result"]["marketplaces"])
+
+
+async def test_gemini_only_no_vision_key_still_identifies(monkeypatch) -> None:
+    """With no Cloud Vision key at all, a product is still identified via
+    Gemini — Vision is enrichment, not a hard requirement."""
+    gem_json = json.dumps({
+        "kind": "product", "name": "Wireless Mouse",
+        "description": "A mouse.", "where": None, "details": ["bluetooth"],
+    })
+    _install_handler(monkeypatch, _gem_product_handler(gem_json))
+    env = await vision.run_detection(
+        "auto",
+        settings=Settings(_env_file=None, vision_api_key=None, gemini_api_key="gk"),
+        image_data=_tiny_jpeg_b64(),
+    )
+    assert env["ok"] is True
+    assert env["mode"] == "product"
+    assert env["result"]["product_name"] == "Wireless Mouse"
