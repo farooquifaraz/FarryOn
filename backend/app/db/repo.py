@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
     Contact,
+    DailyUsage,
     Note,
     OutboundMessage,
     Session,
@@ -24,6 +25,37 @@ from app.db.models import (
     Transcript,
     User,
 )
+
+#: Counter columns on :class:`DailyUsage` that ``bump_daily_usage`` may touch.
+_USAGE_COUNTERS = (
+    "voice_seconds", "frames_sent", "text_turns", "web_searches", "image_scans",
+)
+
+
+async def get_daily_usage(
+    session: AsyncSession, *, user_key: str, day: str
+) -> DailyUsage | None:
+    """Return the usage row for ``(user_key, day)``, or None."""
+    return await session.get(DailyUsage, (user_key, day))
+
+
+async def bump_daily_usage(
+    session: AsyncSession, *, user_key: str, day: str, **counters: int
+) -> DailyUsage:
+    """Increment one or more daily-usage counters, creating the row if needed.
+
+    Unknown counter names are ignored. Flushed (not committed) — the caller
+    owns the transaction, as everywhere else in this module.
+    """
+    row = await session.get(DailyUsage, (user_key, day))
+    if row is None:
+        row = DailyUsage(user_key=user_key, day=day)
+        session.add(row)
+    for name, amount in counters.items():
+        if name in _USAGE_COUNTERS and amount:
+            setattr(row, name, (getattr(row, name) or 0) + int(amount))
+    await session.flush()
+    return row
 
 
 async def get_or_create_user(session: AsyncSession, external_id: str) -> User:

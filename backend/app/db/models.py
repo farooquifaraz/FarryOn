@@ -595,3 +595,26 @@ class Payment(Base):
     provider_payment_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True, unique=True
     )
+
+
+class DailyUsage(Base):
+    """Per-user, per-day usage meter for plan quotas (cost protection).
+
+    Keyed by ``(user_key, day)`` where ``user_key`` is the user id (or the
+    session id / "anonymous" when unauthenticated) and ``day`` is
+    ``YYYY-MM-DD``. Counters are incremented server-side as metered resources
+    are consumed; the quota check compares them against the plan's daily caps.
+    """
+
+    __tablename__ = "daily_usage"
+
+    user_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)  # YYYY-MM-DD
+    voice_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    frames_sent: Mapped[int] = mapped_column(Integer, default=0)
+    text_turns: Mapped[int] = mapped_column(Integer, default=0)
+    web_searches: Mapped[int] = mapped_column(Integer, default=0)
+    image_scans: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )

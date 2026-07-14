@@ -27,6 +27,7 @@ import httpx
 from app.config import get_settings
 from app.logging_conf import get_logger
 from app.tools.base import Tool, ToolContext
+from app.tools.quota import check_quota
 
 logger = get_logger(__name__)
 
@@ -68,6 +69,9 @@ class WebSearchTool(Tool):
         engines — far more accurate than a single source. Falls back to mock
         only if every provider fails.
         """
+        blocked = await check_quota(ctx, "web_searches")
+        if blocked:
+            return blocked
         query: str = kwargs["query"]
 
         # Per-session config from the client (if any) wins over server env.

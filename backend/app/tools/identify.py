@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.logging_conf import get_logger
 from app.services.vision import run_detection
 from app.tools.base import Tool, ToolContext
+from app.tools.quota import check_quota
 from app.tools.capture_feedback import capture_failure_message
 
 logger = get_logger(__name__)
@@ -71,6 +72,9 @@ class IdentifyImageTool(Tool):
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
         """Run detection on the cached camera frame and return the result."""
+        blocked = await check_quota(ctx, "image_scans")
+        if blocked:
+            return blocked
         # Only answer on a frame captured AFTER this request began. Otherwise a
         # ≤10s-old frame from a PREVIOUS question (user has since looked
         # elsewhere) passes a plain staleness check and we describe the wrong,

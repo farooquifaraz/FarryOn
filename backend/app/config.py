@@ -210,6 +210,19 @@ class Settings(BaseSettings):
     max_session_seconds: int = Field(default=1800)     # 30 min hard cap
     idle_disconnect_seconds: int = Field(default=300)  # 5 min with no audio/text
 
+    # -- Per-user daily quotas (cost protection) -------------------------------
+    # OFF by default: quotas only mean something with real per-user auth, and
+    # hard enforcement would interrupt single-user testing. Turn on for launch.
+    quota_enforcement_enabled: bool = Field(default=False)
+    default_plan: str = Field(default="free")
+    # Per-plan daily caps, enforced server-side. 0 = feature off, -1 = unlimited.
+    plan_limits: dict[str, dict[str, int]] = Field(
+        default_factory=lambda: {
+            "free": {"voice_seconds": 300, "image_scans": 3, "web_searches": 10},
+            "pro": {"voice_seconds": 900, "image_scans": -1, "web_searches": 50},
+        }
+    )
+
     # -- Tunables --------------------------------------------------------------
     tool_timeout_seconds: float = Field(default=20.0)
     # Tool results are fed back into the model's context and re-billed on every
