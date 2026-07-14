@@ -15,7 +15,7 @@ from app.tools.whatsapp import SendWhatsAppTool, mask_phone, normalize_phone
 pytestmark = pytest.mark.asyncio
 
 
-def test_normalize_phone():
+async def test_normalize_phone():  # async to match this module's asyncio mark
     assert normalize_phone("+971 50 123 4567", "971") == "971501234567"
     assert normalize_phone("0501234567", "971") == "971501234567"
     assert normalize_phone("971501234567", "971") == "971501234567"

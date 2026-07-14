@@ -352,8 +352,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 "FarryOn — I can message you here now.",
                             },
                         )
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001 - reply is best-effort
+                    logger.warning(
+                        "telegram_webhook.start_reply_failed", error=str(exc)
+                    )
         return JSONResponse({"ok": True})
 
     return app
