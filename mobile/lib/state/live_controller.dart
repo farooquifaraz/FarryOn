@@ -457,7 +457,10 @@ class LiveController {
       await _videoSource.initialize();
     }
     // Start the camera immediately so the preview is live and ~1 fps frames
-    // begin flowing.
+    // begin flowing. Record the intent so a background release or a slow
+    // reconnect can restore it (see _ensureCameraMatchesIntent).
+    _cameraDesired = true;
+    _foreground = true;
     await _startVideo();
 
     _client.start();
@@ -576,6 +579,10 @@ class LiveController {
         LogStore.instance.setProvider(msg.model ?? _config.provider);
         _log.info('session ready (model: ${msg.model ?? "?"})');
         _emit(_state.copyWith(clearError: true));
+        // A slow connect can land after the user already came back to the
+        // foreground, leaving the camera released with nothing to restore it.
+        // Now that we're connected, put it back if it should be on.
+        unawaited(_ensureCameraMatchesIntent());
       case TranscriptMessage():
         _applyTranscript(msg);
       case AudioStartEvent():
@@ -982,12 +989,15 @@ class LiveController {
           'contactId': id,
           'displayName': c.displayName,
           'maskedNumber': _maskPhone(clean),
+          // The real number, for EVERY channel — not just telegram. Telegram
+          // dials it server-side from the user's own account, and including it
+          // everywhere is what lets a contact resolved for ONE app be reused on
+          // another without re-resolving (a resolve per channel mints different
+          // ids, and the telegram send then has no number for the id the user
+          // picked). It only ever reaches the user's own backend, held in
+          // memory for the session.
+          'phone': '+$clean',
         };
-        // Telegram sends from the user's OWN account server-side, so it needs
-        // the real number (WhatsApp/SMS stay masked — they open on-device).
-        if (req.channel == 'telegram') {
-          cand['phone'] = '+$clean';
-        }
         candidates.add(cand);
       }
       if (candidates.isEmpty) {
@@ -1282,6 +1292,7 @@ class LiveController {
 
   /// Enable/disable the camera stream at runtime.
   Future<void> setCameraEnabled(bool enabled) async {
+    _cameraDesired = enabled;  // the user's intent, kept across reconnects
     if (enabled == _state.cameraOn) return;
     if (enabled) {
       await _startVideo();
@@ -1292,7 +1303,32 @@ class LiveController {
 
   // ---- App lifecycle (background/foreground) -----------------------------
 
-  bool _cameraWasOn = false;
+  /// Whether the USER wants the camera on. Survives a background release and a
+  /// slow reconnect, so we can tell "the OS took it, put it back" apart from
+  /// "the user turned it off, leave it off".
+  bool _cameraDesired = false;
+
+  /// Whether the app is in the foreground. The camera can only be (re)opened
+  /// while it is, so reconciliation waits for this.
+  bool _foreground = true;
+
+  /// Re-open the camera when it SHOULD be on but isn't — e.g. it was released
+  /// on a background and we are foreground + connected again.
+  ///
+  /// Called from BOTH the foreground event and session-ready, because a slow
+  /// connect can finish AFTER the user has already returned: the foreground
+  /// handler then ran too early (still connecting) and couldn't restart it, and
+  /// nothing else would. That left the camera dead with the preview seemingly
+  /// up, and every scan answering "I can't see a current camera frame"
+  /// (on-device 2026-07-03: a ~70 s connect). Idempotent.
+  Future<void> _ensureCameraMatchesIntent() async {
+    if (_cameraDesired &&
+        _foreground &&
+        _state.connection == ConnectionStatus.connected &&
+        !_state.cameraOn) {
+      await _startVideo();
+    }
+  }
 
   /// App went to the background: the OS invalidates the camera, so fully
   /// release it (a frozen dead controller is exactly the "camera stuck" hang).
@@ -1305,7 +1341,7 @@ class LiveController {
   /// answered "couldn't get a fresh look" despite a perfect capture.
   Future<void> handleAppBackground() async {
     if (_videoSource is GlassesCaptureSource) return;
-    _cameraWasOn = _state.cameraOn;
+    _foreground = false;
     if (_state.cameraOn) {
       await _stopVideo();
       await _videoSource.releaseCamera();
@@ -1313,14 +1349,12 @@ class LiveController {
     }
   }
 
-  /// App returned to the foreground: re-open the camera fresh if it was on and
-  /// the session is still connected.
+  /// App returned to the foreground: re-open the camera if the user wants it on
+  /// and the session is connected. If we're still connecting, session-ready
+  /// retries this reconciliation.
   Future<void> handleAppForeground() async {
-    if (_cameraWasOn &&
-        _state.connection == ConnectionStatus.connected &&
-        !_state.cameraOn) {
-      await _startVideo(); // re-opens a fresh controller (camera was released)
-    }
+    _foreground = true;
+    await _ensureCameraMatchesIntent();
   }
 
   /// Switch the camera preview/capture between portrait and landscape.

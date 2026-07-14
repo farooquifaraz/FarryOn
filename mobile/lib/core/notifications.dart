@@ -16,6 +16,11 @@ class Notifications {
   static final _log = Logger('Notifications');
   static final _plugin = FlutterLocalNotificationsPlugin();
   static bool _ready = false;
+  // Init is attempted exactly once per process. Without this, a failed init
+  // (e.g. a stripped icon resource) re-runs on every schedule()/cancel() and
+  // re-fires the permission dialogs each time — which backgrounds the app and
+  // churns the camera. One attempt, then we stop asking.
+  static bool _attempted = false;
 
   static const _channelId = 'farryon_reminders';
 
@@ -35,7 +40,8 @@ class Notifications {
   /// Lazily initialise the plugin, timezone DB, channel, and permissions. Safe
   /// to call repeatedly.
   static Future<void> init() async {
-    if (_ready) return;
+    if (_ready || _attempted) return;
+    _attempted = true;
     try {
       tzdata.initializeTimeZones();
       const android = AndroidInitializationSettings('ic_notification');
