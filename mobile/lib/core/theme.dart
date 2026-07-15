@@ -35,6 +35,53 @@ class Aurora {
   static Color tint(Color c, [double opacity = 0.16]) =>
       c.withValues(alpha: opacity);
 
+  // -- Auth surfaces (splash / sign-in / sign-up) --------------------------
+  // These screens run their own, brighter world: a vertical teal wash that
+  // rises to a neon glow at the bottom, instead of the near-black [base] the
+  // rest of the app sits on. It's the front door — the one place the brand
+  // gets to be loud before the app settles into being a tool.
+  static const Color neon = Color(0xFF00FFD1);
+
+  /// The auth backdrop. Six stops so the climb from near-black to neon reads
+  /// as light rising rather than a band.
+  static const LinearGradient authBackdrop = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    stops: [0.0, 0.30, 0.52, 0.68, 0.82, 1.0],
+    colors: [
+      Color(0xFF06140F),
+      Color(0xFF0A2620),
+      Color(0xFF0F3E33),
+      Color(0xFF12564A),
+      Color(0xFF1E7E68),
+      Color(0xFF34C9A6),
+    ],
+  );
+
+  /// The auth CTA fill — teal into blue, so the primary button separates
+  /// itself from a backdrop that is teal all the way down.
+  static const LinearGradient authCta = LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: [Color(0xFF00D9A6), Color(0xFF12A6E0)],
+  );
+
+  /// Ink on the auth CTA / white buttons — near-black with a green cast, so
+  /// it belongs to the palette rather than being a plain black.
+  static const Color authInk = Color(0xFF0A1F1B);
+
+  static const Color authFieldFill = Color(0x8C06140F); // ~55% of bg stop 1
+  static const Color authFieldBorder = Color(0xFF28453F);
+  static const Color authMutedFill = Color(0xA6132E29); // social button
+  static const Color authMutedBorder = Color(0xFF26443E);
+  static const Color authTextDim = Color(0xFF93B0A8);
+  static const Color authTextFaint = Color(0xFF547069);
+
+  /// Every auth button — CTA, white, social — is this tall with this radius.
+  /// One spec, so two stacked buttons can never disagree.
+  static const double authButtonHeight = 52;
+  static const double authButtonRadius = 30;
+
   // -- Gradients -----------------------------------------------------------
   // The redesign keeps every colour above but evolves flat fills into soft
   // two/three-stop gradients. `primary` fills the main CTA + mic; the category

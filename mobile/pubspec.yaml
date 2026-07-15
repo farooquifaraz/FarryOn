@@ -77,6 +77,10 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
+  assets:
+    # The brand mark, shown on the auth screens.
+    - assets/logo/embossed-mark-1024.png
+
 # App icon — the FARRYON winged-orb emblem. Source lives at the path below;
 # `dart run flutter_launcher_icons` writes the mipmaps + adaptive icon.
 flutter_launcher_icons:
