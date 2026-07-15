@@ -84,6 +84,28 @@ It is a close **approximation**, and Google's branding guidelines require their
 painter for an `Image.asset`/`SvgPicture` before release. The button's wording,
 neutral surface and layout already follow their rules.
 
+## Windows gotcha: a broken `CURL_CA_BUNDLE` breaks Google verification
+
+The PostgreSQL Windows installer sets a machine-wide
+`CURL_CA_BUNDLE=C:\Program Files\PostgreSQL\<v>\ssl\certs\ca-bundle.crt`, and
+that file often doesn't exist. `requests` — which google-auth uses to fetch
+Google's signing certs — honours that variable and dies on it, so every Google
+sign-in fails with `503 SSO_UNAVAILABLE` even though the config is correct.
+(The same variable also breaks `pip install`.)
+
+It is a machine problem, not a code one — Render never sets it. Confirm and
+clear it:
+
+```bash
+echo $CURL_CA_BUNDLE                 # points at a file that isn't there?
+ls "$CURL_CA_BUNDLE"                 # "No such file or directory" = this bug
+unset CURL_CA_BUNDLE                 # this shell only
+```
+
+To fix it for good, remove it from the Windows environment variables (System
+Properties → Environment Variables), or repoint it at a real bundle:
+`python -c "import certifi; print(certifi.where())"`.
+
 ## Verifying it works
 
 The account-linking rule (`modules/sso/service.py`) is covered by
