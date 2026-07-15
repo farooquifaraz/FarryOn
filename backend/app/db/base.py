@@ -41,10 +41,16 @@ def _ensure_engine(settings: Settings | None = None) -> AsyncEngine:
     """Create (once) and return the process-wide async engine.
 
     For SQLite (aiosqlite) we use :class:`~sqlalchemy.pool.NullPool` so each
-    operation opens and closes its own connection. This keeps the async driver
-    robust when sessions span multiple event loops/threads (e.g. Starlette's
-    threaded ``TestClient`` portal vs. the test's own loop) — a pooled
-    connection created on one loop must never be finalized on another.
+    operation opens and closes its own connection, which also suits a file DB
+    with no connection cost worth amortising.
+
+    Note the cross-loop rule that NullPool sidesteps — *a pooled connection
+    created on one event loop must never be finalized on another* — is not a
+    SQLite quirk; it binds every async driver, and asyncpg enforces it far more
+    strictly than aiosqlite. It costs nothing here because a uvicorn worker
+    lives on one loop. A process that spans loops needs NullPool on Postgres
+    too: see ``_install_unpooled_engine`` in tests/conftest.py, which is what
+    the test suite is.
     """
     global _engine, _sessionmaker
     if _engine is None:
