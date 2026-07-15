@@ -29,3 +29,19 @@
 -dontwarn com.google.android.play.core.**
 -keep class io.flutter.embedding.engine.deferredcomponents.** { *; }
 -keep class io.flutter.embedding.android.FlutterPlayStoreSplitApplication { *; }
+
+# OkHttp (pulled in transitively) compiles against three OPTIONAL TLS providers
+# — BouncyCastle, Conscrypt and OpenJSSE — and picks whichever is present at
+# runtime. We bundle none of them (the platform's TLS is used), so R8 sees the
+# references as missing classes and fails minifyRelease outright. They are only
+# ever touched behind an availability check, so suppressing the warnings is safe
+# — this is the exact rule set R8 itself emits in missing_rules.txt.
+-dontwarn org.bouncycastle.jsse.BCSSLParameters
+-dontwarn org.bouncycastle.jsse.BCSSLSocket
+-dontwarn org.bouncycastle.jsse.provider.BouncyCastleJsseProvider
+-dontwarn org.conscrypt.Conscrypt$Version
+-dontwarn org.conscrypt.Conscrypt
+-dontwarn org.conscrypt.ConscryptHostnameVerifier
+-dontwarn org.openjsse.javax.net.ssl.SSLParameters
+-dontwarn org.openjsse.javax.net.ssl.SSLSocket
+-dontwarn org.openjsse.net.ssl.OpenJSSE

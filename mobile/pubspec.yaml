@@ -33,8 +33,16 @@ dependencies:
   # Persist backend/provider settings across launches.
   shared_preferences: ^2.2.3
 
+  # Email app passwords live in the platform keystore, not plain prefs.
+  flutter_secure_storage: ^9.2.2
+
   # REST calls for the Notes/Tasks view.
   http: ^1.2.0
+
+  # "Continue with Google" on the sign-in screen. Returns an ID token that the
+  # backend verifies (POST /api/v1/auth/sso/google/mobile) — the app never sees
+  # a password and never mints its own session.
+  google_sign_in: ^6.2.1
 
   # Local notifications for reminders (fire at a task's due time).
   flutter_local_notifications: ^18.0.1
@@ -68,6 +76,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    # The brand mark, shown on the auth screens.
+    - assets/logo/embossed-mark-1024.png
 
 # App icon — the FARRYON winged-orb emblem. Source lives at the path below;
 # `dart run flutter_launcher_icons` writes the mipmaps + adaptive icon.

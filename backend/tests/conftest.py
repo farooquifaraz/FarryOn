@@ -59,6 +59,14 @@ for _key in (
     "TELEGRAM_API_ID",
     "TELEGRAM_API_HASH",
     "TELEGRAM_SESSION",
+    # SSO — the "not configured" tests assert the 503 you get with no client
+    # id, so a developer who has since set one in .env would otherwise see them
+    # fail for a reason that has nothing to do with their change. Tests that
+    # *want* Google configured set it themselves (_google_configured).
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "MICROSOFT_CLIENT_ID",
+    "MICROSOFT_CLIENT_SECRET",
 ):
     os.environ[_key] = ""
 
@@ -69,8 +77,23 @@ from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 @pytest.fixture(scope="session", autouse=True)
 def _settings_cache_reset() -> AsyncIterator[None]:
-    """Ensure cached settings reflect the test env; clean up the DB file."""
+    """Ensure cached settings reflect the test env; clean up the DB file.
+
+    Also forbids connection pooling for the whole run. This suite spans event
+    loops by design — the sync ``TestClient`` runs its own portal loop,
+    ``asyncio.run(...)`` seeding opens another, pytest-asyncio hands each async
+    test a fresh one — and a pooled async connection created on one loop and
+    finalized on another is undefined. aiosqlite tolerates it, which is why
+    nobody noticed; asyncpg refuses, and the admin suite's first meeting with a
+    real Postgres 16 killed 73 of its 74 tests.
+
+    It's a flag rather than an engine we build here because the app's lifespan
+    calls ``dispose_db()`` on every ``with TestClient(app)`` exit — an engine
+    installed once would be thrown away and silently rebuilt *pooled* after the
+    first test.
+    """
     get_settings.cache_clear()
+    db_base._force_null_pool = True
     yield
     _safe_unlink(_TMP_DB)
 

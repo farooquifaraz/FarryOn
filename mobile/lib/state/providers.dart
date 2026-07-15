@@ -7,6 +7,7 @@ import '../core/config_store.dart';
 import '../data/data_api.dart';
 import '../data/finder_api.dart';
 import '../data/live_client.dart';
+import '../features/glasses_lab/bridge/glasses_channel.dart';
 import '../playback/pcm_player.dart';
 import '../protocol/messages.dart';
 import 'live_controller.dart';
@@ -80,6 +81,7 @@ final liveControllerProvider = Provider<LiveController>((ref) {
     player: player,
     permissions: permissions,
     clientFactory: clientFactory,
+    glassesBridge: GlassesChannel.shared,
   );
   ref.onDispose(controller.dispose);
   return controller;
@@ -119,19 +121,24 @@ class LiveNotifier extends Notifier<LiveSessionState> {
   Future<void> interrupt() => _controller.interrupt();
   void sendText(String text) => _controller.sendText(text);
   Future<void> setCameraEnabled(bool on) => _controller.setCameraEnabled(on);
+  Future<void> captureGlassesPhoto() => _controller.captureGlassesPhoto();
   Future<void> setCameraPortrait(bool portrait) =>
       _controller.setCameraPortrait(portrait);
+  Future<void> setCameraFront(bool front) =>
+      _controller.setCameraFront(front);
   Future<void> setCameraZoom(double level) =>
       _controller.setCameraZoom(level);
-  Future<void> switchDevice(CaptureDeviceKind kind) =>
-      _controller.switchDevice(kind);
+  Future<void> setAudioDevice(CaptureDeviceKind kind) =>
+      _controller.setAudioDevice(kind);
+  Future<void> setVideoDevice(CaptureDeviceKind kind) =>
+      _controller.setVideoDevice(kind);
   void respondToolPermission(String id, bool granted) =>
       _controller.respondToolPermission(id, granted);
   void dismissError() => _controller.dismissError();
 
-  /// The currently active capture source (for the camera preview widget).
+  /// The current camera source (for the camera preview widget).
   CaptureSource get activeSource =>
-      ref.read(deviceRegistryProvider).active;
+      ref.read(deviceRegistryProvider).videoSource;
 }
 
 /// Primary UI entry point: the live session state + intents.

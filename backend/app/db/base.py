@@ -5,11 +5,11 @@ Uses SQLAlchemy 2.0's async ORM. The engine is created lazily from
 database. ``aiosqlite`` backs local/dev/CI; switch ``DATABASE_URL`` to an
 ``asyncpg`` URL for Postgres.
 
-Migrations: this project ships a simple :func:`init_db` / ``create_all``
-bootstrap so it runs with no migration tooling. For production schema evolution,
-introduce Alembic — point ``alembic.ini`` ``sqlalchemy.url`` at the *sync*
-driver equivalent (``postgresql://``) and target :data:`Base.metadata`. The
-``env.py`` ``target_metadata`` should be ``app.db.base.Base.metadata``.
+Migrations: dev/CI keep using :func:`init_db` / ``create_all`` (fast, no
+migration step for throwaway SQLite). Production Postgres is schema-managed by
+Alembic instead — see ``backend/alembic/`` (``alembic upgrade head``);
+``env.py`` targets this module's :data:`Base.metadata` via an async engine, so
+there's no separate sync-driver connection string to maintain.
 """
 
 from __future__ import annotations
@@ -36,15 +36,29 @@ class Base(DeclarativeBase):
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
+#: Force :class:`~sqlalchemy.pool.NullPool` on every driver, not just SQLite.
+#:
+#: A pooled async connection created on one event loop must never be finalized
+#: on another. That rule binds every async driver — it is not a SQLite quirk —
+#: but it costs nothing in production, where a uvicorn worker lives on exactly
+#: one loop. A process that *spans* loops must not pool at all, and asyncpg
+#: enforces this where aiosqlite quietly tolerates it.
+#:
+#: The test suite is such a process (sync TestClient portal loop + asyncio.run
+#: seeding + a fresh loop per async test), so tests/conftest.py sets this. It
+#: deliberately lives outside :func:`dispose_db`'s reset: the app's own lifespan
+#: disposes the engine on every ``with TestClient(app)`` exit, and the *rebuilt*
+#: engine has to stay unpooled too — otherwise the setting silently lapses after
+#: the first test, which is exactly what happened.
+_force_null_pool: bool = False
+
 
 def _ensure_engine(settings: Settings | None = None) -> AsyncEngine:
     """Create (once) and return the process-wide async engine.
 
-    For SQLite (aiosqlite) we use :class:`~sqlalchemy.pool.NullPool` so each
-    operation opens and closes its own connection. This keeps the async driver
-    robust when sessions span multiple event loops/threads (e.g. Starlette's
-    threaded ``TestClient`` portal vs. the test's own loop) — a pooled
-    connection created on one loop must never be finalized on another.
+    SQLite (aiosqlite) always uses :class:`~sqlalchemy.pool.NullPool`: a local
+    file has no connection cost worth amortising. Other drivers pool unless
+    :data:`_force_null_pool` says otherwise — see the note there.
     """
     global _engine, _sessionmaker
     if _engine is None:
@@ -52,10 +66,10 @@ def _ensure_engine(settings: Settings | None = None) -> AsyncEngine:
         is_sqlite = settings.database_url.startswith("sqlite")
         kwargs: dict[str, object] = {"echo": False, "future": True}
         if is_sqlite:
-            # ``check_same_thread`` only matters for SQLite; NullPool avoids
-            # cross-loop pooled-connection teardown hangs.
             kwargs["poolclass"] = NullPool
             kwargs["connect_args"] = {"check_same_thread": False}
+        elif _force_null_pool:
+            kwargs["poolclass"] = NullPool
         else:
             kwargs["pool_pre_ping"] = True
         _engine = create_async_engine(settings.database_url, **kwargs)

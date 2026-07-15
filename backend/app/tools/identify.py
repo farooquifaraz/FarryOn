@@ -17,13 +17,21 @@ from app.config import get_settings
 from app.logging_conf import get_logger
 from app.services.vision import run_detection
 from app.tools.base import Tool, ToolContext
+from app.tools.quota import check_quota
+from app.tools.capture_feedback import capture_failure_message
 
 logger = get_logger(__name__)
 
-#: Frames older than this are treated as no-frame — the camera was likely
-#: lowered/turned off, so identifying the last frame would answer about a stale
-#: scene. The device streams ~1 fps while the camera is on.
-_FRAME_STALE_SECONDS = 10.0
+
+def _first_landmark_maps_url(envelope: dict[str, Any]) -> str | None:
+    """Return the Google Maps link of the first landmark in a detection
+    envelope, or ``None`` if there is no landmark with a location."""
+    landmarks = (envelope.get("result") or {}).get("landmarks") or []
+    for lm in landmarks:
+        maps_url = lm.get("maps_url")
+        if maps_url:
+            return maps_url
+    return None
 
 
 class IdentifyImageTool(Tool):
@@ -64,25 +72,50 @@ class IdentifyImageTool(Tool):
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
         """Run detection on the cached camera frame and return the result."""
-        stale = (
-            ctx.last_frame_at is None
-            or (time.monotonic() - ctx.last_frame_at) > _FRAME_STALE_SECONDS
-        )
-        if not ctx.last_frame or stale:
-            return {
-                "ok": False,
-                "error": (
-                    "I can't see a current camera frame. Make sure the camera is "
-                    "on and pointed at the subject, then ask again."
-                ),
-            }
+        blocked = await check_quota(ctx, "image_scans")
+        if blocked:
+            return blocked
+        # Only answer on a frame captured AFTER this request began. Otherwise a
+        # ≤10s-old frame from a PREVIOUS question (user has since looked
+        # elsewhere) passes a plain staleness check and we describe the wrong,
+        # stale scene. The client snaps a fresh photo when it sees this tool
+        # call; we wait for THAT frame (arrival time must be >= t0).
+        t0 = time.monotonic()
+
+        def _current() -> tuple[bytes | None, float | None]:
+            # The LIVE frame, not the dispatch-time snapshot: the glasses
+            # photo lands ~5 s into the wait below, and only the orchestrator's
+            # live fields see it. Re-checking the snapshot here rejected a
+            # perfectly delivered photo (device-proven 2026-07-11).
+            if ctx.latest_frame is not None:
+                return ctx.latest_frame()
+            return (ctx.last_frame, ctx.last_frame_at)
+
+        def _fresh() -> bool:
+            frame, arrived_at = _current()
+            return frame is not None and arrived_at is not None and arrived_at >= t0
+
+        # Wait (once) for the just-triggered capture to land. Phone-camera
+        # frames stream ~1 fps so this returns almost immediately; the glasses
+        # photo takes ~4-5 s. The timeout is the session's device-appropriate
+        # default (Settings.frame_wait_seconds / glasses_frame_wait_seconds);
+        # a device-reported capture failure wakes the wait early with the
+        # precise reason.
+        if not _fresh() and ctx.wait_for_frame is not None:
+            await ctx.wait_for_frame()
+
+        if not _fresh():
+            reason = ctx.capture_error() if ctx.capture_error is not None else None
+            return {"ok": False, "error": capture_failure_message(reason)}
 
         kind = kwargs.get("kind") or "auto"
         if kind not in ("landmark", "product", "auto"):
             kind = "auto"
         question = (kwargs.get("question") or "").strip() or None
 
-        image_data = base64.b64encode(ctx.last_frame).decode("utf-8")
+        frame, _ = _current()
+        assert frame is not None  # guaranteed by the _fresh() gate above
+        image_data = base64.b64encode(frame).decode("utf-8")
         # CHANGED (UX Spec §3.3): wrap the vision call so a Vision API outage,
         # bad credentials, or quota error becomes a friendly {ok:false,error}
         # the model can speak — instead of a raw "GoogleAPIError: ..." stack
@@ -90,7 +123,7 @@ class IdentifyImageTool(Tool):
         # vision service already returns its own {ok,...} envelope on expected
         # failures; this catch is the last-resort net for the unexpected.
         try:
-            return await run_detection(
+            result = await run_detection(
                 kind,  # type: ignore[arg-type]
                 settings=get_settings(),
                 image_data=image_data,
@@ -105,3 +138,21 @@ class IdentifyImageTool(Tool):
                     "subject and try once more."
                 ),
             }
+        # For a recognised place/landmark that came with a location (a Google
+        # Maps link), offer to share it: after describing the place, the model
+        # asks if the user wants it sent to WhatsApp/Telegram, and on "yes" runs
+        # the normal send flow with the Maps link as the message.
+        if result.get("ok") and result.get("mode") == "landmark":
+            maps_url = _first_landmark_maps_url(result)
+            if maps_url:
+                result["_instruction"] = (
+                    "This place has a location. After you tell the user what "
+                    "place it is, ASK them exactly: 'Do you want to send this "
+                    "location to your WhatsApp or Telegram?' If they say yes, "
+                    "call send_whatsapp (or send_telegram if they prefer) with "
+                    "the message text set to the place name followed by its "
+                    f"Google Maps link: {maps_url} — then continue the normal "
+                    "send flow (ask who to send it to if you don't know yet). "
+                    "If they say no, just carry on."
+                )
+        return result

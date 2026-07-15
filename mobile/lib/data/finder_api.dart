@@ -114,6 +114,7 @@ class FinderDetection {
     this.landmarks = const [],
     this.product,
     this.lensUrl,
+    this.source,
   });
 
   final bool ok;
@@ -122,6 +123,11 @@ class FinderDetection {
   final List<LandmarkResult> landmarks;
   final ProductResult? product;
   final String? lensUrl;
+
+  /// Who identified the subject — e.g. "Google Vision API", "Gemini AI", or
+  /// both. Surfaced in the result card so the user knows the source (Google
+  /// Vision-identified results are credited to the Vision API). Null if unknown.
+  final String? source;
 
   bool get isLandmark => mode == 'landmark';
   bool get isProduct => mode == 'product';
@@ -146,17 +152,20 @@ class FinderDetection {
     }
     final mode = env['mode'] as String? ?? 'unknown';
     final result = (env['result'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final source = result['source'] as String?;
     switch (mode) {
       case 'landmark':
         final list = ((result['landmarks'] as List?) ?? const [])
             .map((e) => LandmarkResult.fromJson((e as Map).cast<String, dynamic>()))
             .toList(growable: false);
-        return FinderDetection(ok: true, mode: mode, landmarks: list);
+        return FinderDetection(
+            ok: true, mode: mode, landmarks: list, source: source);
       case 'product':
         return FinderDetection(
           ok: true,
           mode: mode,
           product: ProductResult.fromJson(result),
+          source: source,
         );
       case 'web':
         return FinderDetection(

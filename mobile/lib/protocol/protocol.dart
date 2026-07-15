@@ -66,6 +66,8 @@ abstract final class MsgType {
   static const String toolPermission = 'tool_permission';
   static const String locationUpdate = 'location_update';
   static const String resolveContactResult = 'resolve_contact_result';
+  static const String captureFailed = 'capture_failed';
+  static const String deviceUpdate = 'device_update';
   static const String ping = 'ping';
 
   // server → client

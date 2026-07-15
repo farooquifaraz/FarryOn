@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../data/live_client.dart';
 import '../protocol/protocol.dart';
 
@@ -71,10 +73,18 @@ class LiveSessionState {
     this.micOpen = false,
     this.cameraOn = false,
     this.cameraPortrait = true,
+    this.cameraFront = false,
     this.cameraZoom = 1.0,
     this.transcripts = const [],
     this.tools = const [],
-    this.deviceKind = 'phone',
+    this.audioKind = 'phone',
+    this.videoKind = 'phone',
+    this.glassesConnected = false,
+    this.glassesBattery,
+    this.glassesTalking = false,
+    this.glassesWorn = false,
+    this.lastCapturedPhoto,
+    this.lastCapturedAt,
     this.lastError,
     this.permissionsGranted = false,
   });
@@ -94,6 +104,10 @@ class LiveSessionState {
   /// Whether the camera preview is in portrait (`true`) or landscape.
   final bool cameraPortrait;
 
+  /// Whether the phone's FRONT (selfie) lens is active (`false` = back lens).
+  /// Only meaningful for the phone camera; glasses have a single fixed lens.
+  final bool cameraFront;
+
   /// Current camera zoom magnification (1.0 = normal). Driven by pinch, the
   /// preset chips, or the model's `set_camera_zoom` tool.
   final double cameraZoom;
@@ -104,8 +118,34 @@ class LiveSessionState {
   /// Tool activity, most-recent last.
   final List<ToolActivity> tools;
 
-  /// Active capture device kind (for the UI badge).
-  final String deviceKind;
+  /// Device supplying the microphone (for the UI badge).
+  final String audioKind;
+
+  /// Device supplying the camera (for the UI badge).
+  final String videoKind;
+
+  /// Combined label for the status badge: one name when both channels share a
+  /// device, otherwise `audio+video`.
+  String get deviceKind =>
+      audioKind == videoKind ? audioKind : '$audioKind+$videoKind';
+
+  /// Glasses link status (only meaningful when audioKind == 'glasses').
+  final bool glassesConnected;
+  final int? glassesBattery;
+
+  /// True while the user is long-pressing and glasses-mic PCM is flowing.
+  final bool glassesTalking;
+
+  /// True while the glasses are being worn (wear-to-talk auto-listen).
+  final bool glassesWorn;
+
+  /// The most recent glasses photo (raw JPEG), shown as a preview in the chat
+  /// so the user can visually confirm what was actually captured and sent for
+  /// recognition. Null until the first glasses capture.
+  final Uint8List? lastCapturedPhoto;
+
+  /// When [lastCapturedPhoto] was captured, for the preview caption.
+  final DateTime? lastCapturedAt;
 
   /// Last non-fatal error message for a transient banner, if any.
   final String? lastError;
@@ -121,10 +161,18 @@ class LiveSessionState {
     bool? micOpen,
     bool? cameraOn,
     bool? cameraPortrait,
+    bool? cameraFront,
     double? cameraZoom,
     List<TranscriptEntry>? transcripts,
     List<ToolActivity>? tools,
-    String? deviceKind,
+    String? audioKind,
+    String? videoKind,
+    bool? glassesConnected,
+    int? glassesBattery,
+    bool? glassesTalking,
+    bool? glassesWorn,
+    Uint8List? lastCapturedPhoto,
+    DateTime? lastCapturedAt,
     String? lastError,
     bool clearError = false,
     bool? permissionsGranted,
@@ -135,10 +183,18 @@ class LiveSessionState {
         micOpen: micOpen ?? this.micOpen,
         cameraOn: cameraOn ?? this.cameraOn,
         cameraPortrait: cameraPortrait ?? this.cameraPortrait,
+        cameraFront: cameraFront ?? this.cameraFront,
         cameraZoom: cameraZoom ?? this.cameraZoom,
         transcripts: transcripts ?? this.transcripts,
         tools: tools ?? this.tools,
-        deviceKind: deviceKind ?? this.deviceKind,
+        audioKind: audioKind ?? this.audioKind,
+        videoKind: videoKind ?? this.videoKind,
+        glassesConnected: glassesConnected ?? this.glassesConnected,
+        glassesBattery: glassesBattery ?? this.glassesBattery,
+        glassesTalking: glassesTalking ?? this.glassesTalking,
+        glassesWorn: glassesWorn ?? this.glassesWorn,
+        lastCapturedPhoto: lastCapturedPhoto ?? this.lastCapturedPhoto,
+        lastCapturedAt: lastCapturedAt ?? this.lastCapturedAt,
         lastError: clearError ? null : (lastError ?? this.lastError),
         permissionsGranted: permissionsGranted ?? this.permissionsGranted,
       );

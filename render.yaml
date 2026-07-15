@@ -14,8 +14,10 @@
 # Notes:
 #   * Free instances sleep after ~15 min idle; the first connection cold-starts
 #     (~30–60s). Fine for testing; use a paid plan / Postgres for anything real.
-#   * SQLite here is ephemeral (resets on redeploy). Add a Render Postgres and
-#     set DATABASE_URL=postgresql+asyncpg://... for persistence.
+#   * SQLite here is ephemeral (resets on redeploy) — which now means every
+#     deploy deletes every registered account, not just some cached rows. Add a
+#     Render Postgres and set DATABASE_URL=postgresql+asyncpg://... BEFORE real
+#     users exist. `autoDeploy` is off until then; see below.
 #   * Realtime needs a realtime/live-capable model (see values below) — standard
 #     models like gpt-4.1 / gemini-1.5-flash do NOT work with the streaming APIs.
 services:
@@ -26,7 +28,13 @@ services:
     dockerContext: backend
     plan: free
     healthCheckPath: /healthz
-    autoDeploy: true
+    # OFF until the database survives a deploy. On the free plan this service
+    # runs the ephemeral SQLite below, so every deploy drops every account —
+    # and with autoDeploy on, every *push* is a deploy. That trade was fine
+    # while nothing was stored; it stops being fine the moment one real person
+    # signs up. Deploy from the Render dashboard meanwhile ("Manual Deploy"),
+    # and turn this back on once DATABASE_URL points at a real Postgres.
+    autoDeploy: false
     envVars:
       - key: AI_PROVIDER
         value: gemini                       # server default; the app can switch

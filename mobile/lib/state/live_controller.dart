@@ -7,14 +7,17 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../capture/capture_source.dart';
 import '../capture/device_registry.dart';
+import '../capture/glasses_capture_source.dart';
 import '../core/chat_history.dart';
 import '../core/config.dart';
 import '../core/location.dart';
 import '../core/log_store.dart';
 import '../core/logger.dart';
+import '../core/media_saver.dart';
 import '../core/notifications.dart';
 import '../data/finder_api.dart';
 import '../data/live_client.dart';
+import '../features/glasses_lab/bridge/glasses_channel.dart';
 import '../playback/pcm_player.dart';
 import '../protocol/frames.dart';
 import '../protocol/messages.dart';
@@ -49,13 +52,25 @@ class LiveController {
     required WebSocketLiveClient Function(AppConfig, DeviceInfo Function())
         clientFactory,
     String? platform,
+    GlassesBridgeApi? glassesBridge,
   })  : _config = config,
         _registry = registry,
         _player = player,
         _permissions = permissions,
+        _glassesBridge = glassesBridge,
         platform = platform ?? defaultPlatform {
     _client = clientFactory(_config, _activeDeviceInfo);
     _bindClient();
+    // Push the glasses storage-retention policy to native up front. This only
+    // sets a field on the (singleton) native SDK — it does NOT need the glasses
+    // to be connected — so doing it here guarantees the policy is in place
+    // before ANY sync/download completes, regardless of how or where the
+    // glasses later connect (live session, Glasses Lab, or an auto-reconnect
+    // whose repeat 'connected' event is de-duplicated and never forwarded).
+    unawaited(
+      _glassesBridge?.setRetentionDays(_config.glassesRetentionDays) ??
+          Future<void>.value(),
+    );
   }
 
   static final _log = Logger('LiveController');
@@ -75,6 +90,22 @@ class LiveController {
   // Capture stream plumbing for the *currently active* source.
   StreamSubscription<Uint8List>? _audioSub;
   StreamSubscription<Uint8List>? _videoSub;
+  StreamSubscription<GlassesStatus>? _glassesSub;
+
+  /// Optional glasses bridge for wear-to-talk (null in unit tests). Wear-on
+  /// auto-opens the mic, wear-off pauses it — no long-press, hands-free.
+  final GlassesBridgeApi? _glassesBridge;
+  StreamSubscription<GlassesLabEvent>? _wearSub;
+  bool _glassesWorn = false;
+
+  // Auto-sync glasses media (WiFi-P2P) so photos the user snaps on the glasses
+  // reach the phone gallery — and clear off the glasses per the retention
+  // policy — WITHOUT ever tapping "Start sync". Triggered on connect and,
+  // debounced, after each photo is stored. Deferred while the assistant is
+  // speaking so the WiFi-P2P bring-up can't hiccup mid-turn.
+  Timer? _autoSyncTimer;
+  Timer? _autoSyncWatchdog;
+  bool _autoSyncing = false;
 
   // Server stream plumbing.
   StreamSubscription<ServerMessage>? _eventSub;
@@ -148,8 +179,258 @@ class LiveController {
     if (!_stateController.isClosed) _stateController.add(next);
   }
 
-  CaptureSource get _activeSource => _registry.active;
-  DeviceInfo _activeDeviceInfo() => _activeSource.info;
+  CaptureSource get _audioSource => _registry.audioSource;
+  CaptureSource get _videoSource => _registry.videoSource;
+
+  /// Wear-to-talk (B1-C): just watch for wear events — put-on opens the mic
+  /// hands-free, take-off pauses. We do NOT auto-connect the glasses on every
+  /// session (that caused 20 s connect-timeout churn when the glasses were
+  /// off, and hands-free doesn't need them). The user connects glasses
+  /// explicitly (Glasses Lab / glasses mic); wear then drives the mic if the
+  /// firmware ever reports it. No-op without a glasses bridge (unit tests).
+  Future<void> _startWearToTalk() async {
+    final bridge = _glassesBridge;
+    if (bridge == null) return;
+    try {
+      _wearSub ??= bridge.events().listen(_onGlassesEvent);
+    } catch (e) {
+      _log.warn('wear-to-talk setup failed: $e');
+    }
+  }
+
+  /// Voice tool `connect_glasses`: connect the saved glasses (asked-and-
+  /// confirmed by the model before this fires). Status lands in the banner
+  /// via the wear/connection watcher.
+  Future<void> _connectSavedGlasses() async {
+    final bridge = _glassesBridge;
+    if (bridge == null) return;
+    // Robustness: ignore a duplicate connect while one is already up/in flight
+    // (the model sometimes calls the tool twice).
+    if (_state.glassesConnected || _connectingGlasses) return;
+    _connectingGlasses = true;
+    try {
+      final info = await bridge.bridgeInfo();
+      final savedMac = info['lastMac'] as String?;
+      if (savedMac != null && savedMac.isNotEmpty) {
+        // FAST PATH: connect the saved device directly — no scan. A mid-session
+        // BLE scan holds the radio for seconds and stalls the audio we're
+        // streaming to Gemini (seen as a 1011 "deadline expired" session drop),
+        // so we avoid it in the common case. If the saved unit is actually off
+        // (two-glasses case), the watchdog below falls back to a scan.
+        _log.info('connect_glasses → $savedMac (direct)');
+        await bridge.connect(savedMac);
+        _scheduleGlassesScanFallback(bridge, savedMac);
+      } else {
+        // No saved device — we have no choice but to scan (also surfaces units
+        // paired in Android BT settings) and connect the best candidate.
+        await _scanAndConnectBest(bridge, null);
+      }
+    } catch (e) {
+      _log.warn('connect_glasses failed: $e');
+    } finally {
+      // Backstop: always clear the in-flight guard after the connect watchdog
+      // window. (It's also cleared the instant a connectionState event lands —
+      // see _onGlassesEvent.) Previously this only cleared when NOT connected,
+      // so a successful connect left the guard stuck true forever and every
+      // later reconnect — e.g. starting a second session without killing the
+      // app — was silently blocked.
+      Future<void>.delayed(const Duration(seconds: 24), () {
+        _connectingGlasses = false;
+      });
+    }
+  }
+
+  /// If the direct connect to [triedMac] hasn't landed within the connect
+  /// watchdog window, the saved unit is probably off — scan and connect
+  /// whichever glasses is actually present now.
+  void _scheduleGlassesScanFallback(GlassesBridgeApi bridge, String triedMac) {
+    Future<void>.delayed(const Duration(seconds: 12), () async {
+      if (_state.glassesConnected) return; // direct connect worked
+      _log.info('connect_glasses: $triedMac did not connect — scan fallback');
+      await _scanAndConnectBest(bridge, triedMac);
+    });
+  }
+
+  /// Scan and connect the best-available glasses: powered-on-now wins, then a
+  /// live BLE advertiser, then anything we saw. [skipMac] is the unit we just
+  /// failed to reach (avoid retrying the dead one first).
+  Future<void> _scanAndConnectBest(
+      GlassesBridgeApi bridge, String? skipMac) async {
+    final hits = await bridge.scan(timeout: const Duration(seconds: 6));
+    if (hits.isEmpty) {
+      _log.warn('connect_glasses: no glasses found — turn them on');
+      return;
+    }
+    final live = hits.where((h) => h.connected && h.mac != skipMac).toList();
+    final advertising =
+        hits.where((h) => h.rssi != 0 && h.mac != skipMac).toList();
+    final mac = live.isNotEmpty
+        ? live.first.mac
+        : advertising.isNotEmpty
+            ? advertising.first.mac
+            : hits.first.mac;
+    _log.info('connect_glasses → $mac (from scan)');
+    await bridge.connect(mac);
+  }
+
+  bool _connectingGlasses = false;
+
+  /// Tracks the last glasses connection state so the camera auto-switches only
+  /// on a real transition (connect → glasses cam, disconnect → phone cam).
+  bool _glassesWasConnected = false;
+
+  bool _lowBatteryWarned = false;
+
+  /// Announce a low glasses battery once (via Farry), re-arming after it
+  /// recovers. Visual red is handled by the banner.
+  void _maybeWarnLowBattery(int pct) {
+    if (pct > 25) _lowBatteryWarned = false;
+    if (pct >= 20 || _lowBatteryWarned) return;
+    if (_state.connection != ConnectionStatus.connected) return;
+    _lowBatteryWarned = true;
+    _log.info('glasses battery low ($pct%) — asking Farry to warn');
+    _client.send(TextMessage(
+      '(System note: the smart glasses battery is low at $pct%. Briefly warn '
+      'me out loud in one short sentence, then continue.)',
+    ));
+  }
+
+  void _onGlassesEvent(GlassesLabEvent event) {
+    switch (event.type) {
+      case 'connectionState':
+        final connected = event.data['state'] == 'connected';
+        _emit(_state.copyWith(glassesConnected: connected));
+        // The connect attempt has resolved (either way) — release the in-flight
+        // guard so a later reconnect (new session, or after a drop) can proceed.
+        _connectingGlasses = false;
+        // Push the storage-retention policy to the freshly-connected glasses so
+        // synced photos are pruned per the user's Settings choice.
+        if (connected) {
+          unawaited(
+            _glassesBridge?.setRetentionDays(_config.glassesRetentionDays) ??
+                Future<void>.value(),
+          );
+          // Pull anything already sitting on the glasses (photos taken while
+          // disconnected) shortly after the link is up.
+          _scheduleAutoGlassesSync(const Duration(seconds: 3));
+        }
+        // Auto-pick the camera on a connect/disconnect TRANSITION: glasses
+        // become the default camera the moment they connect, and it falls back
+        // to the phone camera when they drop. (setVideoDevice no-ops if already
+        // on that device, so this won't fight a matching manual choice.)
+        if (connected != _glassesWasConnected) {
+          _glassesWasConnected = connected;
+          unawaited(setVideoDevice(connected
+              ? CaptureDeviceKind.glasses
+              : CaptureDeviceKind.phone));
+        }
+      case 'battery':
+        final pct = (event.data['pct'] as num?)?.toInt();
+        if (pct != null) {
+          _emit(_state.copyWith(glassesBattery: pct));
+          _maybeWarnLowBattery(pct);
+        }
+      case 'wearState':
+        final worn = event.data['worn'] == true;
+        _emit(_state.copyWith(glassesWorn: worn));
+        if (worn == _glassesWorn) return;
+        _glassesWorn = worn;
+        _log.info('glasses ${worn ? "worn → listen" : "removed → pause"}');
+        if (_state.connection != ConnectionStatus.connected) return;
+        // Wear drives the mic only when it's the phone/earbuds (continuous);
+        // the glasses' own mic is push-to-talk and can't auto-stream.
+        if (worn) {
+          if (!_state.micOpen) unawaited(startListening());
+        } else {
+          if (_state.micOpen) unawaited(stopListening());
+        }
+      case 'deviceEvent':
+        // The firmware announces a freshly stored photo as a raw device event
+        // (`photoStored count=N`). Debounce so a burst of shots batches into a
+        // single sync instead of one WiFi bring-up per photo.
+        final hex = event.data['hex'] as String?;
+        if (hex != null && hex.startsWith('photoStored')) {
+          _scheduleAutoGlassesSync(const Duration(seconds: 8));
+        }
+      case 'syncProgress':
+        // A sync run reaching 100% (files done / nothing to sync) frees the
+        // in-flight guard so the next photo can trigger a fresh sync.
+        final pct = (event.data['pct'] as num?)?.toInt() ?? 0;
+        if (pct >= 100) {
+          _autoSyncing = false;
+          _autoSyncWatchdog?.cancel();
+        }
+    }
+  }
+
+  /// (Re)arm the debounced glasses media auto-sync. Collapses rapid triggers
+  /// (photo bursts) into one run; the actual sync fires from [_runAutoGlassesSync].
+  void _scheduleAutoGlassesSync(Duration delay) {
+    if (_glassesBridge == null) return;
+    _autoSyncTimer?.cancel();
+    _autoSyncTimer = Timer(delay, _runAutoGlassesSync);
+  }
+
+  /// Kick a WiFi-P2P media sync if the glasses are connected and we're not
+  /// already syncing. Defers while the assistant is speaking (TTS active) so a
+  /// mid-turn WiFi-P2P bring-up can't drop the audio/backend link.
+  void _runAutoGlassesSync() {
+    final bridge = _glassesBridge;
+    if (bridge == null || _autoSyncing) return;
+    if (!_state.glassesConnected) return;
+    if (_ttsActive) {
+      _scheduleAutoGlassesSync(const Duration(seconds: 5)); // try again after
+      return;
+    }
+    _autoSyncing = true;
+    // Backstop: clear the guard even if a terminal syncProgress never lands
+    // (sync stalls / glasses drop mid-run), so future photos still sync.
+    _autoSyncWatchdog?.cancel();
+    _autoSyncWatchdog = Timer(const Duration(seconds: 90), () {
+      _autoSyncing = false;
+    });
+    unawaited(bridge.startWifiSync().catchError((Object e) {
+      _log.warn('auto glasses sync failed: $e');
+      _autoSyncing = false;
+    }));
+  }
+
+  /// Mirror the glasses status into state when glasses back the mic, so the
+  /// live screen can show a connected/battery/talking banner (B1-C).
+  void _watchGlassesStatus() {
+    _glassesSub?.cancel();
+    _glassesSub = null;
+    final src = _audioSource;
+    if (src is GlassesCaptureSource) {
+      _glassesSub = src.status.listen((s) {
+        _emit(_state.copyWith(
+          glassesConnected: s.connected,
+          glassesBattery: s.battery,
+          glassesTalking: s.talking,
+        ));
+      });
+    } else {
+      _emit(_state.copyWith(glassesConnected: false, glassesTalking: false));
+    }
+  }
+
+  /// Composite `hello.device`: the mic comes from the audio source, the camera
+  /// from the video source (B1-B: they can be different devices). We advertise
+  /// the union of what each channel can actually produce.
+  DeviceInfo _activeDeviceInfo() {
+    final a = _registry.audioKind;
+    final v = _registry.videoKind;
+    final kind = a == v ? a.name : '${a.name}+${v.name}';
+    return DeviceInfo(
+      kind: kind,
+      id: a == v ? _audioSource.info.id : '${_audioSource.info.id}/${_videoSource.info.id}',
+      capabilities: [
+        if (_audioSource.capabilities.audioIn) 'audio_in',
+        if (_videoSource.capabilities.videoIn) 'video_in',
+        'audio_out',
+      ],
+    );
+  }
 
   // ---- Lifecycle ---------------------------------------------------------
 
@@ -159,7 +440,8 @@ class LiveController {
     final outcome = await _permissions.requestMicAndCamera();
     _emit(_state.copyWith(
       permissionsGranted: outcome == PermissionOutcome.granted,
-      deviceKind: _registry.activeKind.name,
+      audioKind: _registry.audioKind.name,
+      videoKind: _registry.videoKind.name,
     ));
     if (outcome != PermissionOutcome.granted) {
       _log.warn('permissions not granted: $outcome');
@@ -167,12 +449,35 @@ class LiveController {
     }
 
     await _player.initialize();
-    await _activeSource.initialize();
+    await _audioSource.initialize();
+    _watchGlassesStatus();
+    // If the camera is a different device, initialize it too (same instance is
+    // idempotent, so a double-init when both channels share a source is safe).
+    if (!identical(_videoSource, _audioSource)) {
+      await _videoSource.initialize();
+    }
     // Start the camera immediately so the preview is live and ~1 fps frames
-    // begin flowing.
+    // begin flowing. Record the intent so a background release or a slow
+    // reconnect can restore it (see _ensureCameraMatchesIntent).
+    _cameraDesired = true;
+    _foreground = true;
     await _startVideo();
 
     _client.start();
+    // Keep the mic legal + the CPU awake while the screen is off, so the user
+    // can talk to Farry hands-free without the phone in hand (Android 11+ mutes
+    // background mic capture unless a microphone foreground service is running).
+    unawaited(Future(() async {
+      try {
+        await _glassesBridge?.startMicService();
+      } catch (e) {
+        _log.warn('startMicService failed: $e');
+      }
+    }));
+    // Wear-to-talk: auto-connect the saved glasses in the background so wear
+    // events flow, then let put-on / take-off drive the mic. Best with the
+    // mic on phone/earbuds (the glasses mic is push-to-talk by hardware).
+    unawaited(_startWearToTalk());
     // Hands-free: open the mic right away so the user can just talk. In
     // TAP-TO-TALK mode we leave it closed — the user taps the mic button to
     // speak, so a noisy room / TV / the assistant's own voice can't trigger a
@@ -210,6 +515,12 @@ class LiveController {
     await _stopVideo();
     await _player.stop();
     await _client.stop();
+    // Session over — drop the mic foreground service + wake-lock.
+    try {
+      await _glassesBridge?.stopMicService();
+    } catch (e) {
+      _log.warn('stopMicService failed: $e');
+    }
     _emit(_state.copyWith(
       micOpen: false,
       cameraOn: false,
@@ -268,6 +579,10 @@ class LiveController {
         LogStore.instance.setProvider(msg.model ?? _config.provider);
         _log.info('session ready (model: ${msg.model ?? "?"})');
         _emit(_state.copyWith(clearError: true));
+        // A slow connect can land after the user already came back to the
+        // foreground, leaving the camera released with nothing to restore it.
+        // Now that we're connected, put it back if it should be on.
+        unawaited(_ensureCameraMatchesIntent());
       case TranscriptMessage():
         _applyTranscript(msg);
       case AudioStartEvent():
@@ -459,8 +774,34 @@ class LiveController {
       case 'set_camera':
         final on = msg.args['on'] as bool? ?? true;
         unawaited(setCameraEnabled(on));
+      case 'capture_photo':
+        unawaited(captureGlassesPhoto());
+      case 'identify_image':
+        // The model often reaches for identify_image on "what is this". With
+        // the glasses (photo-trigger) there's no live frame, so snap one now —
+        // the backend tool waits for it. No-op if the phone camera is active
+        // (it already streams frames).
+        unawaited(captureGlassesPhoto());
       case 'rotate_camera':
         unawaited(setCameraPortrait(!_state.cameraPortrait));
+      case 'enable_bluetooth':
+        unawaited(Future(() async {
+          try {
+            await _glassesBridge?.enableBluetooth();
+          } catch (e) {
+            _log.warn('enable_bluetooth failed: $e');
+          }
+        }));
+      case 'connect_glasses':
+        unawaited(_connectSavedGlasses());
+      case 'disconnect_glasses':
+        unawaited(Future(() async {
+          try {
+            await _glassesBridge?.disconnect();
+          } catch (e) {
+            _log.warn('disconnect_glasses failed: $e');
+          }
+        }));
       case 'end_session':
         // Let the spoken confirmation play out, then disconnect.
         Future<void>.delayed(
@@ -502,8 +843,15 @@ class LiveController {
 
     // Voice flow: surface identify_image results so the UI can show the same
     // result sheet the scan button shows. The tool returns the full
-    // {ok, mode, result} envelope as its payload.
-    if (msg.name == 'identify_image' && msg.result != null) {
+    // {ok, mode, result} envelope as its payload. FAILED results stay out of
+    // the stream: opening the Finder sheet pauses the live mic, and doing
+    // that for a "couldn't get a fresh look" error left the session mute —
+    // with the screen off the sheet is invisible and never dismissed, so the
+    // mic never came back (device-proven 2026-07-11). Farry already speaks
+    // the error; there is nothing to show.
+    if (msg.name == 'identify_image' &&
+        msg.result != null &&
+        msg.result!['ok'] == true) {
       if (!_finderController.isClosed) {
         _finderController.add(FinderDetection.fromEnvelope(msg.result!));
       }
@@ -641,12 +989,15 @@ class LiveController {
           'contactId': id,
           'displayName': c.displayName,
           'maskedNumber': _maskPhone(clean),
+          // The real number, for EVERY channel — not just telegram. Telegram
+          // dials it server-side from the user's own account, and including it
+          // everywhere is what lets a contact resolved for ONE app be reused on
+          // another without re-resolving (a resolve per channel mints different
+          // ids, and the telegram send then has no number for the id the user
+          // picked). It only ever reaches the user's own backend, held in
+          // memory for the session.
+          'phone': '+$clean',
         };
-        // Telegram sends from the user's OWN account server-side, so it needs
-        // the real number (WhatsApp/SMS stay masked — they open on-device).
-        if (req.channel == 'telegram') {
-          cand['phone'] = '+$clean';
-        }
         candidates.add(cand);
       }
       if (candidates.isEmpty) {
@@ -797,7 +1148,35 @@ class LiveController {
     // Optimistically show the user's line.
     final list = List<TranscriptEntry>.of(_state.transcripts)
       ..add(TranscriptEntry(role: 'user', text: trimmed, isFinal: true));
-    _emit(_state.copyWith(transcripts: list));
+    var next = _state.copyWith(transcripts: list);
+    // Cross-verification: when the camera is on, surface the EXACT frame the
+    // model will look at for this turn as a chat preview, so the user can
+    // confirm the answer matches what was actually captured — the diagnostic
+    // for "it answered about the wrong / an old image" (e.g. after a camera
+    // flip). Mirrors the glasses one-shot preview, but on demand for the phone
+    // camera (which streams ~1 fps and would otherwise never show a preview).
+    if (_state.cameraOn && _lastFrame != null) {
+      next = next.copyWith(
+        lastCapturedPhoto: _lastFrame,
+        lastCapturedAt: DateTime.now(),
+      );
+      _saveCaptureToGallery(_lastFrame!);
+    }
+    _emit(next);
+  }
+
+  /// Last capture written to the gallery — dedup so the same frame object isn't
+  /// saved twice (e.g. two text turns without a fresh frame in between).
+  Uint8List? _lastGallerySaved;
+
+  /// Save a capture (phone frame or glasses still) to the phone gallery. The
+  /// image the user "clicked" to identify is otherwise in-memory only. Fire and
+  /// forget — a gallery failure must never disrupt the live session.
+  void _saveCaptureToGallery(Uint8List jpeg) {
+    if (!_config.saveCapturesToGallery) return;
+    if (jpeg.isEmpty || identical(jpeg, _lastGallerySaved)) return;
+    _lastGallerySaved = jpeg;
+    unawaited(MediaSaver.saveImage(jpeg));
   }
 
   /// Respond to a tool-permission gate.
@@ -808,9 +1187,9 @@ class LiveController {
   // ---- Capture stream piping --------------------------------------------
 
   Future<void> _startAudio() async {
-    await _activeSource.startAudio();
+    await _audioSource.startAudio();
     await _audioSub?.cancel();
-    _audioSub = _activeSource.audio16k.listen((pcm) {
+    _audioSub = _audioSource.audio16k.listen((pcm) {
       // Half-duplex: never feed the mic while the assistant's TTS is still
       // playing out (covers the player's buffer drain after audio_end), so
       // automatic VAD can't re-trigger on its own voice.
@@ -822,20 +1201,41 @@ class LiveController {
   Future<void> _stopAudio() async {
     await _audioSub?.cancel();
     _audioSub = null;
-    await _activeSource.stopAudio();
+    await _audioSource.stopAudio();
   }
 
   Future<void> _startVideo() async {
-    await _activeSource.startVideo();
+    await _videoSource.startVideo();
     await _videoSub?.cancel();
-    _videoSub = _activeSource.jpegFrames.listen((jpeg) {
+    // A glasses source only emits on an explicit capture (photo-trigger), so
+    // its frames are one-shot and must always be sent. A phone camera streams
+    // ~1 fps continuously — those we drop while the assistant speaks.
+    final oneShotCamera = _videoSource is GlassesCaptureSource;
+    _videoSub = _videoSource.jpegFrames.listen((jpeg) {
       // Always keep the freshest frame for the scan button / identify_image,
       // even while the assistant is speaking.
       _lastFrame = jpeg;
-      // Don't feed frames while the assistant is speaking: they can't influence
-      // the in-flight reply and would only pile up in the realtime model's
-      // context, slowing later turns. Frames resume the moment TTS drains.
-      if (_ttsActive) return;
+      // Glasses photos are one-shots: surface each captured frame as a chat
+      // preview so the user can see EXACTLY what was sent for recognition
+      // (confirms the photo matches where the glasses point — the diagnostic
+      // for "it described the wrong scene"). Phone frames stream ~1 fps, so we
+      // don't spam the preview with those.
+      if (oneShotCamera) {
+        _emit(_state.copyWith(
+          lastCapturedPhoto: jpeg,
+          lastCapturedAt: DateTime.now(),
+        ));
+        // A glasses still is a deliberate capture — save it to the gallery so
+        // it isn't lost when the glasses' own storage is later cleared.
+        _saveCaptureToGallery(jpeg);
+      }
+      // Don't feed CONTINUOUS frames while the assistant is speaking: they
+      // can't influence the in-flight reply and would only pile up in the
+      // realtime model's context. But a glasses photo is a one-shot the model
+      // explicitly requested — it MUST reach the model even mid-speech, else a
+      // "take a photo and tell me about it" (model narrates → TTS active) drops
+      // the frame and comes back with no information.
+      if (_ttsActive && !oneShotCamera) return;
       _client.sendVideo(jpeg);
     });
     _emit(_state.copyWith(cameraOn: true));
@@ -847,12 +1247,52 @@ class LiveController {
     // Drop the cached frame so a later scan/identify can't run against a stale
     // scene from before the camera was turned off.
     _lastFrame = null;
-    await _activeSource.stopVideo();
+    await _videoSource.stopVideo();
     _emit(_state.copyWith(cameraOn: false));
+  }
+
+  /// B3: snap a still from the active glasses camera and push it into the
+  /// video pipeline (→ Gemini vision + backend last_frame). Triggered by the
+  /// `capture_photo` voice tool or the on-screen shutter button. No-op if the
+  /// selected camera isn't the glasses (the phone camera already streams).
+  ///
+  /// A failed capture is reported to the backend as a `capture_failed`
+  /// control message, so the waiting vision tool answers immediately with the
+  /// precise cause (glasses not connected / busy / transfer stalled) instead
+  /// of running out its frame timeout.
+  Future<void> captureGlassesPhoto() async {
+    final src = _videoSource;
+    if (src is! GlassesCaptureSource) {
+      _log.warn('capture_photo: active camera is not the glasses — ignoring');
+      return;
+    }
+    // Make sure the jpegFrames→sendVideo listener is attached so the photo
+    // reaches Gemini (glasses have no continuous stream to start it for us).
+    if (_videoSub == null) await _startVideo();
+    final result = await src.capturePhoto();
+    if (!result.ok) {
+      final reason = result.failure!.wire;
+      _log.warn('glasses capture failed ($reason) — reporting to backend');
+      _client.send(CaptureFailedMessage(reason: reason));
+      return;
+    }
+    // Insurance: if the frame pipe was torn down while the capture was in
+    // flight (session teardown races, legacy background handling), the
+    // listener that ships frames no longer exists — ship the photo directly
+    // so it still reaches the model. No double-send: when the listener IS
+    // attached, it does the sending and this branch is skipped.
+    final jpeg = result.jpeg;
+    if (_videoSub == null && jpeg != null) {
+      _log.warn('glasses photo arrived with no frame pipe — sending directly');
+      _lastFrame = jpeg;
+      _client.sendVideo(jpeg);
+      _saveCaptureToGallery(jpeg); // listener skipped → save it here
+    }
   }
 
   /// Enable/disable the camera stream at runtime.
   Future<void> setCameraEnabled(bool enabled) async {
+    _cameraDesired = enabled;  // the user's intent, kept across reconnects
     if (enabled == _state.cameraOn) return;
     if (enabled) {
       await _startVideo();
@@ -863,63 +1303,129 @@ class LiveController {
 
   // ---- App lifecycle (background/foreground) -----------------------------
 
-  bool _cameraWasOn = false;
+  /// Whether the USER wants the camera on. Survives a background release and a
+  /// slow reconnect, so we can tell "the OS took it, put it back" apart from
+  /// "the user turned it off, leave it off".
+  bool _cameraDesired = false;
+
+  /// Whether the app is in the foreground. The camera can only be (re)opened
+  /// while it is, so reconciliation waits for this.
+  bool _foreground = true;
+
+  /// Re-open the camera when it SHOULD be on but isn't — e.g. it was released
+  /// on a background and we are foreground + connected again.
+  ///
+  /// Called from BOTH the foreground event and session-ready, because a slow
+  /// connect can finish AFTER the user has already returned: the foreground
+  /// handler then ran too early (still connecting) and couldn't restart it, and
+  /// nothing else would. That left the camera dead with the preview seemingly
+  /// up, and every scan answering "I can't see a current camera frame"
+  /// (on-device 2026-07-03: a ~70 s connect). Idempotent.
+  Future<void> _ensureCameraMatchesIntent() async {
+    if (_cameraDesired &&
+        _foreground &&
+        _state.connection == ConnectionStatus.connected &&
+        !_state.cameraOn) {
+      await _startVideo();
+    }
+  }
 
   /// App went to the background: the OS invalidates the camera, so fully
   /// release it (a frozen dead controller is exactly the "camera stuck" hang).
+  ///
+  /// GLASSES EXCEPTION: the glasses camera is an external BLE device — the OS
+  /// does not invalidate it on background/screen-off, and tearing the pipe
+  /// down here drops a one-shot photo that lands moments later. Hit on-device
+  /// 2026-07-11: the screen turned off between the shutter and the thumbnail
+  /// (~4 s), the frame arrived with no listener attached, and the model
+  /// answered "couldn't get a fresh look" despite a perfect capture.
   Future<void> handleAppBackground() async {
-    _cameraWasOn = _state.cameraOn;
+    // Track this even for glasses, so the flag always reflects reality.
+    _foreground = false;
+    if (_videoSource is GlassesCaptureSource) return;
     if (_state.cameraOn) {
       await _stopVideo();
-      await _activeSource.releaseCamera();
+      await _videoSource.releaseCamera();
       _emit(_state.copyWith(cameraOn: false));
     }
   }
 
-  /// App returned to the foreground: re-open the camera fresh if it was on and
-  /// the session is still connected.
+  /// App returned to the foreground: re-open the camera if the user wants it on
+  /// and the session is connected. If we're still connecting, session-ready
+  /// retries this reconciliation.
   Future<void> handleAppForeground() async {
-    if (_cameraWasOn &&
-        _state.connection == ConnectionStatus.connected &&
-        !_state.cameraOn) {
-      await _startVideo(); // re-opens a fresh controller (camera was released)
-    }
+    _foreground = true;
+    await _ensureCameraMatchesIntent();
   }
 
   /// Switch the camera preview/capture between portrait and landscape.
   Future<void> setCameraPortrait(bool portrait) async {
     if (portrait == _state.cameraPortrait) return;
-    await _activeSource.setPortrait(portrait);
+    await _videoSource.setPortrait(portrait);
     _emit(_state.copyWith(cameraPortrait: portrait));
+  }
+
+  /// Flip the phone camera between the back and front (selfie) lens. No-op for
+  /// glasses (single fixed lens). Zoom resets to 1× since the new lens has its
+  /// own zoom range.
+  Future<void> setCameraFront(bool front) async {
+    if (front == _state.cameraFront) return;
+    await _videoSource.setFrontCamera(front);
+    _emit(_state.copyWith(cameraFront: front, cameraZoom: 1.0));
   }
 
   /// Zoom the camera and reflect the applied level in state (drives the UI
   /// read-out and presets). Used by pinch, the preset chips, and the model's
   /// `set_camera_zoom` tool.
   Future<void> setCameraZoom(double level) async {
-    final applied = await _activeSource.setZoom(level);
+    final applied = await _videoSource.setZoom(level);
     _emit(_state.copyWith(cameraZoom: applied));
   }
 
-  // ---- Device switching (universal adapter) -----------------------------
+  // ---- Device switching (universal adapter, B1-B: per-channel) ----------
 
-  /// Switch the active capture device (phone ⇄ glasses). Stops streams on the
-  /// old source, re-initializes the new one, and resumes video. The socket
-  /// stays up; only the media origin changes, and the next `hello` (on any
-  /// reconnect) will advertise the new device.
-  Future<void> switchDevice(CaptureDeviceKind kind) async {
-    if (kind == _registry.activeKind) return;
-    _log.info('switching device → $kind');
+  /// Select the microphone device (phone/earbuds ⇄ glasses). Restarts only the
+  /// audio stream; the camera is untouched. The socket stays up; the next
+  /// `hello` advertises the new combo.
+  Future<void> setAudioDevice(CaptureDeviceKind kind) async {
+    if (kind == _registry.audioKind) return;
+    _log.info('audio device → $kind');
     final wasListening = _state.micOpen;
     await _stopAudio();
-    await _stopVideo();
-
-    _registry.switchTo(kind);
-    await _activeSource.initialize();
-
-    await _startVideo();
+    _registry.setAudioKind(kind);
+    await _audioSource.initialize();
+    _watchGlassesStatus();
     if (wasListening) await _startAudio();
-    _emit(_state.copyWith(deviceKind: kind.name));
+    _emit(_state.copyWith(audioKind: kind.name));
+    _notifyDeviceUpdate();
+  }
+
+  /// Select the camera device (phone ⇄ glasses). Restarts only the video
+  /// stream; audio is untouched.
+  Future<void> setVideoDevice(CaptureDeviceKind kind) async {
+    if (kind == _registry.videoKind) return;
+    _log.info('video device → $kind');
+    final wasOn = _state.cameraOn;
+    await _stopVideo();
+    _registry.setVideoKind(kind);
+    await _videoSource.initialize();
+    if (wasOn) await _startVideo();
+    _emit(_state.copyWith(videoKind: kind.name));
+    // Tell the backend the camera changed so it re-picks the frame-wait
+    // budget: glasses connect AFTER hello (voice flow), so the photo-trigger
+    // camera is selected mid-session and the hello-time budget is wrong.
+    _notifyDeviceUpdate();
+  }
+
+  /// Send the backend the current audio/video device combo so it can size the
+  /// frame-wait budget correctly (photo-trigger glasses need longer than a
+  /// streaming phone camera). Sent on every device switch; no-op if the socket
+  /// is down (a fresh `hello` will carry the combo on reconnect anyway).
+  void _notifyDeviceUpdate() {
+    _client.send(DeviceUpdateMessage(
+      videoKind: _registry.videoKind.name,
+      audioKind: _registry.audioKind.name,
+    ));
   }
 
   // ---- Config / reconnect target ----------------------------------------
@@ -928,6 +1434,14 @@ class LiveController {
   void updateConfig(AppConfig config) {
     _config = config;
     _client.updateConfig(config);
+    // Apply the glasses storage-retention choice immediately. Pushed
+    // unconditionally (not gated on a live connection): it just updates a field
+    // on the native SDK, so it must land whenever the user changes the Setting —
+    // even if the glasses are currently linked only via the Glasses Lab.
+    unawaited(
+      _glassesBridge?.setRetentionDays(config.glassesRetentionDays) ??
+          Future<void>.value(),
+    );
   }
 
   AppConfig get config => _config;
@@ -941,8 +1455,12 @@ class LiveController {
     await ChatHistoryStore.saveSession(_state.transcripts);
     _ttsClear?.cancel();
     _userLogTimer?.cancel();
+    _autoSyncTimer?.cancel();
+    _autoSyncWatchdog?.cancel();
     await _audioSub?.cancel();
     await _videoSub?.cancel();
+    await _glassesSub?.cancel();
+    await _wearSub?.cancel();
     await _eventSub?.cancel();
     await _frameSub?.cancel();
     await _statusSub?.cancel();

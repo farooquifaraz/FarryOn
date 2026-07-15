@@ -19,6 +19,33 @@ from app.tools.whatsapp import mask_phone
 
 logger = get_logger(__name__)
 
+#: Most candidates to hand the model for an ambiguous match. Reading 17 names
+#: aloud is unusable — in the field the user waited ~30s while the assistant
+#: recited every "wife" in the phone book. The model gets the first few plus a
+#: count so it can say "...and N more — say the exact name".
+_MAX_OPTIONS = 6
+
+
+def _ambiguous(
+    channel: str, name: str, options: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Build a size-capped ``ambiguous`` result with a 'be specific' hint."""
+    shown, extra = options[:_MAX_OPTIONS], max(0, len(options) - _MAX_OPTIONS)
+    msg = f"There are several matches for '{name}'. Read these out and ask which one"
+    if extra:
+        msg += (
+            f" — and mention there are {extra} more, so they can say the exact name"
+        )
+    return {
+        "ok": True,
+        "status": "ambiguous",
+        "channel": channel,
+        "name": name,
+        "options": shown,
+        "more": extra,
+        "message": msg + ".",
+    }
+
 
 class ResolveContactTool(Tool):
     """Find who to message BEFORE sending — read-only, no confirmation.
@@ -97,25 +124,27 @@ class ResolveContactTool(Tool):
                     status = (res.get("status") or "").lower()
                     cands = res.get("candidates") or []
                     if status == "found" and len(cands) == 1:
+                        c0 = cands[0]
                         return {
                             "ok": True, "status": "found",
                             "channel": "telegram",
-                            "name": cands[0].get("displayName") or name,
-                            "contact_name": cands[0].get("displayName") or name,
-                            "masked_number": cands[0].get("maskedNumber"),
+                            "name": c0.get("displayName") or name,
+                            "contact_name": c0.get("displayName") or name,
+                            "masked_number": c0.get("maskedNumber"),
+                            # Hand this straight to send_telegram — the robust
+                            # handle. A name can mismatch (the device's
+                            # "Beautiful Wife🌹" vs the spoken "beautiful wife");
+                            # an id can't.
+                            "contact_id": c0.get("contactId"),
                             "via": "account",
                         }
                     if status == "ambiguous" or len(cands) > 1:
-                        return {
-                            "ok": True, "status": "ambiguous",
-                            "channel": "telegram", "name": name,
-                            "options": [
-                                {"name": c.get("displayName"),
-                                 "masked_number": c.get("maskedNumber"),
-                                 "contact_id": c.get("contactId")}
-                                for c in cands
-                            ],
-                        }
+                        return _ambiguous("telegram", name, [
+                            {"name": c.get("displayName"),
+                             "masked_number": c.get("maskedNumber"),
+                             "contact_id": c.get("contactId")}
+                            for c in cands
+                        ])
             # P2: not in the phone's contacts — search the user's OWN Telegram
             # contacts by name (someone added on Telegram but not in the phone).
             if telegram_user.is_configured(settings):
@@ -132,15 +161,11 @@ class ResolveContactTool(Tool):
                         "via": "account",
                     }
                 if len(tg) > 1:
-                    return {
-                        "ok": True, "status": "ambiguous",
-                        "channel": "telegram", "name": name,
-                        "options": [
-                            {"name": c.get("display"),
-                             "username": c.get("username")}
-                            for c in tg
-                        ],
-                    }
+                    return _ambiguous("telegram", name, [
+                        {"name": c.get("display"),
+                         "username": c.get("username")}
+                        for c in tg
+                    ])
             return {
                 "ok": True,
                 "status": "not_found",
@@ -195,20 +220,14 @@ class ResolveContactTool(Tool):
                 "source": "device",
             }
         if status == "ambiguous" or len(candidates) > 1:
-            return {
-                "ok": True,
-                "status": "ambiguous",
-                "channel": channel,
-                "name": name,
-                "options": [
-                    {
-                        "name": c.get("displayName"),
-                        "masked_number": c.get("maskedNumber"),
-                        "contact_id": c.get("contactId"),
-                    }
-                    for c in candidates
-                ],
-            }
+            return _ambiguous(channel, name, [
+                {
+                    "name": c.get("displayName"),
+                    "masked_number": c.get("maskedNumber"),
+                    "contact_id": c.get("contactId"),
+                }
+                for c in candidates
+            ])
         # not_found / no_number / permission_denied / index_unavailable
         return {
             "ok": True,

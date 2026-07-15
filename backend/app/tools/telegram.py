@@ -80,6 +80,13 @@ class SendTelegramTool(Tool):
                 "type": "string",
                 "description": "Name of a saved/resolved contact to look up.",
             },
+            "contact_id": {
+                "type": "string",
+                "description": "The contact_id of the match the user picked from "
+                "a resolve_contact result (e.g. one option out of an ambiguous "
+                "list). Pass this whenever the recipient came from that list — "
+                "no @username is needed.",
+            },
             "group": {
                 "type": "string",
                 "description": "Name or @username of a Telegram GROUP or CHANNEL "
@@ -111,8 +118,17 @@ class SendTelegramTool(Tool):
         username = (kwargs.get("username") or "").strip().lstrip("@")
         phone = (kwargs.get("phone_number") or "").strip()
         name = (kwargs.get("contact_name") or "").strip()
+        contact_id = (kwargs.get("contact_id") or "").strip()
         group = (kwargs.get("group") or "").strip()
         chat_id: str | None = None
+
+        # The user picked one match out of a resolve_contact list: turn that
+        # contact_id into the real phone (cached at resolve time) so the MTProto
+        # path below can dial it. Without this the call falls through to "I need
+        # a @username or a saved contact" — the exact dead end that made every
+        # device-contact Telegram send fail.
+        if contact_id and not phone and ctx.recall_phone_by_id:
+            phone = ctx.recall_phone_by_id(contact_id) or ""
 
         # GROUP / CHANNEL: only the user's own account (MTProto) can post to a
         # group/channel they're a member of.

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Protect resources that are referenced ONLY by a runtime string name (never as
+  R.drawable.<name>) from the release build's resource shrinker
+  (isShrinkResources = true in app/build.gradle.kts).
+
+  ic_notification is the notification small icon, passed to
+  flutter_local_notifications as the string 'ic_notification'
+  (AndroidInitializationSettings('ic_notification') and the small-icon field in
+  lib/core/notifications.dart). The shrinker cannot see that string reference,
+  marks the drawable as unused, and strips it. At runtime the plugin's
+  getIdentifier("ic_notification") then returns 0 and initialize() throws
+  "invalid_icon → resource could not be found", so Notifications._ready stays
+  false and NO reminder is ever scheduled (schedule() early-returns). Keeping it
+  here restores reminders AND stops the failed init from re-requesting
+  permissions on every call (which was backgrounding the app and churning the
+  camera).
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_notification" />

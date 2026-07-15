@@ -28,6 +28,7 @@ from collections.abc import Callable
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketState
 
 from app.agent.orchestrator import Orchestrator
@@ -48,6 +49,7 @@ from app.config import Settings
 from app.db import repo
 from app.prompts.system import build_system_prompt
 from app.db.base import get_sessionmaker
+from app.db.models import User
 from app.logging_conf import get_logger
 from app.observability import metrics
 from app.ws.frames import FrameTag, decode_frame, encode_frame
@@ -55,7 +57,6 @@ from app.ws.frames import FrameTag, decode_frame, encode_frame
 logger = get_logger(__name__)
 
 PROTOCOL_VERSION = 1
-_ANON_USER = "anonymous"
 
 
 class Session:
@@ -68,8 +69,13 @@ class Session:
         gateway_factory: Callable[[str | None, str | None], AIGateway],
         engine: ToolEngine,
         settings: Settings,
+        user_id: int | None = None,
     ) -> None:
         self._ws = websocket
+        # Who this connection belongs to, already verified from the handshake
+        # token by ws/live.py::_resolve_user_id. None = nobody signed in, which
+        # only reaches here on a local run (production rejects the connection).
+        self._authed_user_id = user_id
         # The gateway is built AFTER the handshake, once we know which provider
         # the client asked for (hello.provider) — see :meth:`_resolve_provider`.
         self._gateway_factory = gateway_factory
@@ -87,6 +93,17 @@ class Session:
         self._orchestrator: Orchestrator | None = None
         # Tracks active tool-call tasks so they are awaited/cancelled cleanly.
         self._tool_tasks: set[asyncio.Task[Any]] = set()
+        # Monotonic time the last video frame was actually forwarded to the
+        # model — drives the cost-saving frame gate (see _handle_binary).
+        self._last_video_sent: float = 0.0
+        # Frame accounting for cost visibility: how many video frames the client
+        # sent vs how many actually reached the model (the gate drops the rest).
+        self._frames_in_video: int = 0
+        self._frames_sent_video: int = 0
+        # Cost caps: session start + last real user activity (audio/text), used
+        # by the watchdog to end runaway or forgotten-open sessions.
+        self._session_started: float = time.monotonic()
+        self._last_activity: float = time.monotonic()
 
     # -- Public entrypoint ----------------------------------------------------
 
@@ -170,7 +187,17 @@ class Session:
 
             web_search = (self._hello or {}).get("webSearch")
             email = (self._hello or {}).get("email")
+            emails = (self._hello or {}).get("emails")
             location = (self._hello or {}).get("location")
+            # Vision tools wait longer for a frame on photo-trigger glasses
+            # than on a streaming phone camera (see Settings for the budgets).
+            device = (self._hello or {}).get("device")
+            device_kind = device.get("kind") if isinstance(device, dict) else None
+            frame_wait_seconds = self._frame_wait_for_kind(device_kind)
+            # Size the gateway's frame-freshness window to the camera too, so a
+            # batching adapter (OpenAI) keeps a slow glasses still instead of
+            # dropping it. No-op for streaming adapters (Gemini).
+            self._gateway.set_camera_kind(device_kind)
             self._orchestrator = Orchestrator(
                 engine=self._engine,
                 gateway=self._gateway,
@@ -180,15 +207,23 @@ class Session:
                 user_id=self._user_id,
                 web_search=web_search if isinstance(web_search, dict) else None,
                 email=email if isinstance(email, dict) else None,
+                emails=[e for e in emails if isinstance(e, dict)]
+                if isinstance(emails, list)
+                else None,
                 location=location if isinstance(location, dict) else None,
+                frame_wait_seconds=frame_wait_seconds,
             )
 
             read_task = asyncio.create_task(self._read_pump(), name="read_pump")
             event_task = asyncio.create_task(
                 self._event_pump(), name="event_pump"
             )
+            watchdog_task = asyncio.create_task(
+                self._session_watchdog(), name="watchdog"
+            )
             done, pending = await asyncio.wait(
-                {read_task, event_task}, return_when=asyncio.FIRST_COMPLETED
+                {read_task, event_task, watchdog_task},
+                return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
                 task.cancel()
@@ -292,6 +327,18 @@ class Session:
         except json.JSONDecodeError:
             return None
 
+    def _frame_wait_for_kind(self, device_kind: str | None) -> float:
+        """Frame-wait budget for a camera ``kind``.
+
+        The kind is a combo when the channels come from different devices
+        (e.g. ``"phone+glasses"`` = phone mic + glasses camera), so match by
+        substring: any glasses involvement means the camera may be the
+        photo-trigger one, which needs the longer budget.
+        """
+        if isinstance(device_kind, str) and "glasses" in device_kind:
+            return self._settings.glasses_frame_wait_seconds
+        return self._settings.frame_wait_seconds
+
     # -- Read pump (client -> gateway) ---------------------------------------
 
     async def _read_pump(self) -> None:
@@ -318,16 +365,41 @@ class Session:
         if tag == FrameTag.INPUT_AUDIO:
             metrics.FRAMES_IN.labels(kind="audio").inc()
             metrics.AUDIO_BYTES_IN.inc(len(payload))
+            self._last_activity = time.monotonic()  # real user turn (idle reset)
             await self._gateway.send_audio(payload, ts_ms=ts)
         elif tag == FrameTag.INPUT_VIDEO:
             metrics.FRAMES_IN.labels(kind="video").inc()
-            # Cache the latest frame (+ arrival time) so the identify_image tool
-            # can inspect what the camera currently sees and reject a stale frame
-            # from before the camera was lowered/turned off.
+            self._frames_in_video += 1
+            now = time.monotonic()
+            # Always cache the latest frame (+ arrival time): identify_image and
+            # the typed-turn attach read from here, and it lets us reject a
+            # stale frame from before the camera was lowered/turned off.
             if self._orchestrator is not None:
                 self._orchestrator.last_frame = payload
-                self._orchestrator.last_frame_at = time.monotonic()
-            await self._gateway.send_video(payload, ts_ms=ts)
+                self._orchestrator.last_frame_at = now
+            # Cost gate: only a fraction of the ~1 fps stream reaches the model.
+            # Every frame is re-billed on every LATER turn, so streaming them all
+            # is the biggest Live-API cost driver.
+            #
+            # EXCEPTION — a frame a tool is waiting for (capture_photo) always
+            # goes through: its result makes the model describe what it sees, so
+            # the frame must already be in the model's realtime-input queue or it
+            # answers blind (device-proven 2026-07-11: described a "grey gradient"
+            # while the glasses had captured a clear room photo).
+            awaited = (
+                self._orchestrator is not None
+                and self._orchestrator.is_awaiting_frame()
+            )
+            if awaited or self._should_forward_frame(now):
+                await self._forward_frame(
+                    payload,
+                    ts_ms=ts,
+                    reason="awaited" if awaited else self._settings.vision_frame_mode,
+                )
+            if self._orchestrator is not None:
+                # Wake any tool (capture_photo) waiting for a fresh frame — now
+                # that the frame is on its way to the model.
+                self._orchestrator.notify_new_frame()
         else:
             metrics.FRAMES_IN.labels(kind="unknown").inc()
             logger.warning("frame.unknown_tag", tag=tag)
@@ -346,10 +418,15 @@ class Session:
     async def _dispatch_control(self, message: dict[str, Any]) -> None:
         """Handle a client control message by ``type`` (``PROTOCOL.md`` §3)."""
         mtype = message.get("type")
+        self._last_activity = time.monotonic()  # any control msg = still alive
         if mtype == "text":
             text = (message.get("text") or "").strip()
             if text:
                 await self._send_state("thinking")
+                # A typed turn has no audio VAD, so give the model the current
+                # camera view for "what is this?"-style questions even when
+                # continuous streaming is gated off.
+                await self._attach_frame_if_fresh()
                 await self._gateway.send_text(text)
                 await repo_safe_transcript(self.session_id, "user", text)
         elif mtype == "audio_start":
@@ -371,6 +448,42 @@ class Session:
             if isinstance(loc, dict) and self._orchestrator is not None:
                 self._orchestrator.location = loc
                 logger.info("location.updated", session_id=self.session_id)
+        elif mtype == "device_update":
+            # The client switched its active capture device mid-session (e.g.
+            # glasses connected by voice AFTER hello and became the camera).
+            # Re-pick the frame-wait budget from the NEW camera kind, so a
+            # photo-trigger glasses capture gets the long budget it needs —
+            # without this the session kept the hello-time "phone" budget and
+            # cut off every glasses photo (device-proven 2026-07-11).
+            new_kind = message.get("videoKind")
+            if self._orchestrator is not None and isinstance(new_kind, str):
+                budget = self._frame_wait_for_kind(new_kind)
+                self._orchestrator.set_frame_wait_seconds(budget)
+                # Keep the gateway's frame-freshness window in step with the
+                # new camera (glasses connected mid-session → widen it).
+                if self._gateway is not None:
+                    self._gateway.set_camera_kind(new_kind)
+                logger.info(
+                    "device.updated",
+                    session_id=self.session_id,
+                    video_kind=new_kind,
+                    frame_wait_seconds=budget,
+                )
+        elif mtype == "capture_failed":
+            # The device could not deliver the photo a vision tool is waiting
+            # for (glasses not connected / camera busy / transfer stalled...).
+            # Wake the waiting tool NOW with the precise reason instead of
+            # letting it run out the full frame timeout.
+            reason = message.get("reason")
+            if self._orchestrator is not None:
+                self._orchestrator.notify_capture_failed(
+                    reason if isinstance(reason, str) and reason else "unknown"
+                )
+                logger.info(
+                    "capture.failed",
+                    session_id=self.session_id,
+                    reason=reason,
+                )
         elif mtype == "resolve_contact_result":
             # The device finished resolving a contact name locally (privacy-
             # preserving). Hand the masked result back to the awaiting tool.
@@ -389,6 +502,90 @@ class Session:
             pass
         else:
             logger.warning("control.unknown_type", type=mtype)
+
+    async def _session_watchdog(self) -> None:
+        """End runaway or idle sessions to bound cost.
+
+        A live session re-bills its whole history every turn, so one left open
+        (or forgotten in a pocket) keeps burning tokens. On a limit we tell the
+        client (``session_expired``) and return; run()'s FIRST_COMPLETED wait
+        then tears the session down and closes the socket, and the app
+        reconnects fresh with a cheap, empty context. Both caps are generous and
+        configurable; 0 disables one.
+        """
+        max_s = self._settings.max_session_seconds
+        idle_s = self._settings.idle_disconnect_seconds
+        if max_s <= 0 and idle_s <= 0:
+            return  # no caps → let the read/event pumps own the lifetime
+        while not self._closing:
+            await asyncio.sleep(5)
+            now = time.monotonic()
+            if max_s > 0 and now - self._session_started >= max_s:
+                await self._expire_session("max_duration")
+                return
+            if idle_s > 0 and now - self._last_activity >= idle_s:
+                await self._expire_session("idle")
+                return
+
+    async def _expire_session(self, reason: str) -> None:
+        """Tell the client why the session is ending (best-effort)."""
+        logger.info(
+            "session.expired", session_id=self.session_id, reason=reason,
+            duration_s=round(time.monotonic() - self._session_started),
+        )
+        with contextlib.suppress(Exception):
+            await self._send_json({"type": "session_expired", "reason": reason})
+
+    def _should_forward_frame(self, now: float) -> bool:
+        """Whether the cost gate lets this video frame through to the model."""
+        mode = self._settings.vision_frame_mode
+        if mode == "off":
+            return False
+        interval = (
+            self._settings.vision_frame_min_interval_s
+            if mode == "continuous"
+            else self._settings.vision_frame_heartbeat_s
+        )
+        return now - self._last_video_sent >= interval
+
+    async def _forward_frame(
+        self, jpeg: bytes, *, ts_ms: int | None = None, reason: str
+    ) -> None:
+        """Send ONE video frame to the model, counting and logging it.
+
+        The single choke-point for every frame that reaches the model, so the
+        log line below is an exact, auditable count of billed camera frames
+        (``sent`` vs ``received`` shows how much the cost gate saved).
+        """
+        self._last_video_sent = time.monotonic()
+        self._frames_sent_video += 1
+        metrics.FRAMES_SENT_TO_MODEL.inc()
+        logger.info(
+            "vision.frame_forwarded",
+            session_id=self.session_id,
+            reason=reason,  # on_turn | continuous | awaited | typed_turn
+            sent=self._frames_sent_video,
+            received=self._frames_in_video,
+            bytes=len(jpeg),
+        )
+        await self._gateway.send_video(jpeg, ts_ms=ts_ms)
+
+    async def _attach_frame_if_fresh(self) -> None:
+        """Forward the latest cached camera frame once, if it is recent.
+
+        Used at the start of a typed turn so visual questions still work when
+        continuous frame streaming is gated off (``vision_frame_mode`` !=
+        ``continuous``). Stale frames (camera lowered/off) are skipped.
+        """
+        if self._gateway is None or self._orchestrator is None:
+            return
+        frame = self._orchestrator.last_frame
+        if frame is None:
+            return
+        arrived = self._orchestrator.last_frame_at or 0.0
+        if time.monotonic() - arrived > 10.0:  # stale — camera likely off
+            return
+        await self._forward_frame(frame, reason="typed_turn")
 
     async def _handle_interrupt(self) -> None:
         """Barge-in: cancel TTS/generation and reset state to listening."""
@@ -500,12 +697,38 @@ class Session:
 
     # -- Persistence + teardown ----------------------------------------------
 
+    async def _resolve_owner(self, db: AsyncSession) -> User:
+        """Load the signed-in user, or the shared anonymous row if there is none.
+
+        Raises :class:`LookupError` if the token named a user who has since been
+        deleted — the one case where we must not quietly fall back to anonymous,
+        since that would hand a stranger's session the shared pile of data.
+        """
+        if self._authed_user_id is None:
+            return await repo.get_or_create_user(db, repo.ANON_EXTERNAL_ID)
+
+        user = await db.get(User, self._authed_user_id)
+        if user is None or user.deleted_at is not None:
+            raise LookupError(f"user {self._authed_user_id} no longer exists")
+        return user
+
     async def _persist_session_start(self) -> None:
-        """Resolve the anonymous user and record the session start row."""
+        """Resolve the session's owner and record the session start row.
+
+        The owner is whoever the handshake token named. Everything the agent
+        creates from here — notes, tasks, transcripts — is stamped with this id
+        (it reaches the tools via ``Orchestrator(user_id=...)``), so this one
+        lookup is what makes a user's data theirs.
+
+        Falls back to the shared anonymous row only when nobody is signed in,
+        which production forbids at the door (ws/live.py). A token naming a user
+        who no longer exists resolves to nothing rather than silently landing in
+        the anonymous pile.
+        """
         sessionmaker = get_sessionmaker()
         async with sessionmaker() as db:
             try:
-                user = await repo.get_or_create_user(db, _ANON_USER)
+                user = await self._resolve_owner(db)
                 self._user_id = user.id
                 client = (self._hello or {}).get("client") or {}
                 device = (self._hello or {}).get("device") or {}
@@ -533,6 +756,19 @@ class Session:
         logger.info(
             "session.closing", session_id=self.session_id, reason=reason
         )
+        # Cost summary: how many camera frames the gate saved this session.
+        if self._frames_in_video:
+            saved_pct = round(
+                100 * (1 - self._frames_sent_video / self._frames_in_video)
+            )
+            logger.info(
+                "vision.frame_summary",
+                session_id=self.session_id,
+                mode=self._settings.vision_frame_mode,
+                received=self._frames_in_video,
+                sent_to_model=self._frames_sent_video,
+                saved_pct=saved_pct,
+            )
 
         for task in list(self._tool_tasks):
             task.cancel()

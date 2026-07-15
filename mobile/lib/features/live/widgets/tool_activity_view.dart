@@ -30,7 +30,7 @@ class ToolActivityView extends StatelessWidget {
         .toList(growable: false);
     if (active.isEmpty) return const SizedBox.shrink();
     return SizedBox(
-      height: 76,
+      height: 72,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),

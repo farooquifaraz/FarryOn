@@ -14,17 +14,35 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 from sqlalchemy import text
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import Settings, get_settings
+from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
+from app.core.deps import get_data_owner
+from app.core.responses import AppError, app_error_handler
 from app.db import repo
 from app.db.base import dispose_db, get_sessionmaker, init_db
+from app.db.models import User
 from app.logging_conf import configure_logging, get_logger
+from app.modules.audit.router import router as audit_router
+from app.modules.billing.router import router as billing_router
+from app.modules.billing.router import webhook_router as billing_webhook_router
+from app.modules.auth.router import me_router as auth_me_router
+from app.modules.auth.router import router as auth_router
+from app.modules.impersonation.router import router as impersonation_router
+from app.modules.rbac.router import router as rbac_router
+from app.modules.sessions.router import admin_router as sessions_admin_router
+from app.modules.sessions.router import me_router as sessions_me_router
+from app.modules.sso.router import router as sso_router
+from app.modules.twofa.router import admin_router as twofa_admin_router
+from app.modules.twofa.router import me_router as twofa_me_router
+from app.modules.users.router import router as users_router
 from app.services.vision import run_detection
 from app.ws.live import router as ws_router
 
@@ -93,7 +111,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    # SessionMiddleware: required by authlib's Starlette OAuth client to
+    # store CSRF state between /auth/sso/{provider}/login and .../callback.
+    # Harmless when SSO is unconfigured — the routes themselves 503 before
+    # touching the session in that case (see modules/sso/router.py).
+    app.add_middleware(
+        SessionMiddleware, secret_key=settings.session_secret or settings.jwt_secret
+    )
+
+    # Hardening (admin/user module Phase 9): request-id correlation in every
+    # log line + response header, and standard security headers everywhere.
+    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
+
     app.include_router(ws_router)
+
+    # Admin/User module — additive only: new prefix, own error envelope
+    # (AppError -> app_error_handler), zero effect on any existing route.
+    app.add_exception_handler(AppError, app_error_handler)
+    app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(auth_me_router, prefix="/api/v1")
+    app.include_router(rbac_router, prefix="/api/v1")
+    app.include_router(users_router, prefix="/api/v1")
+    app.include_router(sessions_me_router, prefix="/api/v1")
+    app.include_router(sessions_admin_router, prefix="/api/v1")
+    app.include_router(twofa_me_router, prefix="/api/v1")
+    app.include_router(twofa_admin_router, prefix="/api/v1")
+    app.include_router(sso_router, prefix="/api/v1")
+    app.include_router(audit_router, prefix="/api/v1")
+    app.include_router(impersonation_router, prefix="/api/v1")
+    app.include_router(billing_router, prefix="/api/v1")
+    app.include_router(billing_webhook_router, prefix="/api/v1")
 
     @app.get("/healthz", response_class=JSONResponse, tags=["ops"])
     async def healthz() -> JSONResponse:
@@ -151,12 +199,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     # ---- Notes & tasks (read/manage what the agent created) ----------------
+    #
+    # Every one of these six is scoped to `owner` — the caller resolved from the
+    # Bearer header by core/deps.py::get_data_owner. Two rules hold across all
+    # of them, and both are load-bearing:
+    #
+    #   * Reads pass `user_id=owner.id`. Omitting it lists the whole table.
+    #   * Writes pass it too. The ids here are small integers straight off the
+    #     client, so ownership can't be inferred from "they knew the id" — a
+    #     signed-in stranger can ask for note 4. repo.delete_note & friends
+    #     answer "not found" rather than "not yours": a 403 would confirm the
+    #     row exists, which is itself a leak.
+    #
+    # The rows themselves get their owner upstream, at the live session's
+    # handshake (ws/session.py::_resolve_owner), so what the agent creates and
+    # what these endpoints return agree on who it belongs to.
 
     @app.get("/notes", tags=["data"])
-    async def list_notes_endpoint() -> JSONResponse:
-        """List saved notes (newest first) for the app's Notes view."""
+    async def list_notes_endpoint(
+        owner: User = Depends(get_data_owner),
+    ) -> JSONResponse:
+        """List the caller's saved notes (newest first) for the app's Notes view."""
         async with get_sessionmaker()() as db:
-            notes = await repo.list_notes(db, limit=200)
+            notes = await repo.list_notes(db, user_id=owner.id, limit=200)
             return JSONResponse(
                 [
                     {
@@ -169,10 +234,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
     @app.get("/tasks", tags=["data"])
-    async def list_tasks_endpoint() -> JSONResponse:
-        """List tasks (open first, then newest) for the app's Tasks view."""
+    async def list_tasks_endpoint(
+        owner: User = Depends(get_data_owner),
+    ) -> JSONResponse:
+        """List the caller's tasks (open first, then newest) for the Tasks view."""
         async with get_sessionmaker()() as db:
-            tasks = await repo.list_tasks(db, include_done=True, limit=200)
+            tasks = await repo.list_tasks(
+                db, user_id=owner.id, include_done=True, limit=200
+            )
             return JSONResponse(
                 [
                     {
@@ -188,31 +257,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/tasks/{task_id}/done", tags=["data"])
     async def set_task_done_endpoint(
-        task_id: int, done: bool = True
+        task_id: int,
+        done: bool = True,
+        owner: User = Depends(get_data_owner),
     ) -> JSONResponse:
-        """Mark a task done/undone (``?done=true|false``)."""
+        """Mark one of the caller's tasks done/undone (``?done=true|false``)."""
         async with get_sessionmaker()() as db:
-            task = await repo.set_task_done(db, task_id=task_id, done=done)
+            task = await repo.set_task_done(
+                db, task_id=task_id, done=done, user_id=owner.id
+            )
             await db.commit()
             if task is None:
                 return JSONResponse({"error": "not found"}, status_code=404)
             return JSONResponse({"id": task.id, "done": task.done})
 
     @app.delete("/notes/{note_id}", tags=["data"])
-    async def delete_note_endpoint(note_id: int) -> JSONResponse:
-        """Delete a note."""
+    async def delete_note_endpoint(
+        note_id: int, owner: User = Depends(get_data_owner)
+    ) -> JSONResponse:
+        """Delete one of the caller's notes."""
         async with get_sessionmaker()() as db:
-            ok = await repo.delete_note(db, note_id=note_id)
+            ok = await repo.delete_note(db, note_id=note_id, user_id=owner.id)
             await db.commit()
             return JSONResponse(
                 {"deleted": ok}, status_code=200 if ok else 404
             )
 
     @app.delete("/tasks/{task_id}", tags=["data"])
-    async def delete_task_endpoint(task_id: int) -> JSONResponse:
-        """Delete a task."""
+    async def delete_task_endpoint(
+        task_id: int, owner: User = Depends(get_data_owner)
+    ) -> JSONResponse:
+        """Delete one of the caller's tasks."""
         async with get_sessionmaker()() as db:
-            ok = await repo.delete_task(db, task_id=task_id)
+            ok = await repo.delete_task(db, task_id=task_id, user_id=owner.id)
             await db.commit()
             return JSONResponse(
                 {"deleted": ok}, status_code=200 if ok else 404
@@ -279,8 +356,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 "FarryOn — I can message you here now.",
                             },
                         )
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001 - reply is best-effort
+                    logger.warning(
+                        "telegram_webhook.start_reply_failed", error=str(exc)
+                    )
         return JSONResponse({"ok": True})
 
     return app

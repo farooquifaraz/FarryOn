@@ -54,7 +54,7 @@ async def test_read_emails_returns_messages(db_session, monkeypatch) -> None:
     assert captured["range_"] == "week"
 
 
-def test_gmail_query_builds_category_range_text() -> None:
+async def test_gmail_query_builds_category_range_text() -> None:  # module asyncio mark
     """The Gmail search string combines category, range and free text."""
     q = email_read._gmail_query("promotions", "week", "from:amazon")
     assert "category:promotions" in q

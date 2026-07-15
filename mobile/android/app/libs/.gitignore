@@ -1,0 +1,4 @@
+# Vendor SDK binaries are licensed and must not be committed to the repo.
+# Drop LIB_GLASSES_SDK-release_*.aar here on your dev machine (see README.md).
+*.aar
+*.jar

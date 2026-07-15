@@ -1,0 +1,7 @@
+# Golden previews render the auth screens to PNGs so the design can be
+# reviewed. Their bytes depend on the host's font rasterisation, so they are
+# NOT a regression gate — excluded from the default run, and from CI.
+#   review them with: flutter test --tags preview --update-goldens
+tags:
+  preview:
+    skip: "design previews — run with `--tags preview --update-goldens`"

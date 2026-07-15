@@ -10,6 +10,10 @@ from app.tools.base import Tool
 from app.tools.camera import SetCameraZoomTool
 from app.tools.contacts import ResolveContactTool, SaveContactTool
 from app.tools.device import (
+    CapturePhotoTool,
+    ConnectGlassesTool,
+    DisconnectGlassesTool,
+    EnableBluetoothTool,
     EndSessionTool,
     MuteMicTool,
     RotateCameraTool,
@@ -39,10 +43,13 @@ from app.tools.web_search import WebSearchTool
 
 __all__ = [
     "CompleteTaskTool",
+    "ConnectGlassesTool",
     "CreateNoteTool",
+    "DisconnectGlassesTool",
     "CreateTaskTool",
     "DeleteNoteTool",
     "DeleteTaskTool",
+    "EnableBluetoothTool",
     "EndSessionTool",
     "IdentifyImageTool",
     "ListNotesTool",
@@ -60,6 +67,7 @@ __all__ = [
     "SendTelegramTool",
     "SendWhatsAppTool",
     "SetCameraTool",
+    "CapturePhotoTool",
     "SetCameraZoomTool",
     "UpdateTaskTool",
     "WebSearchTool",
@@ -89,7 +97,11 @@ def build_default_tools() -> list[Tool]:
         DeleteNoteTool(),
         MuteMicTool(),
         SetCameraTool(),
+        CapturePhotoTool(),
         RotateCameraTool(),
+        EnableBluetoothTool(),
+        ConnectGlassesTool(),
+        DisconnectGlassesTool(),
         EndSessionTool(),
         ReadEmailsTool(),
         ReadEmailTool(),

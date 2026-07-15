@@ -8,9 +8,40 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Location: answer "where am I?" with the device's GPS position. -->
+    <!-- Location: answer "where am I?" with the device's GPS position.
+         (No maxSdkVersion cap: the GPS feature needs it on every Android
+         version; it also satisfies the legacy BLE-scan requirement on
+         Android 11 and below.) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Glasses Lab: BLE link to the L801 glasses (Android 12+ runtime pair). -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Legacy Bluetooth for Android 11 and below. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+
+    <!-- Glasses Lab: WiFi-P2P media sync from the glasses (Task 2.6a). -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+
+    <!-- Glasses Lab: keep the BLE link alive in the background (Task 2.6b). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Live session: keep the mic legal while the screen is off (Android 11+
+         blocks background mic without a microphone-type foreground service). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <!-- Reminders: post notifications + schedule exact alarms at the due time. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -28,7 +59,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
-        android:label="FarryOn"
+        android:label="Farry"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -50,6 +81,17 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Glasses Lab: BLE link survives backgrounding (Task 2.6b). -->
+        <service
+            android:name="com.farryon.farryon.glasses.GlassesForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+        <!-- Live session: keeps the mic active with the screen off. -->
+        <service
+            android:name="com.farryon.farryon.glasses.SessionMicService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- flutter_local_notifications: fire scheduled reminders + reschedule
              after a reboot. -->

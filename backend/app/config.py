@@ -70,6 +70,26 @@ class Settings(BaseSettings):
     # explanation, so no separate key is needed for that.
     vision_api_key: str | None = Field(default=None)
 
+    # -- Live vision frame forwarding (cost control) ---------------------------
+    # Camera frames are the single biggest Gemini Live cost driver (the model
+    # re-bills the whole session history every turn, so streaming ~1 frame/sec
+    # snowballs). This gate decides how many of those frames actually reach the
+    # model. Vision still works in every mode — `identify_image` always reads
+    # the latest cached frame, and typed turns attach a fresh frame.
+    #   "continuous" — forward frames, throttled to vision_frame_min_interval_s
+    #   "on_turn"    — forward at most one frame per vision_frame_heartbeat_s
+    #                  (a low-rate heartbeat that keeps voice vision current)
+    #   "off"        — never stream; frames are cached for identify_image only
+    vision_frame_mode: Literal["continuous", "on_turn", "off"] = Field(
+        default="on_turn"
+    )
+    # Minimum seconds between two frames forwarded in "continuous" mode.
+    vision_frame_min_interval_s: float = Field(default=2.0)
+    # Minimum seconds between two frames forwarded in "on_turn" mode — larger,
+    # since voice turns can't be detected server-side (automatic VAD lives in
+    # the provider), so a slow heartbeat keeps a recent frame available.
+    vision_frame_heartbeat_s: float = Field(default=6.0)
+
     # -- Web search tool -------------------------------------------------------
     web_search_api_key: str | None = Field(default=None)
     web_search_provider: str = Field(
@@ -107,19 +127,147 @@ class Settings(BaseSettings):
     # -- Security / HTTP -------------------------------------------------------
     jwt_secret: str = Field(
         default="dev-insecure-change-me",
-        description="HMAC secret for verifying the ?token= JWT on /ws/live. "
-        "Auth is best-effort in dev and skipped when left at the default.",
+        description="HMAC secret for signing/verifying JWTs: the ?token= "
+        "handshake on /ws/live, and (from the admin/user module onward) "
+        "access + refresh tokens issued by /auth/*. Auth is best-effort on "
+        "/ws/live and skipped when left at the default; the admin/user "
+        "module MUST NOT be exposed with the default secret in production.",
     )
     allowed_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["*"],
         description="CORS allow-list. Comma-separated in the environment.",
     )
 
+    # -- Admin/User module: auth tokens -----------------------------------
+    access_token_expire_minutes: int = Field(
+        default=15,
+        description="Admin/User-module JWT access token lifetime.",
+    )
+    refresh_token_expire_days: int = Field(
+        default=30,
+        description="Admin/User-module refresh token lifetime.",
+    )
+
+    # -- Admin/User module: seed (first super_admin, env-driven) ----------
+    first_super_admin_email: str | None = Field(
+        default=None,
+        description="If set (with the password below), the seed script "
+        "creates/promotes this account to super_admin. Unset in production "
+        "after the first successful seed run.",
+    )
+    first_super_admin_password: str | None = Field(default=None)
+
+    # -- Admin/User module: SSO (Google / Microsoft OIDC) ------------------
+    # Unset by default — /auth/sso/{provider}/* returns 503 SSO_NOT_CONFIGURED
+    # until both id+secret for a given provider are set.
+    google_client_id: str | None = Field(default=None)
+    google_client_secret: str | None = Field(default=None)
+    microsoft_client_id: str | None = Field(default=None)
+    microsoft_client_secret: str | None = Field(default=None)
+    microsoft_tenant: str = Field(
+        default="common",
+        description="Azure AD tenant id, or 'common' for any Microsoft account.",
+    )
+    sso_redirect_base_url: str = Field(
+        default="http://localhost:8000",
+        description="Base URL used to build the OAuth callback redirect_uri "
+        "(must exactly match a redirect URI registered with the provider).",
+    )
+    sso_frontend_success_url: str | None = Field(
+        default=None,
+        description="If set, the callback redirects here with "
+        "?access_token=&refresh_token= instead of returning JSON — point "
+        "this at the admin/mobile app's own callback route.",
+    )
+    # Required by Starlette's SessionMiddleware, which authlib's OAuth client
+    # uses to store CSRF state between the /login redirect and /callback.
+    # Reuses jwt_secret by default so no separate secret needs managing.
+    session_secret: str | None = Field(default=None)
+
+    # -- Admin/User module: billing webhooks --------------------------------
+    # Shared secret the payment provider webhook must present in the
+    # X-Webhook-Secret header. Placeholder until a real provider is chosen —
+    # Stripe/Razorpay each have their own HMAC signature scheme, which should
+    # replace this check in modules/billing/router.py when integrating.
+    # Webhooks are rejected (503) while this is unset.
+    billing_webhook_secret: str | None = Field(default=None)
+
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)
 
+    # -- Live session cost control (P0-2) --------------------------------------
+    # Live re-bills the whole session history every turn. A sliding context
+    # window caps that: past `trigger_tokens`, only the most recent
+    # `target_tokens` are kept/re-billed. 8k of recent context is plenty for a
+    # long conversation's memory. (It also lifts the native-audio session limit.)
+    context_compression_enabled: bool = Field(default=True)
+    context_trigger_tokens: int = Field(default=16000)
+    context_target_tokens: int = Field(default=8000)
+    # Bound runaway sessions. On reaching a limit the server sends a JSON
+    # `session_expired` event and closes; the app reconnects fresh (cheap,
+    # empty context). 0 disables a cap. Defaults are generous so normal use
+    # is never cut off mid-conversation.
+    max_session_seconds: int = Field(default=1800)     # 30 min hard cap
+    idle_disconnect_seconds: int = Field(default=300)  # 5 min with no audio/text
+
+    # -- Per-user daily quotas (cost protection) -------------------------------
+    # OFF by default: quotas only mean something with real per-user auth, and
+    # hard enforcement would interrupt single-user testing. Turn on for launch.
+    quota_enforcement_enabled: bool = Field(default=False)
+    default_plan: str = Field(default="free")
+    # Per-plan daily caps, enforced server-side. 0 = feature off, -1 = unlimited.
+    plan_limits: dict[str, dict[str, int]] = Field(
+        default_factory=lambda: {
+            "free": {"voice_seconds": 300, "image_scans": 3, "web_searches": 10},
+            "pro": {"voice_seconds": 900, "image_scans": -1, "web_searches": 50},
+        }
+    )
+
     # -- Tunables --------------------------------------------------------------
     tool_timeout_seconds: float = Field(default=20.0)
+    # Tool results are fed back into the model's context and re-billed on every
+    # later turn, so an unbounded one (web_search returns tens of KB) keeps
+    # costing tokens for the rest of the session. This is a BACKSTOP for tools
+    # that don't limit themselves — it must sit ABOVE the largest deliberate
+    # per-tool limit, or it would silently clip a tool that already sized its
+    # own payload (read_email caps a full body at 4000 chars by design, and
+    # halving that would break "read me the whole email"). The client UI always
+    # receives the full, untruncated result either way. 0 disables the cap.
+    tool_result_max_chars: int = Field(default=6000)
+
+    # -- Camera capture (identify_image / capture_photo) ------------------------
+    # How long a vision tool waits for a fresh camera frame before giving up.
+    # Phone cameras stream ~1 fps, so the wait normally resolves in ~1 s and
+    # this value only caps the failure path.
+    frame_wait_seconds: float = Field(
+        default=8.0,
+        description="Max seconds a vision tool waits for a fresh camera frame "
+        "on a streaming (phone) camera.",
+    )
+    # Smart glasses are photo-trigger only: capture (~2.2-2.4 s, firmware-fixed)
+    # plus the BLE thumbnail transfer. In the Glasses Lab (no other radio use)
+    # that transfer is 3.1-4.6 s, but in a LIVE voice session the glasses' A2DP
+    # audio link (TTS out) contends for the same 2.4 GHz radio and the transfer
+    # balloons to 10-12 s typical (measured 2026-07-11). The budget must outlast
+    # that so a genuine, if slow, photo is never cut off — the success path is
+    # event-driven (the frame wakes the wait early), so a longer budget only
+    # affects the failure backstop.
+    glasses_frame_wait_seconds: float = Field(
+        default=18.0,
+        description="Max seconds a vision tool waits for a fresh camera frame "
+        "when the active camera is smart glasses (photo-trigger capture).",
+    )
+    # After a one-shot photo arrives, capture_photo pauses this long before
+    # returning its result — which is what triggers the model to generate its
+    # "describe what you see" reply. The pause lets the model's realtime-video
+    # pipeline actually ingest the just-sent frame first; without it the model
+    # answers before it has "seen" the photo and hallucinates (device-proven
+    # 2026-07-11). Only affects the one-shot glasses path, not phone streaming.
+    frame_ingest_seconds: float = Field(
+        default=1.2,
+        description="Pause after a one-shot photo arrives before returning "
+        "capture_photo, so the model ingests the frame before replying.",
+    )
 
     @field_validator("allowed_origins", "allowed_providers", mode="before")
     @classmethod

@@ -29,6 +29,17 @@ FRAMES_IN = Counter(
     "Inbound binary media frames, labelled by stream kind.",
     ["kind"],  # audio | video | unknown
 )
+FRAMES_SENT_TO_MODEL = Counter(
+    "farryon_frames_sent_to_model_total",
+    "Video frames actually forwarded to the AI model (after gating). Compare "
+    "against FRAMES_IN{kind=video} to confirm the cost-saving frame gate works.",
+)
+TOKENS_USED = Counter(
+    "farryon_tokens_used_total",
+    "Model tokens billed this process, read from the provider's usage_metadata. "
+    "Labelled by kind so input/output cost can be tracked over time.",
+    ["kind"],  # total | input | output
+)
 AUDIO_BYTES_IN = Counter(
     "farryon_audio_bytes_in_total",
     "Inbound audio payload bytes (PCM16).",
@@ -60,4 +71,21 @@ AI_ERRORS = Counter(
     "farryon_ai_errors_total",
     "Errors surfaced from the AI gateway, labelled by provider.",
     ["provider"],
+)
+
+# -- External billed vision APIs (cost tracking) -----------------------------
+# One increment == one billed unit. Watch these on /metrics to see exactly how
+# many Google Vision / Gemini calls the app makes, without the Cloud Console.
+VISION_API_CALLS = Counter(
+    "farryon_vision_api_calls_total",
+    "Google Cloud Vision images:annotate calls (1 billed unit each), "
+    "labelled by feature (LANDMARK_DETECTION | WEB_DETECTION) and outcome "
+    "(ok | error).",
+    ["feature", "outcome"],
+)
+GEMINI_API_CALLS = Counter(
+    "farryon_gemini_api_calls_total",
+    "Google Gemini generateContent calls, labelled by purpose "
+    "(identify | answer | explain) and outcome (ok | error).",
+    ["purpose", "outcome"],
 )

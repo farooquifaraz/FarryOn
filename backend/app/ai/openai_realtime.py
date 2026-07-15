@@ -20,6 +20,7 @@ import base64
 import json
 import math
 import time
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -44,7 +45,12 @@ logger = get_logger(__name__)
 _CLIENT_INPUT_RATE = 16000
 _REALTIME_INPUT_RATE = 24000
 
-#: Don't attach a camera frame older than this (camera likely lowered/off).
+#: Default freshness window for a STREAMING (phone) camera: don't attach a
+#: frame older than this, since a phone streams ~1 fps and an older cached frame
+#: means the camera was lowered/turned off. Photo-trigger smart glasses need a
+#: much larger window (they deliver a still seconds after the shutter) — that is
+#: sized per-session from ``glasses_frame_wait_seconds`` via
+#: :meth:`OpenAIRealtimeGateway.set_camera_kind`.
 _FRAME_MAX_AGE_SECONDS = 4.0
 
 
@@ -140,6 +146,23 @@ class OpenAIRealtimeGateway(AIGateway):
         # with Gemini, which streams frames continuously.
         self._latest_frame_b64: str | None = None
         self._latest_frame_at: float = 0.0
+        # How old an attached frame may be. Starts at the phone-streaming
+        # default and is widened for photo-trigger glasses via
+        # :meth:`set_camera_kind` (their still lands several seconds late).
+        self._frame_max_age = _FRAME_MAX_AGE_SECONDS
+        self._glasses_frame_max_age = settings.glasses_frame_wait_seconds
+        # True when the active camera is photo-trigger smart glasses. Glasses do
+        # NOT stream, so we must NOT auto-attach the cached frame on a turn:
+        # doing so replays a STALE frame (e.g. the last phone frame before the
+        # switch, or an old glasses shot) and the model describes the wrong/old
+        # scene instead of taking a fresh photo. In glasses mode all vision goes
+        # through the explicit capture_photo / identify_image tool (server-side
+        # vision on the exact JPEG), which also reports "glasses not connected".
+        self._camera_is_glasses = False
+        # Client-assigned ids of image items we've added to the conversation, so
+        # they can be purged when switching to glasses (else the model keeps
+        # "seeing" a stale streamed frame from the conversation history).
+        self._frame_item_ids: list[str] = []
         # Whether a model response is currently being generated. The GA API
         # rejects a second response.create while one is active ("Conversation
         # already has an active response in progress"), which happened when our
@@ -151,6 +174,48 @@ class OpenAIRealtimeGateway(AIGateway):
         # create_response=false / input_image, so it stays on auto-response and
         # its voice path is left exactly as-is (no regression).
         self._vision_items = self.provider == "openai"
+
+    def set_camera_kind(self, kind: str | None) -> None:
+        """Size the frame-freshness window to the active camera.
+
+        Any glasses involvement (``"glasses"``, ``"phone+glasses"``, ...) means
+        the camera may be the photo-trigger one whose still arrives several
+        seconds after capture — so we widen the window to the glasses frame-wait
+        budget. A phone-only camera keeps the short streaming default so a stale
+        frame from a lowered camera is never attached. Mirrors the session's own
+        phone-vs-glasses frame-wait selection.
+        """
+        is_glasses = isinstance(kind, str) and "glasses" in kind
+        self._frame_max_age = (
+            self._glasses_frame_max_age if is_glasses else _FRAME_MAX_AGE_SECONDS
+        )
+        became_glasses = is_glasses and not self._camera_is_glasses
+        self._camera_is_glasses = is_glasses
+        # Switching TO glasses: purge any streamed frame (cache + the image items
+        # already in the conversation) so the model can't answer from a stale
+        # phone frame — it must take a fresh glasses photo via the tool.
+        if became_glasses:
+            self._latest_frame_b64 = None
+            self._latest_frame_at = 0.0
+            if self._conn is not None:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self._purge_frame_items())
+                except RuntimeError:  # no running loop (e.g. pre-connect)
+                    pass
+
+    async def _purge_frame_items(self) -> None:
+        """Delete every previously-attached camera-frame item from the
+        conversation, so a stale streamed frame can't linger in the model's
+        visual context after switching to (non-streaming) glasses."""
+        if self._conn is None:
+            return
+        ids, self._frame_item_ids = self._frame_item_ids, []
+        for item_id in ids:
+            try:
+                await self._conn.conversation.item.delete(item_id=item_id)
+            except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                logger.warning("openai.purge_frame_failed", error=repr(exc))
 
     def _tool_definitions(self) -> list[dict[str, Any]]:
         """Render tools in the Realtime ``session.tools`` format."""
@@ -434,16 +499,29 @@ class OpenAIRealtimeGateway(AIGateway):
     async def _attach_latest_frame(self) -> None:
         """Add the most recent camera frame to the conversation, if fresh.
 
-        Only attaches a frame seen in the last few seconds so a stale image from
-        before the camera was lowered/turned off is never sent.
+        "Fresh" is ``self._frame_max_age`` — short for a streaming phone camera
+        (a stale image from before the camera was lowered is never sent) and
+        widened for photo-trigger glasses whose still arrives seconds late.
+
+        SKIPPED entirely for smart glasses: they don't stream, so the cached
+        frame is not "what the user is looking at now" — attaching it makes the
+        model answer about a stale scene instead of taking a fresh photo. Glasses
+        vision goes through the capture_photo / identify_image tool instead,
+        which fetches a live still (and reports "glasses not connected" on fail).
         """
+        if self._camera_is_glasses:
+            return
         if self._conn is None or not self._latest_frame_b64:
             return
-        if (time.monotonic() - self._latest_frame_at) > _FRAME_MAX_AGE_SECONDS:
+        if (time.monotonic() - self._latest_frame_at) > self._frame_max_age:
             return
+        # Client-assign the item id so we can purge it later (on a switch to
+        # glasses) — the model must not keep "seeing" a stale streamed frame.
+        item_id = uuid.uuid4().hex[:24]
         try:
             await self._conn.conversation.item.create(
                 item={
+                    "id": item_id,
                     "type": "message",
                     "role": "user",
                     "content": [
@@ -457,6 +535,7 @@ class OpenAIRealtimeGateway(AIGateway):
                     ],
                 }
             )
+            self._frame_item_ids.append(item_id)
         except Exception as exc:  # noqa: BLE001 - vision is best-effort
             logger.warning("openai.attach_frame_failed", error=repr(exc))
 

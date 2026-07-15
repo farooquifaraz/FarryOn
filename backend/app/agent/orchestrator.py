@@ -16,6 +16,7 @@ which:
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -25,6 +26,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.agent.tool_engine import ToolEngine, ToolResult
 from app.ai.base import AIGateway
 from app.ai.events import ToolCallEvent
+from app.config import get_settings
 from app.db import repo
 from app.logging_conf import get_logger
 from app.observability import metrics
@@ -50,7 +52,9 @@ class Orchestrator:
         user_id: int | None = None,
         web_search: dict[str, Any] | None = None,
         email: dict[str, Any] | None = None,
+        emails: list[dict[str, Any]] | None = None,
         location: dict[str, Any] | None = None,
+        frame_wait_seconds: float | None = None,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -62,6 +66,10 @@ class Orchestrator:
                 JSON dicts to the client for UI display.
             session_id: Owning live-session id (for audit + tool context).
             user_id: Owning user id (for tool context).
+            frame_wait_seconds: Default budget for :meth:`wait_for_frame`.
+                Chosen by the session from the device kind (glasses need a
+                longer budget than a streaming phone camera). ``None`` falls
+                back to the server settings' phone-camera value.
         """
         self._engine = engine
         self._gateway = gateway
@@ -71,6 +79,7 @@ class Orchestrator:
         self._user_id = user_id
         self._web_search = web_search
         self._email = email
+        self._emails = emails
         #: Mutable — updated in place when the client sends a ``location_update``.
         self.location = location
         #: Mutable — set to the latest INPUT_VIDEO JPEG by the session so the
@@ -78,10 +87,30 @@ class Orchestrator:
         #: with the monotonic time it arrived so stale frames can be rejected.
         self.last_frame: bytes | None = None
         self.last_frame_at: float | None = None
+        #: Budget for :meth:`wait_for_frame`. Injected by the session from the
+        #: device kind, and UPDATED LIVE via :meth:`set_frame_wait_seconds`
+        #: when the client switches its active camera (``device_update``) —
+        #: glasses connect AFTER ``hello`` in the voice flow, so a photo-
+        #: trigger camera is often selected mid-session (see
+        #: ``Settings.frame_wait_seconds`` / ``Settings.glasses_frame_wait_seconds``).
+        self._frame_wait_seconds: float = (
+            frame_wait_seconds
+            if frame_wait_seconds is not None
+            else get_settings().frame_wait_seconds
+        )
+        #: Wire reason code of the most recent device-reported capture failure
+        #: (``capture_failed`` control message). Cleared when a frame arrives,
+        #: so it always describes the CURRENT capture attempt, not a past one.
+        self.last_capture_error: str | None = None
         #: In-flight device contact-resolution requests, keyed by requestId.
         #: ``request_contact_resolution`` creates a Future here and the session
         #: resolves it when the matching ``resolve_contact_result`` arrives.
         self._pending_resolves: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        #: Futures awaiting the NEXT INPUT_VIDEO frame. The ``capture_photo``
+        #: tool (B3 glasses photo-trigger) parks here; the session resolves
+        #: them when a fresh frame lands, so the tool returns exactly when the
+        #: glasses photo is in the model's context — not before, not after.
+        self._frame_waiters: list[asyncio.Future[bool]] = []
         #: Recently device-resolved names -> contact_id, so send_whatsapp /
         #: send_message still work if a weaker model forgets to thread the
         #: contact_id back from resolve_contact (it passes just the name).
@@ -89,6 +118,10 @@ class Orchestrator:
         #: Recently device-resolved names -> real phone, for send_telegram's
         #: user-account (MTProto) path which dials the number server-side.
         self._resolved_phones: dict[str, str] = {}
+        #: contact_id -> real phone for EVERY device candidate (including the
+        #: ones in an ambiguous list), so whichever match the user picks can be
+        #: dialled by send_telegram(contact_id=...).
+        self._resolved_id_phones: dict[str, str] = {}
 
     async def request_contact_resolution(
         self, name: str, channel: str
@@ -114,16 +147,30 @@ class Orchestrator:
                 }
             )
             result = await asyncio.wait_for(future, timeout=8.0)
-            # Remember a single unambiguous match so a later send_* call can
-            # still find it by name if the model didn't pass the contact_id.
             cands = result.get("candidates") or []
+            # Cache EVERY candidate so a follow-up send works by either handle,
+            # on ANY channel, without re-resolving:
+            #   * contact_id -> phone   (send_telegram dials it server-side)
+            #   * displayName -> contact_id / phone  (so "send the same to Ahsan
+            #     Bhai on WhatsApp" works after he was picked from a Telegram
+            #     ambiguous list — a contact_id identifies a PERSON, not a
+            #     channel). The device sends the real phone for telegram.
+            for c in cands:
+                cid, ph = c.get("contactId"), c.get("phone")
+                disp = (c.get("displayName") or "").strip().lower()
+                if cid and ph:
+                    self._resolved_id_phones[cid] = ph
+                if disp and cid:
+                    self._resolved_ids[disp] = cid
+                if disp and ph:
+                    self._resolved_phones[disp] = ph
+            # A single unambiguous match is also cached under the QUERY name
+            # ("beautiful wife"), since that's the word the user actually said.
             if result.get("status") == "found" and len(cands) == 1:
                 key = name.strip().lower()
                 cid = cands[0].get("contactId")
                 if cid:
                     self._resolved_ids[key] = cid
-                # The device includes the real phone for telegram (the user's
-                # own account needs it to dial); cache it for send_telegram.
                 ph = cands[0].get("phone")
                 if ph:
                     self._resolved_phones[key] = ph
@@ -139,6 +186,72 @@ class Orchestrator:
         if future is not None and not future.done():
             future.set_result(payload)
 
+    def set_frame_wait_seconds(self, seconds: float) -> None:
+        """Update the frame-wait budget when the client switches its camera.
+
+        Called by the session on a ``device_update`` control message. Glasses
+        connect after ``hello`` in the voice flow, so the photo-trigger camera
+        (which needs the longer budget) is frequently selected mid-session.
+        """
+        self._frame_wait_seconds = seconds
+
+    async def wait_for_frame(self, timeout: float | None = None) -> bool:
+        """Block until the next INPUT_VIDEO frame arrives (or ``timeout``).
+
+        Used by the ``capture_photo``/``identify_image`` tools so a
+        voice-triggered glasses photo is in the model's context before it
+        answers. ``timeout=None`` uses the session's device-appropriate
+        default (``frame_wait_seconds`` injected at construction). Returns
+        ``True`` if a fresh frame landed, ``False`` on timeout or when the
+        device reported a capture failure (see :attr:`last_capture_error`
+        for the reason).
+        """
+        if timeout is None:
+            timeout = self._frame_wait_seconds
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[bool] = loop.create_future()
+        self._frame_waiters.append(future)
+        try:
+            return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            return False
+        finally:
+            if future in self._frame_waiters:
+                self._frame_waiters.remove(future)
+
+    def is_awaiting_frame(self) -> bool:
+        """Whether a tool (capture_photo / identify_image) is blocked on a fresh
+        frame right now.
+
+        The session's cost gate consults this: a frame someone is waiting for
+        must ALWAYS reach the model — that one-shot is the whole point of the
+        capture, and dropping it makes the model answer blind.
+        """
+        return bool(self._frame_waiters)
+
+    def notify_new_frame(self) -> None:
+        """Wake any tool awaiting a fresh frame (called by the session on an
+        incoming INPUT_VIDEO frame)."""
+        # A real frame supersedes any earlier failure report.
+        self.last_capture_error = None
+        for future in self._frame_waiters:
+            if not future.done():
+                future.set_result(True)
+
+    def notify_capture_failed(self, reason: str) -> None:
+        """Record a device-reported capture failure and wake waiting tools.
+
+        Called by the session on a ``capture_failed`` control message. Waking
+        the waiters with ``False`` lets the tool answer IMMEDIATELY with the
+        device's precise reason (glasses not connected, camera busy, transfer
+        stalled, ...) instead of leaving the user hanging for the full frame
+        timeout.
+        """
+        self.last_capture_error = reason
+        for future in self._frame_waiters:
+            if not future.done():
+                future.set_result(False)
+
     def recall_resolved(self, name: str) -> str | None:
         """Contact id from a recent device resolution of ``name``, if any."""
         return self._resolved_ids.get((name or "").strip().lower())
@@ -152,6 +265,10 @@ class Orchestrator:
         so a follow-up send_telegram by name can use it."""
         if name and phone:
             self._resolved_phones[name.strip().lower()] = phone
+
+    def recall_phone_by_id(self, contact_id: str) -> str | None:
+        """Phone for a device contact_id the user picked out of a resolve list."""
+        return self._resolved_id_phones.get(contact_id or "")
 
     async def handle_tool_call(self, event: ToolCallEvent) -> ToolResult:
         """Execute one model-requested tool call end-to-end.
@@ -188,13 +305,18 @@ class Orchestrator:
                 user_id=self._user_id,
                 web_search=self._web_search,
                 email=self._email,
+                emails=self._emails,
                 location=self.location,
                 last_frame=self.last_frame,
                 last_frame_at=self.last_frame_at,
                 resolve_contact=self.request_contact_resolution,
                 recall_resolved=self.recall_resolved,
                 recall_phone=self.recall_phone,
+                recall_phone_by_id=self.recall_phone_by_id,
                 note_phone=self.note_phone,
+                wait_for_frame=self.wait_for_frame,
+                capture_error=lambda: self.last_capture_error,
+                latest_frame=lambda: (self.last_frame, self.last_frame_at),
             )
             result = await self._engine.dispatch(event.name, event.args, ctx)
             try:
@@ -231,9 +353,25 @@ class Orchestrator:
             }
         )
 
-        # 5. Feed the result back to the model to continue the turn.
+        # 5. Feed the result back to the model to continue the turn. For
+        #    fire-and-forget device tools the model already spoke its one
+        #    acknowledgement WHEN it called the tool; if we hand back a plain
+        #    result it narrates a SECOND time (heard as a repeated response).
+        #    We must still send a result (the Live protocol requires one), so
+        #    we embed a "stay silent" instruction for these tools.
         try:
-            payload: Any = result.result if result.ok else (result.error or "error")
+            if result.ok and event.name in self._SILENT_RESULT_TOOLS:
+                payload: Any = {
+                    "applied": True,
+                    "_instruction": "Done. Do NOT speak or respond again about "
+                    "this — you already acknowledged it to the user.",
+                }
+            else:
+                payload = result.result if result.ok else (result.error or "error")
+            # The client already has the full result; the model gets a
+            # size-capped copy, since a tool result is re-billed on every turn
+            # for the rest of the session.
+            payload = self._truncate_for_model(payload)
             await self._gateway.send_tool_result(
                 event.id, event.name, payload, ok=result.ok
             )
@@ -242,7 +380,43 @@ class Orchestrator:
 
         return result
 
+    def _truncate_for_model(self, payload: Any) -> Any:
+        """Cap the size of a tool result handed back to the model.
+
+        Live re-bills the whole context each turn, so a huge web_search or
+        read_emails payload keeps costing tokens for the rest of the session.
+        Returns the payload untouched when it's small; otherwise a truncated
+        string (the client already received the full result). 0 disables.
+        """
+        limit = get_settings().tool_result_max_chars
+        if limit <= 0:
+            return payload
+        try:
+            text = (
+                payload if isinstance(payload, str)
+                else json.dumps(payload, ensure_ascii=False, default=str)
+            )
+        except Exception:  # noqa: BLE001 - fall back to a plain string form
+            text = str(payload)
+        if len(text) <= limit:
+            return payload
+        dropped = len(text) - limit
+        return text[:limit] + f"\n…[truncated {dropped} chars for brevity]"
+
     _SEND_TOOLS = {"send_whatsapp", "send_message", "send_telegram"}
+
+    # Fire-and-forget device tools: the client acts, the model already spoke
+    # once. Suppress the post-result re-narration (double voice).
+    _SILENT_RESULT_TOOLS = {
+        "mute_mic",
+        "set_camera",
+        "rotate_camera",
+        "set_camera_zoom",
+        "enable_bluetooth",
+        "connect_glasses",
+        "disconnect_glasses",
+        "end_session",
+    }
 
     async def _log_send_if_messaging(self, db, name: str, result) -> None:
         """Record a successful messaging send to the history/audit log.

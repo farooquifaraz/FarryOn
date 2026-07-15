@@ -30,6 +30,7 @@ from app.ai.events import (
 )
 from app.config import get_settings
 from app.logging_conf import get_logger
+from app.observability import metrics
 
 logger = get_logger(__name__)
 
@@ -67,6 +68,9 @@ class GeminiGateway(AIGateway):
         # replaces the live line with each cumulative emit, then finalizes).
         self._assistant_buf = ""
         self._user_buf = ""
+        # Cumulative billed tokens this session (from usage_metadata), for the
+        # cost-visibility log.
+        self._tokens_total = 0
 
     def _build_config(self) -> Any:
         """Construct the ``LiveConnectConfig`` with tools + system prompt."""
@@ -116,6 +120,25 @@ class GeminiGateway(AIGateway):
             )
         except Exception:  # noqa: BLE001 - field optional across SDK versions
             pass
+        # Cost control: cap what gets re-billed every turn. Live re-bills the
+        # WHOLE session history on each turn, so a long chat (and its piled-up
+        # audio/video tokens) snowballs. A sliding window keeps only recent
+        # context past the trigger, cutting text-input tokens sharply. Bonus:
+        # it also lifts the native-audio 15-minute session limit. Guarded like
+        # the other optional fields so an older SDK still connects.
+        s = get_settings()
+        if s.context_compression_enabled:
+            try:
+                config_kwargs["context_window_compression"] = (
+                    types.ContextWindowCompressionConfig(
+                        trigger_tokens=s.context_trigger_tokens,
+                        sliding_window=types.SlidingWindow(
+                            target_tokens=s.context_target_tokens
+                        ),
+                    )
+                )
+            except Exception:  # noqa: BLE001 - field optional across SDK versions
+                pass
         return types.LiveConnectConfig(**config_kwargs)
 
     async def connect(self) -> None:
@@ -232,7 +255,15 @@ class GeminiGateway(AIGateway):
                     await self._handle_message(message)
                 if not saw_message:
                     # An exhausted/empty turn means the upstream session ended;
-                    # stop instead of spinning on a dead receive().
+                    # stop instead of spinning on a dead receive(). Log it (this
+                    # was silent, so a mid-conversation end looked like a hang):
+                    # the queue-None below ends events(), the session closes, and
+                    # the app reconnects.
+                    logger.info(
+                        "gemini.session_ended",
+                        reason="empty_turn",
+                        tokens_total=self._tokens_total,
+                    )
                     break
         except asyncio.CancelledError:  # pragma: no cover - cancellation path
             raise
@@ -246,6 +277,13 @@ class GeminiGateway(AIGateway):
 
     async def _handle_message(self, message: Any) -> None:
         """Decode a single Gemini Live server message."""
+        # Cost visibility: the provider reports per-turn token counts in
+        # usage_metadata. Log + meter them so a session's real cost is visible
+        # and the frame/context savings can be confirmed in numbers.
+        usage = getattr(message, "usage_metadata", None)
+        if usage is not None:
+            self._record_usage(usage)
+
         server_content = getattr(message, "server_content", None)
         if server_content is not None:
             model_turn = getattr(server_content, "model_turn", None)
@@ -301,6 +339,28 @@ class GeminiGateway(AIGateway):
                         args=dict(getattr(fc, "args", {}) or {}),
                     )
                 )
+
+    def _record_usage(self, usage: Any) -> None:
+        """Meter + log token usage from a Gemini ``usage_metadata`` block."""
+        total = int(getattr(usage, "total_token_count", 0) or 0)
+        prompt = int(getattr(usage, "prompt_token_count", 0) or 0)
+        resp = int(getattr(usage, "response_token_count", 0) or 0)
+        if not (total or prompt or resp):
+            return
+        self._tokens_total += total
+        if total:
+            metrics.TOKENS_USED.labels(kind="total").inc(total)
+        if prompt:
+            metrics.TOKENS_USED.labels(kind="input").inc(prompt)
+        if resp:
+            metrics.TOKENS_USED.labels(kind="output").inc(resp)
+        logger.info(
+            "gemini.usage",
+            turn_total=total,
+            input=prompt,
+            output=resp,
+            session_total=self._tokens_total,
+        )
 
     async def _finalize_turn(self, *, turn_complete: bool) -> None:
         """Close out the current turn: end audio, finalize transcripts.

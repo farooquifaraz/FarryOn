@@ -203,8 +203,19 @@ class WebSocketLiveClient {
   void _sendHandshake() {
     final device = _deviceInfoProvider();
     final wsKey = _config.webSearchApiKey;
-    final emailAddr = _config.emailAddress;
-    final emailPw = _config.emailAppPassword;
+    // Email: send EVERY configured mailbox as `hello.emails`, plus the primary
+    // as the legacy single `hello.email` for backward compatibility.
+    Map<String, dynamic> emailWire(EmailAccount a) => {
+          'label': a.label,
+          'address': a.address,
+          'appPassword': a.appPassword,
+          if (a.resolvedImapHost.isNotEmpty) 'host': a.resolvedImapHost,
+          if (a.resolvedSmtpHost.isNotEmpty) 'smtpHost': a.resolvedSmtpHost,
+          'smtpPort': a.resolvedSmtpPort,
+          'primary': a.primary,
+        };
+    final usableEmails = _config.usableEmailAccounts;
+    final primaryEmail = _config.primaryEmailAccount;
     send(HelloMessage(
       platform: platform,
       appVersion: _config.appVersion,
@@ -222,23 +233,14 @@ class WebSocketLiveClient {
               'fallbackApiKey': _config.webSearchFallbackApiKey ?? '',
             }
           : null,
-      // Only send email config when both fields are set, so the backend's
-      // read_emails tool stays disabled until the user opts in.
-      email: (emailAddr != null &&
-              emailAddr.isNotEmpty &&
-              emailPw != null &&
-              emailPw.isNotEmpty)
-          ? {
-              'address': emailAddr,
-              'appPassword': emailPw,
-              if (_config.emailImapHost != null &&
-                  _config.emailImapHost!.isNotEmpty)
-                'host': _config.emailImapHost,
-              if (_config.emailSmtpHost != null &&
-                  _config.emailSmtpHost!.isNotEmpty)
-                'smtpHost': _config.emailSmtpHost,
-              'smtpPort': _config.emailSmtpPort,
-            }
+      // Legacy single-account field: the primary mailbox (when complete).
+      email: (primaryEmail != null && primaryEmail.isComplete)
+          ? emailWire(primaryEmail)
+          : null,
+      // All usable mailboxes; omitted when none is configured so the backend's
+      // email tools stay disabled until the user opts in.
+      emails: usableEmails.isNotEmpty
+          ? [for (final a in usableEmails) emailWire(a)]
           : null,
     ));
     send(const ConfigMessage());

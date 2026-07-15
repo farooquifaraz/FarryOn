@@ -10,7 +10,9 @@ from app.tools.safety import rate_gate, sensitive_gate
 from app.tools.validators import scan_sensitive
 from app.tools.whatsapp import SendWhatsAppTool
 
-pytestmark = pytest.mark.asyncio
+# No module-level ``pytestmark = pytest.mark.asyncio``: it would also mark the
+# sync tests below (scan/gate/rate) as async and warn on each. Only the
+# genuinely async tests carry the decorator.
 
 
 def test_scan_sensitive_flags():
@@ -41,6 +43,7 @@ def test_rate_gate_trips_after_the_limit():
     assert rate_gate(sid)["status"] == "rate_limited"
 
 
+@pytest.mark.asyncio
 async def test_whatsapp_blocks_sensitive_then_sends(db_session):
     ratelimit._hits.clear()
     ctx = ToolContext(session=db_session, session_id="s1")
@@ -55,6 +58,7 @@ async def test_whatsapp_blocks_sensitive_then_sends(db_session):
     assert r2["ok"] is True and r2["action"] == "open_url"
 
 
+@pytest.mark.asyncio
 async def test_sent_messages_history(db_session):
     """A logged send shows up in list_sent_messages with channel + status."""
     from app.db import repo

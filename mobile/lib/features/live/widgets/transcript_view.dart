@@ -104,7 +104,7 @@ class _Bubble extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            isUser ? 'You' : 'FarryOn',
+            isUser ? 'You' : 'Farry',
             style: theme.textTheme.labelSmall?.copyWith(
               color: isUser ? Aurora.mint : Aurora.tealInk,
               fontWeight: FontWeight.w700,

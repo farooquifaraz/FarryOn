@@ -139,6 +139,41 @@ production schema evolution, introduce **Alembic**: point `alembic.ini`
 `target_metadata = app.db.base.Base.metadata` in `env.py`. (No Alembic files are
 shipped here to keep the bootstrap dependency-free.)
 
+## How notes and tasks are scoped to a user
+
+A user's notes and tasks are their own. Two pieces make that true, and both are
+needed — filtering reads without owning the rows would filter on a column that
+every row shares:
+
+**Rows are created owned.** The live session resolves its owner once, at the
+handshake, from the access token in `?token=`
+(`app/ws/live.py::_resolve_user_id` → `app/ws/session.py::_resolve_owner`).
+That id reaches every tool through `Orchestrator(user_id=...)`, so whatever the
+agent saves is stamped with the person who said it.
+
+**Reads and writes are filtered by the caller.** `GET /notes`, `GET /tasks`,
+`POST /tasks/{id}/done`, `DELETE /notes/{id}` and `DELETE /tasks/{id}` resolve
+the caller via `app/core/deps.py::get_data_owner` and pass `user_id=` to the
+repo. The ids in those paths are small integers straight off the client, so
+ownership cannot be inferred from the caller knowing one — `repo.delete_note` &
+friends check it and answer *not found* rather than *not yours*, since a 403
+would confirm the row exists.
+
+`tests/test_data_scoping.py` holds the line on both halves.
+
+Two deliberate asymmetries:
+
+- **Signed out ⇒ the anonymous user** (`repo.ANON_EXTERNAL_ID`), so a local run
+  with no login still works. Where `JWT_SECRET` is a real secret
+  (`Settings.auth_enabled`) there is no such fallback: the WS closes the
+  connection and the REST endpoints 401.
+- **A *bad* token is always a 401**, never a quiet downgrade to anonymous — a
+  downgrade would hand the app someone else's rows instead of telling it to
+  refresh.
+
+Still shared across users: `/detect`, the Telegram webhook, and the glasses
+endpoints. None of them read or write per-user rows today.
+
 ## Docker
 
 ```bash

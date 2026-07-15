@@ -26,10 +26,19 @@ from typing import Any
 
 from app.logging_conf import get_logger
 from app.tools.base import Tool, ToolContext
+from app.tools.email_accounts import resolve_account, usable_accounts
 
 logger = get_logger(__name__)
 
 _DEFAULT_HOST = "imap.gmail.com"
+
+
+def _imap_creds(account: dict[str, Any]) -> tuple[str, str, str, str]:
+    """``(host, address, password, label)`` for one mailbox dict."""
+    address = (account.get("address") or "").strip()
+    password = (account.get("appPassword") or "").strip()
+    host = (account.get("host") or _DEFAULT_HOST).strip() or _DEFAULT_HOST
+    return host, address, password, (account.get("label") or address)
 _MAX_LIMIT = 25
 _SNIPPET_CHARS = 200
 _BODY_CHARS = 4000  # cap the full body so a turn stays manageable
@@ -267,22 +276,17 @@ class ReadEmailsTool(Tool):
                 "type": "integer",
                 "description": "How many emails to read (default 10).",
             },
+            "account": {
+                "type": "string",
+                "description": "Which mailbox to read: the account label the "
+                "user set (e.g. 'Personal', 'Work'), or 'all' to read from "
+                "every mailbox. Omit to use their primary mailbox.",
+            },
         },
     }
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
-        cfg = ctx.email or {}
-        address = (cfg.get("address") or "").strip()
-        password = (cfg.get("appPassword") or "").strip()
-        host = (cfg.get("host") or _DEFAULT_HOST).strip() or _DEFAULT_HOST
-        if not address or not password:
-            return {
-                "ok": False,
-                "message": (
-                    "No email is configured. Ask the user to add their email "
-                    "address and app password in Settings."
-                ),
-            }
+        account_arg = (kwargs.get("account") or "").strip()
         try:
             limit = max(1, min(int(kwargs.get("limit") or 10), _MAX_LIMIT))
         except (TypeError, ValueError):
@@ -290,6 +294,47 @@ class ReadEmailsTool(Tool):
         category = (kwargs.get("category") or None)
         range_ = (kwargs.get("range") or None)
         query = (kwargs.get("query") or None)
+
+        # "all" → read from every mailbox and merge newest-first.
+        if account_arg.lower() == "all":
+            accts = usable_accounts(ctx)
+            if not accts:
+                return {
+                    "ok": False,
+                    "message": (
+                        "No email is configured. Ask the user to add their "
+                        "email address and app password in Settings."
+                    ),
+                }
+            merged: list[dict[str, Any]] = []
+            for acct in accts:
+                host, address, password, label = _imap_creds(acct)
+                try:
+                    items = await asyncio.to_thread(
+                        _fetch_emails, host, address, password, limit, query,
+                        category, range_,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "read_emails.account_failed", account=label,
+                        error=str(exc),
+                    )
+                    continue
+                for it in items:
+                    it["account"] = label
+                merged.extend(items)
+            merged.sort(key=lambda e: e.get("date") or "", reverse=True)
+            merged = merged[:limit]
+            return {
+                "ok": True, "count": len(merged), "category": category,
+                "range": range_ or "today", "account": "all", "emails": merged,
+            }
+
+        # Single mailbox: the named one, else the primary.
+        account, err = resolve_account(ctx, account_arg or None)
+        if err:
+            return {"ok": False, "message": err}
+        host, address, password, label = _imap_creds(account)
         try:
             emails = await asyncio.to_thread(
                 _fetch_emails, host, address, password, limit, query,
@@ -300,7 +345,7 @@ class ReadEmailsTool(Tool):
             return {
                 "ok": False,
                 "message": (
-                    "Couldn't sign in to email. Check the address and app "
+                    f"Couldn't sign in to {label}. Check the address and app "
                     "password in Settings."
                 ),
             }
@@ -312,6 +357,7 @@ class ReadEmailsTool(Tool):
             "count": len(emails),
             "category": category,
             "range": range_ or "today",
+            "account": label,
             "emails": emails,
         }
 
@@ -338,22 +384,19 @@ class ReadEmailTool(Tool):
                 "enum": ["today", "yesterday", "week", "month"],
                 "description": "Time window to search (default week).",
             },
+            "account": {
+                "type": "string",
+                "description": "Which mailbox to search: the account label "
+                "(e.g. 'Personal', 'Work'). Omit to use the primary mailbox.",
+            },
         },
     }
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
-        cfg = ctx.email or {}
-        address = (cfg.get("address") or "").strip()
-        password = (cfg.get("appPassword") or "").strip()
-        host = (cfg.get("host") or _DEFAULT_HOST).strip() or _DEFAULT_HOST
-        if not address or not password:
-            return {
-                "ok": False,
-                "message": (
-                    "No email is configured. Ask the user to add their email "
-                    "address and app password in Settings."
-                ),
-            }
+        account, err = resolve_account(ctx, (kwargs.get("account") or "").strip() or None)
+        if err:
+            return {"ok": False, "message": err}
+        host, address, password, label = _imap_creds(account)
         query = (kwargs.get("query") or None)
         range_ = (kwargs.get("range") or "week")
         try:
@@ -366,7 +409,7 @@ class ReadEmailTool(Tool):
             return {
                 "ok": False,
                 "message": (
-                    "Couldn't sign in to email. Check the address and app "
+                    f"Couldn't sign in to {label}. Check the address and app "
                     "password in Settings."
                 ),
             }
@@ -375,4 +418,4 @@ class ReadEmailTool(Tool):
             return {"ok": False, "message": "Couldn't read the email."}
         if not emails:
             return {"ok": False, "message": "No matching email found."}
-        return {"ok": True, **emails[0]}
+        return {"ok": True, "account": label, **emails[0]}
