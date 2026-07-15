@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 
 import '../core/config.dart';
 
@@ -54,7 +56,17 @@ class TaskItem {
 /// backend the live session uses (via [AppConfig.httpBase]).
 class DataApi {
   DataApi(this._config, {http.Client? client})
-      : _client = client ?? http.Client();
+      : _client = client ?? _defaultClient();
+
+  /// An unreachable backend must fail fast: with only the overall [_timeout],
+  /// a dead host left the Notes/Reminders screens on a bare spinner for the
+  /// full 20s (connection-refused returns quickly, but a dropped SYN — phone
+  /// off the LAN, wrong host — does not). [_connectTimeout] bounds the TCP
+  /// connect alone, so "can't reach it" surfaces in seconds while a slow but
+  /// *live* backend (e.g. a cold Render dyno) still gets the full budget to
+  /// respond.
+  static http.Client _defaultClient() =>
+      IOClient(HttpClient()..connectionTimeout = _connectTimeout);
 
   AppConfig _config;
   final http.Client _client;
@@ -73,6 +85,11 @@ class DataApi {
         : {'Authorization': 'Bearer $token'};
   }
 
+  /// Bound on the TCP connect only — see [_defaultClient].
+  static const _connectTimeout = Duration(seconds: 5);
+
+  /// Bound on the whole request. Stays generous so a cold cloud backend that
+  /// *is* answering isn't cut off mid-response.
   static const _timeout = Duration(seconds: 20);
 
   Future<List<NoteItem>> notes() async {

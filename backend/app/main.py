@@ -207,14 +207,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ws/session.py::_persist_session_start), so all notes/tasks already carry
     # the same user_id.
     #
-    # Adding a `user_id=` filter here alone would therefore change nothing —
-    # the real gap is that the client sends no identity at all (no token, no
-    # device id, on either the WS hello or these REST calls). Closing it needs,
-    # in order: (1) a per-install/user identity on the client, sent on hello and
-    # as a REST credential; (2) `_ANON_USER` replaced by that identity; (3) these
-    # endpoints resolving the caller (app/core/deps.py::get_current_user already
-    # does this for Bearer tokens) and scoping every read *and* write by it —
-    # note the delete/done handlers take a bare row id and check no ownership.
+    # Adding a `user_id=` filter here alone would therefore change nothing.
+    # Closing the gap needs, in order:
+    #   (1) an identity on the client. PARTLY DONE: when signed in, the app now
+    #       sends `Authorization: Bearer` on these REST calls (see
+    #       mobile/lib/data/data_api.dart) — but the WS `hello` still carries no
+    #       identity, so the live session has none.
+    #   (2) `_ANON_USER` replaced by that identity in _persist_session_start, so
+    #       created rows are tagged with a real user rather than the shared one.
+    #   (3) these endpoints resolving the caller and scoping every read *and*
+    #       write by it. They currently ignore the Bearer header entirely;
+    #       app/core/deps.py::get_current_user already does the resolving. Note
+    #       the delete/done handlers take a bare row id and check no ownership.
     #
     # Deferred deliberately (2026-07-14): single-user today, and the choice
     # between a device-scoped id and real login is a product decision.

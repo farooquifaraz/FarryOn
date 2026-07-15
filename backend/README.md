@@ -152,16 +152,18 @@ resolves to the shared `_ANON_USER` row
 carry the same `user_id`. Adding a `user_id=` filter to the reads would
 therefore be cosmetic.
 
-The actual gap is that the client sends **no identity at all** — no token and
-no device id, on either the WS `hello` or these REST calls. Closing it needs,
-in order:
+Closing the gap needs, in order:
 
-1. a per-install (or per-account) identity on the client, sent on `hello` and
-   as a credential on the REST calls;
-2. `_ANON_USER` replaced by that identity in `_persist_session_start`;
+1. **an identity on the client — partly done.** When signed in, the app now
+   sends `Authorization: Bearer` on these REST calls (see
+   `mobile/lib/data/data_api.dart`). The WS `hello` still carries no identity,
+   so the live session — the thing that actually *creates* notes and tasks —
+   has none.
+2. `_ANON_USER` replaced by that identity in `_persist_session_start`, so new
+   rows are tagged with a real user instead of the shared one.
 3. these endpoints resolving the caller and scoping every read *and* write by
-   it — `app/core/deps.py::get_current_user` already does step 3 for
-   `Authorization: Bearer` tokens.
+   it. They ignore the Bearer header today;
+   `app/core/deps.py::get_current_user` already does the resolving.
 
 **Fix this before the admin/user module serves more than one real account**,
 and pick the identity model first (a device-scoped id keeps the current
