@@ -1,0 +1,199 @@
+# FarryOn — Test Plan
+
+What still needs proving before real users, and what is already proven.
+
+**The automated suites are not repeated here.** 246 backend tests (`pytest`) and
+120 mobile tests (`flutter test`) run in seconds and cover the logic. This
+document is for what they *can't* reach: a real device, real hardware, real
+providers, real money, and the admin panel — which has **zero** automated tests.
+
+Legend: ☐ not done · ☑ done+verified (date) · ⚠ blocked
+
+---
+
+## Part 1 — What's pending (work, not tests)
+
+### Blockers before a single real user
+
+| # | Thing | Why it blocks | Where |
+|---|---|---|---|
+| 1 | **Postgres on Render** | Production runs SQLite on the free plan with no disk. Every deploy wipes it — **accounts vanish**. `autoDeploy: true` means each push does this. | `render.yaml` |
+| 2 | **Email provider** | Verification + reset links are only *logged*, never sent. Nobody can verify an email or recover a password. | `backend/app/modules/auth/notifications.py` — the three `send_*` functions are the swap point |
+| 3 | **Payment provider** | The webhook is gated by a shared secret, not a provider HMAC. Anyone who learns the secret can forge "payment succeeded". | `backend/app/modules/billing/router.py` |
+| 4 | **Release keystore** | Release builds are signed with the **debug** key. Play Store will reject it, and a real keystore's different SHA-1 needs its own Android OAuth client or Google sign-in breaks. | `mobile/android/app/build.gradle.kts:39` |
+
+### Your action (I can't do these)
+
+| # | Thing | Why |
+|---|---|---|
+| 5 | **Reset the Google client secret** | `GOCSPX-…` was pasted into chat. I never stored it, but treat it as public. |
+| 6 | **Remove `CURL_CA_BUNDLE`** from Windows env | Points at `C:\Program Files\PostgreSQL\18\ssl\certs\ca-bundle.crt`, which doesn't exist. Silently breaks pip *and* Google cert fetch. |
+| 7 | **Decide about the push** | ~110 commits are unpushed. Pushing triggers Render autoDeploy — see #1 before you do. |
+
+### Feature backlog
+
+| # | Thing | State |
+|---|---|---|
+| 8 | Glasses Sprint 2 (vendor `.aar` drop-in) | Waiting on your "stub test pass" go |
+| 9 | Cost optimization P0-2, P0-3, P1-5, P1-7, B1–B5 | P0-1 + Vision-403 done |
+| 10 | Roadmap #4 — Location | Tool exists; needs a real GPS device test |
+| 11 | Official Google "G" asset | Currently hand-drawn. Google's branding rules require theirs before release. |
+
+---
+
+## Part 2 — Test cases
+
+### A. Auth on the device
+
+The auth code is the newest and the most load-bearing: everything else hangs off
+who you are.
+
+| # | Case | Expected | State |
+|---|---|---|---|
+| A1 | Google sign-in from the login screen | Lands on the live screen, **login form gone** | ☑ 2026-07-15 |
+| A2 | Google sign-in from the **signup** screen | Same — two routes above home must both pop | ☐ |
+| A3 | Password sign-in | Lands on live screen, form gone | ☐ |
+| A4 | Wrong password | "Incorrect email or password", stays put, button re-enables | ☐ |
+| A5 | Sign out | Back to splash; Settings closes too | ☑ 2026-07-15 |
+| A6 | Kill the app and reopen | Restore splash → straight to live screen, no login | ☐ |
+| A7 | **Airplane mode, then open the app** | Restore falls back to the cached token; live screen shows its offline state. Must **not** sign you out. | ☐ |
+| A8 | Sign in on the phone, then check the admin panel | The user is listed, with the right provider | ☐ |
+| A9 | Google sign-in, cancel the account picker | No error banner — cancelling is not a failure | ☐ |
+| A10 | 2FA account: sign in | Code prompt, then live screen | ☐ |
+| A11 | Backend down, tap Sign In | Honest "can't reach" message, not a hang | ☐ |
+| A12 | Avatar tap | Opens Settings, showing your name + email | ☑ 2026-07-15 |
+
+**A7 is the one I'd test first.** The restore path has a 4s timeout and a
+never-sign-out-unless-401 rule, and getting that wrong logs people out on a bad
+train ride.
+
+### B. User scoping — two real accounts
+
+Proven at the API level (`test_data_scoping.py`, 10 tests) and on the live
+server. What's untested is **two accounts on real devices**.
+
+| # | Case | Expected | State |
+|---|---|---|---|
+| B1 | Two accounts, API level | Each sees only their own | ☑ 2026-07-15 |
+| B2 | B deletes A's note by id | 404, row survives | ☑ 2026-07-15 |
+| B3 | WS session owner = token holder | Session row carries the real user | ☑ 2026-07-15 (device) |
+| B4 | **Sign in as A on the phone, save a note by voice, sign out, sign in as B** | B's Notes screen is **empty** | ☐ |
+| B5 | Same, then sign back in as A | A's note is back | ☐ |
+| B6 | A and B on **two different phones**, at once | Neither sees the other's notes; neither session steals the other's rows | ☐ |
+| B7 | Ask Farry "read my notes" as B | Farry reads only B's | ☐ |
+
+**B4–B7 are the real proof.** Everything so far tested the plumbing; these test
+the promise.
+
+### C. Admin panel — **no automated tests at all**
+
+The biggest untested surface in the project. Every case below is manual.
+
+| # | Case | Expected | State |
+|---|---|---|---|
+| C1 | Admin login | Dashboard loads | ☐ |
+| C2 | **Non-admin logs into the admin panel** | Refused — this is the whole point of RBAC | ☐ |
+| C3 | User list: search, paginate | Works past page 1 | ☐ |
+| C4 | Change a user's role | Takes effect; audit log records it | ☐ |
+| C5 | Suspend a user → that user uses the app | Kicked out (403 `USER_SUSPENDED`) | ☐ |
+| C6 | Impersonate a user | Works; audit log shows the `act` claim | ☐ |
+| C7 | Revenue screen with zero payments | Shows ₹0, not a crash or a blank | ☐ |
+| C8 | Subscriptions list | Free vs paid vs expired are distinguishable | ☐ |
+| C9 | Token expires while the panel is open | Auto-refresh, no surprise logout | ☐ |
+| C10 | Audit log | Every admin action is there | ☐ |
+
+**C2 and C5 first.** If C2 fails, the admin panel is a public admin panel.
+
+### D. The live session (Farry herself)
+
+| # | Case | Expected | State |
+|---|---|---|---|
+| D1 | Voice turn end-to-end | Farry hears, answers, TTS plays | ☐ |
+| D2 | Camera on → "what am I looking at" | Correct answer from a fresh frame | ☐ |
+| D3 | Barge-in — talk over her | She stops immediately | ☐ |
+| D4 | Screen off, keep talking | Mic stays alive | ☐ |
+| D5 | "Note yaad rakho X" → Notes screen | X is there, owned by you | ☐ |
+| D6 | "Reminder lagao" → fires | Notification fires (release build — R8 has bitten twice here) | ☐ |
+| D7 | Wifi drop mid-session | Reconnects; camera comes back | ☐ |
+| D8 | Provider fallback (bad OpenAI key) | Falls back to Gemini + a non-fatal notice | ☐ |
+| D9 | Long session | Watchdog ends it rather than billing forever | ☐ |
+
+**D6 deserves paranoia**: reminders have silently broken twice in release builds
+(R8 stripping Gson signatures, then the resource shrinker eating the icon). It
+works in debug and fails in release, so **only a release build proves it**.
+
+### E. Glasses
+
+| # | Case | Expected | State |
+|---|---|---|---|
+| E1 | Sprint 1-V stub suite | 6/6 | ☑ 2026-07-05 |
+| E2 | Connect, battery, wear-to-talk | Per LAB_NOTES | ☑ |
+| E3 | Photo → phone gallery | Lands in `DCIM/FarryOn` | ☑ |
+| E4 | Delete from glasses storage | ~30s, no ack | ☑ 2026-07-12 |
+| E5 | **Glasses + the new auth** | Glasses session belongs to the signed-in user, not anonymous | ☐ |
+| E6 | Sprint 2 `.aar` drop-in | Blocked on your go | ⚠ |
+
+**E5 is new and untested** — the scoping change touched every live session,
+glasses included.
+
+### F. Email
+
+| # | Case | Expected | State |
+|---|---|---|---|
+| F1 | Test-connection in Settings | Green for good creds, honest error for bad | ☑ 2026-07-13 |
+| F2 | "Read my email" | Reads from the primary mailbox | ☐ |
+| F3 | "Read email from my work account" | Reads the **named** mailbox | ☐ |
+| F4 | Send from a named mailbox | Sends from the right address | ☐ |
+| F5 | Wrong app password | Graceful message, no hang | ☐ |
+
+### G. Cost + quota
+
+| # | Case | Expected | State |
+|---|---|---|---|
+| G1 | Frame gate | Frames sent < frames captured (`vision.frame_forwarded` logs both) | ☑ |
+| G2 | Daily quota exhausted | Refused cleanly, told why | ☐ |
+| G3 | Token cost logged per turn | It's in the log | ☑ |
+| G4 | Vision 403 fallback | Degrades instead of dying | ☑ |
+
+### H. Production deploy — **all blocked on Part 1 #1**
+
+Do not run these until Postgres is real. On SQLite they'd pass and prove nothing.
+
+| # | Case | Expected | State |
+|---|---|---|---|
+| H1 | Deploy, then **redeploy** | Accounts **survive** — the whole point | ⚠ |
+| H2 | Sign up on prod, verify email | Link **arrives** (needs #2) | ⚠ |
+| H3 | Password reset on prod | Link arrives, works | ⚠ |
+| H4 | Cold Render dyno | App waits it out instead of failing fast | ☐ |
+| H5 | Google sign-in against prod | Needs the prod SHA-1's own OAuth client | ⚠ |
+| H6 | Two users on prod | Scoping holds with Postgres, not just SQLite | ⚠ |
+
+### I. Release build
+
+| # | Case | Expected | State |
+|---|---|---|---|
+| I1 | `flutter build apk --release` | Builds (R8 has broken this before) | ☑ 2026-07-15 |
+| I2 | Reminders in release | Fires (see D6) | ☐ |
+| I3 | Notification icon in release | Not blank (shrinker ate it once) | ☐ |
+| I4 | Signed with a **real** keystore | Blocked on Part 1 #4 | ⚠ |
+| I5 | Google sign-in with the release SHA-1 | Needs its own Android OAuth client | ⚠ |
+
+---
+
+## Suggested order
+
+1. **B4–B7** — user scoping on real devices. It's this week's change and the one
+   with a real blast radius: getting it wrong shows someone another person's notes.
+2. **C2, C5** — RBAC. A broken admin gate is worse than a missing feature.
+3. **A7** — offline restore, the auth path most likely to annoy a real user.
+4. **D6 / I2** — reminders in a release build. Twice bitten.
+5. **E5** — glasses under the new auth.
+6. Then Part 1 #1 → #2 → the whole of **H**.
+
+## Running the automated suites
+
+```bash
+cd backend && .venv/Scripts/python.exe -m pytest -q      # 246 tests, ~8 min
+cd mobile  && flutter test                                # 120 tests, ~30 s
+cd mobile  && flutter analyze                             # 2 known pre-existing infos
+```
