@@ -9,6 +9,7 @@ import '../../core/ui.dart';
 import '../../data/finder_api.dart';
 import '../../data/live_client.dart';
 import '../../protocol/protocol.dart';
+import '../../state/auth.dart';
 import '../../state/live_state.dart';
 import '../../state/permissions.dart';
 import '../../state/providers.dart';
@@ -865,6 +866,9 @@ class _TopOverlayState extends State<_TopOverlay> {
             ),
           ),
           const Spacer(),
+          // Outside the AnimatedSize on purpose: the account avatar must be
+          // visible at rest, not hidden behind the "more actions" toggle.
+          _AccountAvatar(onTap: widget.onSettings),
           // Collapsible actions: only the toggle shows at rest; it slides the
           // rest open on tap.
           AnimatedSize(
@@ -901,6 +905,71 @@ class _TopOverlayState extends State<_TopOverlay> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// First letter of the name, else of the email, else a neutral dot — never a
+/// blank circle, and never "?" (which reads as an error, not as a person).
+///
+/// Takes a whole grapheme rather than `source[0]`, so a non-Latin or emoji name
+/// isn't sliced mid-character into a replacement glyph.
+String accountInitialFor(String? displayName, String email) {
+  for (final source in [displayName ?? '', email]) {
+    final trimmed = source.trim();
+    if (trimmed.isNotEmpty) return trimmed.characters.first.toUpperCase();
+  }
+  return '•';
+}
+
+/// The signed-in person, as a tappable initial. Sits outside the collapsible
+/// cluster because it answers a question the user has *before* they go looking
+/// for anything: am I signed in, and as whom? Until this existed the only proof
+/// was buried two taps deep in Settings, so a successful Google sign-in looked
+/// exactly like no sign-in at all.
+///
+/// Tapping opens Settings, where the full name, email and Sign out live — hence
+/// the same pink as that screen's Account row, so it reads as the same thing.
+class _AccountAvatar extends ConsumerWidget {
+  const _AccountAvatar({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authProvider);
+    // Signed out can't happen on this screen (AuthGate swaps it for the splash)
+    // and restoring is a blink — drawing an empty circle for either would be a
+    // worse lie than drawing nothing.
+    if (!auth.isSignedIn) return const SizedBox.shrink();
+
+    return Tooltip(
+      message: auth.email.isNotEmpty ? 'Signed in as ${auth.email}' : 'Account',
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: Padding(
+          padding: const EdgeInsets.all(5),
+          child: Container(
+            width: 28,
+            height: 28,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: Aurora.gradPink,
+            ),
+            child: Text(
+              accountInitialFor(auth.displayName, auth.email),
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                color: Colors.white,
+                height: 1.0,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
