@@ -63,7 +63,9 @@ def _google_configured(verify):
         yield
     finally:
         sso_router.google_id_token.verify_oauth2_token = original
-        os.environ.pop("GOOGLE_CLIENT_ID", None)
+        # Back to empty, not absent: popping it would let a real client id in
+        # the developer's .env through to the next test (see conftest.py).
+        os.environ["GOOGLE_CLIENT_ID"] = ""
         get_settings.cache_clear()
 
 

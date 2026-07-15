@@ -59,6 +59,14 @@ for _key in (
     "TELEGRAM_API_ID",
     "TELEGRAM_API_HASH",
     "TELEGRAM_SESSION",
+    # SSO — the "not configured" tests assert the 503 you get with no client
+    # id, so a developer who has since set one in .env would otherwise see them
+    # fail for a reason that has nothing to do with their change. Tests that
+    # *want* Google configured set it themselves (_google_configured).
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "MICROSOFT_CLIENT_ID",
+    "MICROSOFT_CLIENT_SECRET",
 ):
     os.environ[_key] = ""
 
