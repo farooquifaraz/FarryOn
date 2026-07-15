@@ -1,12 +1,25 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 import '../core/config.dart';
 import '../core/config_store.dart';
 import '../core/logger.dart';
 import '../data/auth_api.dart';
 import 'providers.dart';
+
+/// The **Web** OAuth client id from the Google Cloud console, supplied at build
+/// time: `flutter run --dart-define=GOOGLE_SERVER_CLIENT_ID=...`.
+///
+/// Not the Android client id — `google_sign_in` passes this as `serverClientId`
+/// so Google mints the ID token with it as the audience, which is what the
+/// backend verifies against its own `GOOGLE_CLIENT_ID`. The two MUST match.
+/// Left empty, the Google button hides itself rather than failing on tap.
+const String? googleServerClientId =
+    bool.hasEnvironment('GOOGLE_SERVER_CLIENT_ID')
+        ? String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID')
+        : null;
 
 /// Whether the user is signed in to their FarryOn account. `signedIn` carries
 /// the cached identity for greetings/settings; tokens live in [ConfigStore]
@@ -192,6 +205,58 @@ class AuthNotifier extends Notifier<AuthState> {
         .verify2fa(pendingToken: pendingToken, code: code);
     if (result.tokens != null) {
       await _completeSignIn(result.tokens!, email: email);
+    }
+    return result;
+  }
+
+  /// "Continue with Google": open the native account sheet, then trade the
+  /// resulting ID token for a FarryOn session. One button covers sign-in AND
+  /// sign-up — the backend creates the account if the (Google-verified) email
+  /// is new, so there is nothing for the user to choose.
+  ///
+  /// [serverClientId] must be the **Web** OAuth client id: Google mints the
+  /// ID token with it as the audience so the backend can verify it.
+  Future<AuthResult> signInWithGoogle() async {
+    const clientId = googleServerClientId;
+    if (clientId == null || clientId.isEmpty) {
+      return const AuthResult.failure(
+          'Google sign-in isn\'t set up in this build.');
+    }
+
+    final GoogleSignInAccount? account;
+    try {
+      // A fresh instance per attempt: a stale one holds the previous account,
+      // so a user who cancels and retries would silently re-sign-in as them.
+      final google = GoogleSignIn(serverClientId: clientId, scopes: const ['email']);
+      await google.signOut(); // always show the picker, never a silent re-auth
+      account = await google.signIn();
+    } catch (e) {
+      _log.error('Google sign-in sheet failed', e);
+      return const AuthResult.failure(
+          "Couldn't open Google sign-in. Try again.");
+    }
+    if (account == null) {
+      // The user dismissed the sheet — not an error, just nothing to report.
+      return const AuthResult.cancelled();
+    }
+
+    final String? idToken;
+    try {
+      idToken = (await account.authentication).idToken;
+    } catch (e) {
+      _log.error('Google auth token fetch failed', e);
+      return const AuthResult.failure("Couldn't get your Google details.");
+    }
+    if (idToken == null || idToken.isEmpty) {
+      // Almost always a misconfigured serverClientId / SHA-1 (see the setup
+      // notes in docs) — Google returns an account but no ID token.
+      return const AuthResult.failure(
+          'Google sign-in isn\'t configured correctly for this app.');
+    }
+
+    final result = await ref.read(authApiProvider).googleSignIn(idToken);
+    if (result.tokens != null) {
+      await _completeSignIn(result.tokens!, email: account.email);
     }
     return result;
   }

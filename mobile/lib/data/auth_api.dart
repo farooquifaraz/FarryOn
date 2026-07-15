@@ -50,6 +50,7 @@ class AuthResult {
     this.pendingToken,
     this.user,
     this.accountCreated = false,
+    this.cancelled = false,
   });
 
   const AuthResult.success({AuthTokens? tokens, AuthUser? user})
@@ -65,6 +66,11 @@ class AuthResult {
   const AuthResult.accountCreatedNotSignedIn(String message)
       : this._(ok: true, message: message, accountCreated: true);
 
+  /// The user backed out of the Google sheet. Distinct from a failure: there
+  /// is nothing to tell them — showing "sign-in failed" for their own
+  /// deliberate cancel is just noise.
+  const AuthResult.cancelled() : this._(ok: false, message: '', cancelled: true);
+
   final bool ok;
   final String message;
   final AuthTokens? tokens;
@@ -73,6 +79,9 @@ class AuthResult {
 
   /// True only for [AuthResult.accountCreatedNotSignedIn].
   final bool accountCreated;
+
+  /// True only for [AuthResult.cancelled].
+  final bool cancelled;
 
   bool get needsTwoFactor => pendingToken != null;
 }
@@ -180,6 +189,29 @@ class AuthApi {
         return AuthResult.twoFactor(data['pending_token'] as String);
       }
       final tokens = _tokensFrom(data);
+      if (tokens == null) {
+        return const AuthResult.failure('Unexpected server response.');
+      }
+      return AuthResult.success(tokens: tokens);
+    } catch (e) {
+      return _transportFailure(e);
+    }
+  }
+
+  /// `POST /api/v1/auth/sso/google/mobile` — exchange the ID token from the
+  /// native Google sheet for a FarryOn session. The backend verifies the
+  /// token against Google's certs; the app never decides who signed in.
+  Future<AuthResult> googleSignIn(String idToken) async {
+    try {
+      final res = await _post('/api/v1/auth/sso/google/mobile', {
+        'id_token': idToken,
+      });
+      if (res.body['success'] != true) {
+        return AuthResult.failure(
+            _envelopeError(res.body, "Google sign-in didn't work. Try again."));
+      }
+      final tokens =
+          _tokensFrom((res.body['data'] as Map).cast<String, dynamic>());
       if (tokens == null) {
         return const AuthResult.failure('Unexpected server response.');
       }

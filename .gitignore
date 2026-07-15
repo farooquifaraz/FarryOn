@@ -47,6 +47,12 @@ mobile/android/key.properties
 # Built APKs (large binaries; rebuild from mobile/). Keep the folder's README.
 apk/*.apk
 
+# Golden PNGs from the design-preview tests. Not a regression gate (they're
+# skipped by default and their bytes differ per host), so committing them is
+# just binary churn. Regenerate to look at a screen:
+#   cd mobile && flutter test --run-skipped --update-goldens test/auth_preview_test.dart
+mobile/test/goldens/
+
 # ---------- Web admin panel (React + Vite) ----------
 admin/node_modules/
 # `*.lock` above would exclude the npm lockfile; keep it for reproducible builds.

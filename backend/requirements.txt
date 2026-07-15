@@ -20,6 +20,10 @@ pyotp>=2.9,<3.0               # TOTP 2FA
 qrcode>=7.4,<8.0               # 2FA enrollment QR code (uses Pillow, already a dep)
 Authlib>=1.3,<2.0               # Google/Microsoft OIDC SSO
 itsdangerous>=2.1,<3.0            # required by Starlette's SessionMiddleware (SSO CSRF state)
+# Verifies the native Google ID token the app posts to /auth/sso/google/mobile.
+# Arrives transitively via google-genai today; pinned here because we import it
+# directly and must not lose it if that dependency ever drops it.
+google-auth>=2.28,<3.0
 
 # --- HTTP client (web_search tool, TestClient WebSocket support) ---
 httpx>=0.27,<1.0

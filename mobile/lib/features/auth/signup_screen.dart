@@ -4,14 +4,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
 import '../../core/ui.dart';
 import '../../state/auth.dart';
+import 'widgets/auth_bits.dart';
+import 'widgets/auth_scaffold.dart';
 
-/// Create-account screen, pushed from [LoginScreen]. On success the auth
-/// gate (watching [authProvider]) swaps to the home screen, so this screen
-/// just pops itself back off.
+/// Create-account, pushed from [LoginScreen]. On success the auth gate
+/// (watching `authProvider`) swaps to the home screen, so this screen just
+/// pops itself back off.
 ///
 /// [open] resolves to a non-null notice when the account was created but the
-/// automatic sign-in didn't happen — the caller (the login screen) shows it,
-/// because the user's next step is signing in, not signing up again.
+/// automatic sign-in didn't happen — the login screen shows it, because the
+/// user's next step is signing in, not signing up again.
 class SignupScreen extends ConsumerStatefulWidget {
   const SignupScreen({super.key});
 
@@ -28,16 +30,27 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   final _nameCtl = TextEditingController();
   final _emailCtl = TextEditingController();
   final _passwordCtl = TextEditingController();
+  final _emailFocus = FocusNode();
+  final _passwordFocus = FocusNode();
 
   bool _showPw = false;
   bool _busy = false;
+  bool _googleBusy = false;
   String? _error;
+
+  bool get _anyBusy => _busy || _googleBusy;
+
+  /// Mirrors the backend's rule (RegisterRequest: min_length=8) so the user
+  /// hears about it while typing instead of after a round-trip.
+  static const _minPasswordLength = 8;
 
   @override
   void dispose() {
     _nameCtl.dispose();
     _emailCtl.dispose();
     _passwordCtl.dispose();
+    _emailFocus.dispose();
+    _passwordFocus.dispose();
     super.dispose();
   }
 
@@ -48,8 +61,9 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
       setState(() => _error = 'Enter an email and a password.');
       return;
     }
-    if (password.length < 8) {
-      setState(() => _error = 'Password must be at least 8 characters.');
+    if (password.length < _minPasswordLength) {
+      setState(() =>
+          _error = 'Password must be at least $_minPasswordLength characters.');
       return;
     }
     setState(() {
@@ -63,7 +77,6 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
         );
     if (!mounted) return;
     if (result.tokens != null) {
-      // Signed in — pop back so the auth gate (now signedIn) shows home.
       Navigator.of(context).pop();
       return;
     }
@@ -86,112 +99,145 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
     });
   }
 
+  Future<void> _google() async {
+    setState(() {
+      _googleBusy = true;
+      _error = null;
+    });
+    final result = await ref.read(authProvider.notifier).signInWithGoogle();
+    if (!mounted) return;
+    if (result.tokens != null) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() {
+      _googleBusy = false;
+      if (!result.cancelled) {
+        _error = result.message.isNotEmpty
+            ? result.message
+            : "Google sign-in didn't work. Try again.";
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Aurora.base,
-      appBar: AppBar(title: const Text('Create account')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+    final googleReady =
+        googleServerClientId != null && googleServerClientId!.isNotEmpty;
+
+    return AuthScaffold(
+      appBar: AppBar(backgroundColor: Colors.transparent),
+      child: ListView(
+        padding: EdgeInsets.fromLTRB(
+          22,
+          8,
+          22,
+          32 + MediaQuery.of(context).viewInsets.bottom,
+        ),
         children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 22, 20, 22),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF0F6E56), Color(0xFF1D9E75), Color(0xFF534AB7)],
-              ),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Join Farry',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600)),
-                SizedBox(height: 4),
-                Text('One account for your notes, reminders, and glasses.',
-                    style: TextStyle(
-                        color: Color(0xFFD6F3E9), fontSize: 12, height: 1.4)),
-              ],
+          const AuthBrand(),
+          const SizedBox(height: 30),
+          const Text(
+            'Create your account',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Aurora.textPrimary,
+              fontSize: 27,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.5,
             ),
           ),
-          const SizedBox(height: 22),
-          const SectionLabel('Your details'),
-          const SizedBox(height: 2),
+          const SizedBox(height: 7),
+          const Text(
+            'One account for your notes, reminders, and glasses.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Aurora.textMuted,
+              fontSize: 13.5,
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 28),
+          // Google first: it's one tap and skips every field below.
+          if (googleReady) ...[
+            GoogleButton(
+              busy: _googleBusy,
+              onPressed: _anyBusy ? null : _google,
+            ),
+            const SizedBox(height: 18),
+            const AuthDivider('or sign up with email'),
+            const SizedBox(height: 18),
+          ],
           TextField(
             controller: _nameCtl,
             textCapitalization: TextCapitalization.words,
-            enabled: !_busy,
+            textInputAction: TextInputAction.next,
+            readOnly: _anyBusy,
+            autofillHints: const [AutofillHints.name],
+            onSubmitted: (_) => _emailFocus.requestFocus(),
             decoration: const InputDecoration(
               labelText: 'Name (optional)',
+              prefixIcon: Icon(Icons.person_outline_rounded, size: 20),
               border: OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _emailCtl,
+            focusNode: _emailFocus,
             keyboardType: TextInputType.emailAddress,
+            textInputAction: TextInputAction.next,
             autocorrect: false,
-            enabled: !_busy,
+            readOnly: _anyBusy,
+            autofillHints: const [AutofillHints.newUsername],
             onChanged: (_) => setState(() => _error = null),
+            onSubmitted: (_) => _passwordFocus.requestFocus(),
             decoration: const InputDecoration(
               labelText: 'Email address',
               hintText: 'you@example.com',
+              prefixIcon: Icon(Icons.mail_outline_rounded, size: 20),
               border: OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _passwordCtl,
+            focusNode: _passwordFocus,
             obscureText: !_showPw,
             autocorrect: false,
             enableSuggestions: false,
-            enabled: !_busy,
+            readOnly: _anyBusy,
+            autofillHints: const [AutofillHints.newPassword],
+            textInputAction: TextInputAction.done,
             onChanged: (_) => setState(() => _error = null),
-            onSubmitted: (_) => _busy ? null : _submit(),
+            onSubmitted: (_) => _anyBusy ? null : _submit(),
             decoration: InputDecoration(
               labelText: 'Password',
-              helperText: 'At least 8 characters',
+              helperText: 'At least $_minPasswordLength characters',
+              prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
               border: const OutlineInputBorder(),
               suffixIcon: IconButton(
-                icon: Icon(_showPw ? Icons.visibility_off : Icons.visibility,
-                    color: Aurora.textMuted),
+                tooltip: _showPw ? 'Hide password' : 'Show password',
+                icon: Icon(
+                  _showPw
+                      ? Icons.visibility_off_rounded
+                      : Icons.visibility_rounded,
+                  color: Aurora.textMuted,
+                  size: 20,
+                ),
                 onPressed: () => setState(() => _showPw = !_showPw),
               ),
             ),
           ),
           if (_error != null) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: Aurora.danger.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Aurora.danger.withValues(alpha: 0.3)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.error_outline_rounded,
-                      color: Aurora.danger, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(_error!,
-                        style: const TextStyle(
-                            color: Aurora.danger, fontSize: 12.5, height: 1.4)),
-                  ),
-                ],
-              ),
-            ),
+            const SizedBox(height: 14),
+            AuthBanner.error(_error!),
           ],
-          const SizedBox(height: 18),
+          const SizedBox(height: 22),
           GradientButton(
             label: _busy ? 'Creating account…' : 'Create account',
             icon: Icons.person_add_alt_1_rounded,
-            onPressed: _busy ? null : _submit,
+            onPressed: _anyBusy ? null : _submit,
           ),
         ],
       ),
