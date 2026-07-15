@@ -19,6 +19,12 @@ htmlcov/
 dist/
 build/
 
+# Runtime logs. NEVER commit these: the server logs the `?token=` on the
+# /ws/live handshake and (until a real mail provider is wired) the email
+# verification / password-reset links, so a run against a real account
+# leaves live credentials in the file.
+*.log
+
 # ---------- Flutter / Dart / Mobile ----------
 mobile/.dart_tool/
 mobile/.flutter-plugins
