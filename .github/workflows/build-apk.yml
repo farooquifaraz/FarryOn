@@ -16,7 +16,7 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: ["claude/gallant-franklin-j6qzbx"]
+    branches: [main]
     paths:
       - "mobile/**"
       - ".github/workflows/build-apk.yml"

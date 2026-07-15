@@ -29,7 +29,7 @@ on:
         description: "Minutes to keep the tunnel up (max ~350)"
         default: "60"
   push:
-    branches: ["claude/gallant-franklin-j6qzbx"]
+    branches: [main]
     paths: [".github/workflows/live-backend.yml"]
 
 # Only one live backend at a time; a new run cancels the previous tunnel.
