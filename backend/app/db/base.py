@@ -36,21 +36,29 @@ class Base(DeclarativeBase):
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
+#: Force :class:`~sqlalchemy.pool.NullPool` on every driver, not just SQLite.
+#:
+#: A pooled async connection created on one event loop must never be finalized
+#: on another. That rule binds every async driver — it is not a SQLite quirk —
+#: but it costs nothing in production, where a uvicorn worker lives on exactly
+#: one loop. A process that *spans* loops must not pool at all, and asyncpg
+#: enforces this where aiosqlite quietly tolerates it.
+#:
+#: The test suite is such a process (sync TestClient portal loop + asyncio.run
+#: seeding + a fresh loop per async test), so tests/conftest.py sets this. It
+#: deliberately lives outside :func:`dispose_db`'s reset: the app's own lifespan
+#: disposes the engine on every ``with TestClient(app)`` exit, and the *rebuilt*
+#: engine has to stay unpooled too — otherwise the setting silently lapses after
+#: the first test, which is exactly what happened.
+_force_null_pool: bool = False
+
 
 def _ensure_engine(settings: Settings | None = None) -> AsyncEngine:
     """Create (once) and return the process-wide async engine.
 
-    For SQLite (aiosqlite) we use :class:`~sqlalchemy.pool.NullPool` so each
-    operation opens and closes its own connection, which also suits a file DB
-    with no connection cost worth amortising.
-
-    Note the cross-loop rule that NullPool sidesteps — *a pooled connection
-    created on one event loop must never be finalized on another* — is not a
-    SQLite quirk; it binds every async driver, and asyncpg enforces it far more
-    strictly than aiosqlite. It costs nothing here because a uvicorn worker
-    lives on one loop. A process that spans loops needs NullPool on Postgres
-    too: see ``_install_unpooled_engine`` in tests/conftest.py, which is what
-    the test suite is.
+    SQLite (aiosqlite) always uses :class:`~sqlalchemy.pool.NullPool`: a local
+    file has no connection cost worth amortising. Other drivers pool unless
+    :data:`_force_null_pool` says otherwise — see the note there.
     """
     global _engine, _sessionmaker
     if _engine is None:
@@ -58,10 +66,10 @@ def _ensure_engine(settings: Settings | None = None) -> AsyncEngine:
         is_sqlite = settings.database_url.startswith("sqlite")
         kwargs: dict[str, object] = {"echo": False, "future": True}
         if is_sqlite:
-            # ``check_same_thread`` only matters for SQLite; NullPool avoids
-            # cross-loop pooled-connection teardown hangs.
             kwargs["poolclass"] = NullPool
             kwargs["connect_args"] = {"check_same_thread": False}
+        elif _force_null_pool:
+            kwargs["poolclass"] = NullPool
         else:
             kwargs["pool_pre_ping"] = True
         _engine = create_async_engine(settings.database_url, **kwargs)

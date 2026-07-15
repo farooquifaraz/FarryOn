@@ -72,52 +72,28 @@ for _key in (
 
 from app.config import get_settings  # noqa: E402
 from app.db import base as db_base  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-from sqlalchemy.pool import NullPool  # noqa: E402
-
-
-def _install_unpooled_engine() -> None:
-    """Build the process-wide engine with NullPool, whatever the driver.
-
-    This suite deliberately spans event loops: the sync ``TestClient`` runs its
-    own portal loop, ``asyncio.run(...)`` seeding opens another, and
-    pytest-asyncio hands each async test a fresh one. A *pooled* async
-    connection created on one loop and finalized on another is undefined
-    behaviour. aiosqlite mostly tolerates it — which is why this went unnoticed
-    — but asyncpg does not: the first time the admin suite met a real Postgres
-    16 in CI, 73 of 74 tests died with "attached to a different loop".
-
-    ``app.db.base`` already reaches for NullPool, but only under SQLite, as if
-    cross-loop safety were a driver quirk. It isn't: it's a property of *this
-    process*, which is why the fix belongs here and not there. Production keeps
-    its pool — a uvicorn worker lives on one loop and genuinely wants one.
-    """
-    settings = get_settings()
-    db_base._engine = create_async_engine(
-        settings.database_url,
-        echo=False,
-        future=True,
-        poolclass=NullPool,
-        connect_args=(
-            {"check_same_thread": False}
-            if settings.database_url.startswith("sqlite")
-            else {}
-        ),
-    )
-    db_base._sessionmaker = async_sessionmaker(
-        db_base._engine, expire_on_commit=False, class_=AsyncSession
-    )
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _settings_cache_reset() -> AsyncIterator[None]:
-    """Ensure cached settings reflect the test env; clean up the DB file."""
+    """Ensure cached settings reflect the test env; clean up the DB file.
+
+    Also forbids connection pooling for the whole run. This suite spans event
+    loops by design — the sync ``TestClient`` runs its own portal loop,
+    ``asyncio.run(...)`` seeding opens another, pytest-asyncio hands each async
+    test a fresh one — and a pooled async connection created on one loop and
+    finalized on another is undefined. aiosqlite tolerates it, which is why
+    nobody noticed; asyncpg refuses, and the admin suite's first meeting with a
+    real Postgres 16 killed 73 of its 74 tests.
+
+    It's a flag rather than an engine we build here because the app's lifespan
+    calls ``dispose_db()`` on every ``with TestClient(app)`` exit — an engine
+    installed once would be thrown away and silently rebuilt *pooled* after the
+    first test.
+    """
     get_settings.cache_clear()
-    _install_unpooled_engine()
+    db_base._force_null_pool = True
     yield
     _safe_unlink(_TMP_DB)
 
