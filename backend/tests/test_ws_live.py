@@ -243,17 +243,25 @@ def test_bad_first_message_is_rejected() -> None:
 
 
 async def test_notes_tasks_rest_endpoints(db_session) -> None:
-    """The REST endpoints surface and manage what the agent created."""
+    """The REST endpoints surface and manage what the agent created.
+
+    Both sides run as the anonymous user, which is what a signed-out local run
+    actually does: the live session resolves its owner to that row (see
+    ws/session.py::_resolve_owner) and an unauthenticated REST call resolves to
+    the same one. The rows must therefore be *created owned* — an ownerless note
+    is visible to nobody now that these endpoints scope by user. Cross-user
+    isolation is covered separately in test_data_scoping.py.
+    """
+    from app.db import repo
     from app.tools.base import ToolContext
     from app.tools.notes import CreateNoteTool
     from app.tools.tasks import CreateTaskTool
 
-    note = await CreateNoteTool().run(
-        ToolContext(session=db_session), text="REST note"
-    )
-    task = await CreateTaskTool().run(
-        ToolContext(session=db_session), title="REST task"
-    )
+    user = await repo.get_or_create_user(db_session, repo.ANON_EXTERNAL_ID)
+    ctx = ToolContext(session=db_session, user_id=user.id)
+
+    note = await CreateNoteTool().run(ctx, text="REST note")
+    task = await CreateTaskTool().run(ctx, title="REST task")
     await db_session.commit()
 
     app = create_app()

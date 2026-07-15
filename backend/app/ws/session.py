@@ -28,6 +28,7 @@ from collections.abc import Callable
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketState
 
 from app.agent.orchestrator import Orchestrator
@@ -48,6 +49,7 @@ from app.config import Settings
 from app.db import repo
 from app.prompts.system import build_system_prompt
 from app.db.base import get_sessionmaker
+from app.db.models import User
 from app.logging_conf import get_logger
 from app.observability import metrics
 from app.ws.frames import FrameTag, decode_frame, encode_frame
@@ -55,7 +57,6 @@ from app.ws.frames import FrameTag, decode_frame, encode_frame
 logger = get_logger(__name__)
 
 PROTOCOL_VERSION = 1
-_ANON_USER = "anonymous"
 
 
 class Session:
@@ -68,8 +69,13 @@ class Session:
         gateway_factory: Callable[[str | None, str | None], AIGateway],
         engine: ToolEngine,
         settings: Settings,
+        user_id: int | None = None,
     ) -> None:
         self._ws = websocket
+        # Who this connection belongs to, already verified from the handshake
+        # token by ws/live.py::_resolve_user_id. None = nobody signed in, which
+        # only reaches here on a local run (production rejects the connection).
+        self._authed_user_id = user_id
         # The gateway is built AFTER the handshake, once we know which provider
         # the client asked for (hello.provider) — see :meth:`_resolve_provider`.
         self._gateway_factory = gateway_factory
@@ -691,12 +697,38 @@ class Session:
 
     # -- Persistence + teardown ----------------------------------------------
 
+    async def _resolve_owner(self, db: AsyncSession) -> User:
+        """Load the signed-in user, or the shared anonymous row if there is none.
+
+        Raises :class:`LookupError` if the token named a user who has since been
+        deleted — the one case where we must not quietly fall back to anonymous,
+        since that would hand a stranger's session the shared pile of data.
+        """
+        if self._authed_user_id is None:
+            return await repo.get_or_create_user(db, repo.ANON_EXTERNAL_ID)
+
+        user = await db.get(User, self._authed_user_id)
+        if user is None or user.deleted_at is not None:
+            raise LookupError(f"user {self._authed_user_id} no longer exists")
+        return user
+
     async def _persist_session_start(self) -> None:
-        """Resolve the anonymous user and record the session start row."""
+        """Resolve the session's owner and record the session start row.
+
+        The owner is whoever the handshake token named. Everything the agent
+        creates from here — notes, tasks, transcripts — is stamped with this id
+        (it reaches the tools via ``Orchestrator(user_id=...)``), so this one
+        lookup is what makes a user's data theirs.
+
+        Falls back to the shared anonymous row only when nobody is signed in,
+        which production forbids at the door (ws/live.py). A token naming a user
+        who no longer exists resolves to nothing rather than silently landing in
+        the anonymous pile.
+        """
         sessionmaker = get_sessionmaker()
         async with sessionmaker() as db:
             try:
-                user = await repo.get_or_create_user(db, _ANON_USER)
+                user = await self._resolve_owner(db)
                 self._user_id = user.id
                 client = (self._hello or {}).get("client") or {}
                 device = (self._hello or {}).get("device") or {}

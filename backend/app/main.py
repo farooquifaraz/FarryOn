@@ -14,7 +14,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -24,9 +24,11 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import Settings, get_settings
 from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
+from app.core.deps import get_data_owner
 from app.core.responses import AppError, app_error_handler
 from app.db import repo
 from app.db.base import dispose_db, get_sessionmaker, init_db
+from app.db.models import User
 from app.logging_conf import configure_logging, get_logger
 from app.modules.audit.router import router as audit_router
 from app.modules.billing.router import router as billing_router
@@ -198,39 +200,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # ---- Notes & tasks (read/manage what the agent created) ----------------
     #
-    # SINGLE-USER ONLY — must be fixed before the admin/user module goes live.
+    # Every one of these six is scoped to `owner` — the caller resolved from the
+    # Bearer header by core/deps.py::get_data_owner. Two rules hold across all
+    # of them, and both are load-bearing:
     #
-    # These six endpoints are unauthenticated and return/mutate rows across
-    # every user: the reads below deliberately omit `user_id`, so they list the
-    # whole table. That is currently harmless only because there is exactly one
-    # user: every live session resolves to the shared `_ANON_USER` row (see
-    # ws/session.py::_persist_session_start), so all notes/tasks already carry
-    # the same user_id.
+    #   * Reads pass `user_id=owner.id`. Omitting it lists the whole table.
+    #   * Writes pass it too. The ids here are small integers straight off the
+    #     client, so ownership can't be inferred from "they knew the id" — a
+    #     signed-in stranger can ask for note 4. repo.delete_note & friends
+    #     answer "not found" rather than "not yours": a 403 would confirm the
+    #     row exists, which is itself a leak.
     #
-    # Adding a `user_id=` filter here alone would therefore change nothing.
-    # Closing the gap needs, in order:
-    #   (1) an identity on the client. PARTLY DONE: when signed in, the app now
-    #       sends `Authorization: Bearer` on these REST calls (see
-    #       mobile/lib/data/data_api.dart) — but the WS `hello` still carries no
-    #       identity, so the live session has none.
-    #   (2) `_ANON_USER` replaced by that identity in _persist_session_start, so
-    #       created rows are tagged with a real user rather than the shared one.
-    #   (3) these endpoints resolving the caller and scoping every read *and*
-    #       write by it. They currently ignore the Bearer header entirely;
-    #       app/core/deps.py::get_current_user already does the resolving. Note
-    #       the delete/done handlers take a bare row id and check no ownership.
-    #
-    # Deferred deliberately (2026-07-14): single-user today, and the choice
-    # between a device-scoped id and real login is a product decision.
+    # The rows themselves get their owner upstream, at the live session's
+    # handshake (ws/session.py::_resolve_owner), so what the agent creates and
+    # what these endpoints return agree on who it belongs to.
 
     @app.get("/notes", tags=["data"])
-    async def list_notes_endpoint() -> JSONResponse:
-        """List saved notes (newest first) for the app's Notes view.
-
-        Unscoped: returns every user's notes. See the section comment above.
-        """
+    async def list_notes_endpoint(
+        owner: User = Depends(get_data_owner),
+    ) -> JSONResponse:
+        """List the caller's saved notes (newest first) for the app's Notes view."""
         async with get_sessionmaker()() as db:
-            notes = await repo.list_notes(db, limit=200)
+            notes = await repo.list_notes(db, user_id=owner.id, limit=200)
             return JSONResponse(
                 [
                     {
@@ -243,13 +234,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
     @app.get("/tasks", tags=["data"])
-    async def list_tasks_endpoint() -> JSONResponse:
-        """List tasks (open first, then newest) for the app's Tasks view.
-
-        Unscoped: returns every user's tasks. See the section comment above.
-        """
+    async def list_tasks_endpoint(
+        owner: User = Depends(get_data_owner),
+    ) -> JSONResponse:
+        """List the caller's tasks (open first, then newest) for the Tasks view."""
         async with get_sessionmaker()() as db:
-            tasks = await repo.list_tasks(db, include_done=True, limit=200)
+            tasks = await repo.list_tasks(
+                db, user_id=owner.id, include_done=True, limit=200
+            )
             return JSONResponse(
                 [
                     {
@@ -265,31 +257,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/tasks/{task_id}/done", tags=["data"])
     async def set_task_done_endpoint(
-        task_id: int, done: bool = True
+        task_id: int,
+        done: bool = True,
+        owner: User = Depends(get_data_owner),
     ) -> JSONResponse:
-        """Mark a task done/undone (``?done=true|false``)."""
+        """Mark one of the caller's tasks done/undone (``?done=true|false``)."""
         async with get_sessionmaker()() as db:
-            task = await repo.set_task_done(db, task_id=task_id, done=done)
+            task = await repo.set_task_done(
+                db, task_id=task_id, done=done, user_id=owner.id
+            )
             await db.commit()
             if task is None:
                 return JSONResponse({"error": "not found"}, status_code=404)
             return JSONResponse({"id": task.id, "done": task.done})
 
     @app.delete("/notes/{note_id}", tags=["data"])
-    async def delete_note_endpoint(note_id: int) -> JSONResponse:
-        """Delete a note."""
+    async def delete_note_endpoint(
+        note_id: int, owner: User = Depends(get_data_owner)
+    ) -> JSONResponse:
+        """Delete one of the caller's notes."""
         async with get_sessionmaker()() as db:
-            ok = await repo.delete_note(db, note_id=note_id)
+            ok = await repo.delete_note(db, note_id=note_id, user_id=owner.id)
             await db.commit()
             return JSONResponse(
                 {"deleted": ok}, status_code=200 if ok else 404
             )
 
     @app.delete("/tasks/{task_id}", tags=["data"])
-    async def delete_task_endpoint(task_id: int) -> JSONResponse:
-        """Delete a task."""
+    async def delete_task_endpoint(
+        task_id: int, owner: User = Depends(get_data_owner)
+    ) -> JSONResponse:
+        """Delete one of the caller's tasks."""
         async with get_sessionmaker()() as db:
-            ok = await repo.delete_task(db, task_id=task_id)
+            ok = await repo.delete_task(db, task_id=task_id, user_id=owner.id)
             await db.commit()
             return JSONResponse(
                 {"deleted": ok}, status_code=200 if ok else 404

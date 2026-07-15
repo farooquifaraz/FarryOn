@@ -1,21 +1,17 @@
 """The ``/ws/live`` WebSocket endpoint.
 
-Accepts the connection (optionally verifying the ``?token=`` JWT), builds the
-configured AI gateway and tool engine, and hands control to a :class:`Session`.
+Resolves who is calling from the ``?token=`` JWT, builds the configured AI
+gateway and tool engine, and hands control to a :class:`Session`.
 """
 
 from __future__ import annotations
-
-import base64
-import hashlib
-import hmac
-import json
 
 from fastapi import APIRouter, WebSocket, status
 
 from app.agent.tool_engine import ToolEngine
 from app.ai.factory import build_gateway
-from app.config import get_settings
+from app.config import Settings, get_settings
+from app.core.security import decode_token
 from app.logging_conf import get_logger
 from app.observability import metrics
 from app.tools import build_default_tools
@@ -25,56 +21,48 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
-def _b64url_decode(segment: str) -> bytes:
-    """Decode a base64url segment, restoring missing padding."""
-    padding = "=" * (-len(segment) % 4)
-    return base64.urlsafe_b64decode(segment + padding)
+def _resolve_user_id(websocket: WebSocket, settings: Settings) -> int | None:
+    """The signed-in user behind this connection, or ``None`` if there isn't one.
 
+    A WebSocket handshake can't carry an ``Authorization`` header, so the access
+    token rides in the query string instead — but it is the same token, verified
+    the same way as :func:`app.core.deps.get_current_user`. That equivalence is
+    the point: this was a hand-rolled signature check that read no claims and
+    ignored ``exp``, so an expired token — or a refresh token used as an access
+    token — sailed through.
 
-def verify_jwt(token: str, secret: str) -> bool:
-    """Verify a minimal HS256 JWT signature (no external dependency).
-
-    This is intentionally small: it validates the HMAC-SHA256 signature over
-    ``header.payload`` using ``secret``. It does not check ``exp``/claims —
-    swap in ``pyjwt`` for production claim validation. Returns ``False`` on any
-    malformed input rather than raising.
+    Returns ``None`` for absent/invalid/expired and lets the caller decide
+    whether that is fatal; see :func:`ws_live`.
     """
+    token = websocket.query_params.get("token")
+    if not token:
+        return None
+    claims = decode_token(settings=settings, token=token)
+    if claims is None or claims.get("type") != "access":
+        return None
     try:
-        header_b64, payload_b64, signature_b64 = token.split(".")
-    except ValueError:
-        return False
-    try:
-        header = json.loads(_b64url_decode(header_b64))
-    except (ValueError, json.JSONDecodeError):
-        return False
-    if header.get("alg") != "HS256":
-        return False
-    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
-    expected = hmac.new(
-        secret.encode("utf-8"), signing_input, hashlib.sha256
-    ).digest()
-    try:
-        provided = _b64url_decode(signature_b64)
-    except ValueError:
-        return False
-    return hmac.compare_digest(expected, provided)
+        return int(claims["sub"])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 @router.websocket("/ws/live")
 async def ws_live(websocket: WebSocket) -> None:
     """Entry point for the realtime multimodal session.
 
-    Auth is enforced only when a non-default ``JWT_SECRET`` is configured (see
-    :attr:`Settings.auth_enabled`); local/dev runs skip it for convenience.
+    Auth is *enforced* only when a non-default ``JWT_SECRET`` is configured (see
+    :attr:`Settings.auth_enabled`), so a local run still connects without one.
+    The token is *read* either way: a signed-in dev session must own its notes
+    and tasks exactly as a production one does, or scoping is a thing that only
+    happens in prod — which is where it would first be tested, and first break.
     """
     settings = get_settings()
 
-    if settings.auth_enabled:
-        token = websocket.query_params.get("token")
-        if not token or not verify_jwt(token, settings.jwt_secret):
-            logger.warning("ws.auth_rejected")
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
+    user_id = _resolve_user_id(websocket, settings)
+    if settings.auth_enabled and user_id is None:
+        logger.warning("ws.auth_rejected")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
 
     await websocket.accept()
     metrics.WS_CONNECTIONS.inc()
@@ -97,6 +85,7 @@ async def ws_live(websocket: WebSocket) -> None:
         gateway_factory=gateway_factory,
         engine=engine,
         settings=settings,
+        user_id=user_id,
     )
     try:
         await session.run()

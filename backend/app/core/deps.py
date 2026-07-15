@@ -91,6 +91,36 @@ async def get_current_user(
     return user
 
 
+async def get_data_owner(
+    authorization: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> User:
+    """The user whose notes/tasks a ``/notes``|``/tasks`` call may see and touch.
+
+    A *present* Authorization header is held to the full :func:`get_current_user`
+    standard — an expired or revoked token is a 401, never a quiet downgrade to
+    anonymous, because a downgrade would answer with someone else's data instead
+    of telling the app to refresh.
+
+    A *missing* header resolves to the shared anonymous user, matching the WS
+    endpoint: a local run with no login still reaches its own data. Where auth is
+    enforced (:attr:`Settings.auth_enabled`) there is no such fallback — sign in
+    or get nothing.
+    """
+    if authorization:
+        return await get_current_user(
+            authorization=authorization, db=db, settings=settings
+        )
+    if settings.auth_enabled:
+        raise AppError("UNAUTHENTICATED", "Sign in required.", status_code=401)
+    # Local import: app.db.repo imports app.db.models only, so no cycle — but
+    # keeping it here preserves core/'s "depends on nothing above it" shape.
+    from app.db import repo
+
+    return await repo.get_or_create_user(db, repo.ANON_EXTERNAL_ID)
+
+
 async def get_current_session_id(
     authorization: str | None = Header(default=None),
     settings: Settings = Depends(get_settings),

@@ -75,9 +75,10 @@ class DataApi {
 
   Uri _uri(String path) => _config.httpBase.replace(path: path);
 
-  /// Bearer header when a FarryOn session token exists. The Notes/Tasks
-  /// endpoints don't enforce auth yet, but sending it now means they start
-  /// returning per-user data the moment the backend scopes them.
+  /// Bearer header when a FarryOn session token exists. This is what makes the
+  /// Notes/Tasks screens show *this* user's rows: the backend scopes every read
+  /// and write to whoever this token names, and a request without it reaches
+  /// only the anonymous pile (locally) or 401s (in production).
   Map<String, String> get _headers {
     final token = _config.authToken;
     return (token == null || token.isEmpty)

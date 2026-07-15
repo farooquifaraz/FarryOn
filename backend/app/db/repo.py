@@ -26,6 +26,11 @@ from app.db.models import (
     User,
 )
 
+#: ``external_id`` of the shared row that owns data created with nobody signed
+#: in. Only reachable on a local run — production enforces auth at both doors
+#: (ws/live.py and core/deps.py::get_data_owner), so nothing lands here.
+ANON_EXTERNAL_ID = "anonymous"
+
 #: Counter columns on :class:`DailyUsage` that ``bump_daily_usage`` may touch.
 _USAGE_COUNTERS = (
     "voice_seconds", "frames_sent", "text_turns", "web_searches", "image_scans",
@@ -335,31 +340,52 @@ async def update_task(
     return task
 
 
+def _owned_by(row: Note | Task, user_id: int | None) -> bool:
+    """Whether ``user_id`` may act on ``row``.
+
+    ``user_id=None`` means "don't check" — for the agent's own tool calls, which
+    already run inside their session's user, and for admin moderation. Callers
+    that take a row id straight from a client MUST pass a real id: a bare id is
+    guessable, so without this an authenticated stranger can delete row 4 by
+    asking for row 4.
+    """
+    return user_id is None or row.user_id == user_id
+
+
 async def set_task_done(
-    session: AsyncSession, *, task_id: int, done: bool
+    session: AsyncSession,
+    *,
+    task_id: int,
+    done: bool,
+    user_id: int | None = None,
 ) -> Task | None:
-    """Mark a task done/undone; returns the row or None if missing."""
+    """Mark a task done/undone; None if missing or not ``user_id``'s to touch."""
     task = await session.get(Task, task_id)
-    if task is not None:
-        task.done = done
-        await session.flush()
+    if task is None or not _owned_by(task, user_id):
+        return None
+    task.done = done
+    await session.flush()
     return task
 
 
-async def delete_note(session: AsyncSession, *, note_id: int) -> bool:
-    """Delete a note; returns True if a row was removed."""
+async def delete_note(
+    session: AsyncSession, *, note_id: int, user_id: int | None = None
+) -> bool:
+    """Delete a note; False if missing or not ``user_id``'s to delete."""
     note = await session.get(Note, note_id)
-    if note is None:
+    if note is None or not _owned_by(note, user_id):
         return False
     await session.delete(note)
     await session.flush()
     return True
 
 
-async def delete_task(session: AsyncSession, *, task_id: int) -> bool:
-    """Delete a task; returns True if a row was removed."""
+async def delete_task(
+    session: AsyncSession, *, task_id: int, user_id: int | None = None
+) -> bool:
+    """Delete a task; False if missing or not ``user_id``'s to delete."""
     task = await session.get(Task, task_id)
-    if task is None:
+    if task is None or not _owned_by(task, user_id):
         return False
     await session.delete(task)
     await session.flush()

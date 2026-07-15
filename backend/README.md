@@ -139,36 +139,40 @@ production schema evolution, introduce **Alembic**: point `alembic.ini`
 `target_metadata = app.db.base.Base.metadata` in `env.py`. (No Alembic files are
 shipped here to keep the bootstrap dependency-free.)
 
-## Known limitation: the data endpoints are single-user
+## How notes and tasks are scoped to a user
 
-`GET /notes`, `GET /tasks`, `POST /tasks/{id}/done`, `DELETE /notes/{id}` and
-`DELETE /tasks/{id}` are **unauthenticated and not scoped to a user** — the
-reads list the whole table and the writes take a bare row id without any
-ownership check.
+A user's notes and tasks are their own. Two pieces make that true, and both are
+needed — filtering reads without owning the rows would filter on a column that
+every row shares:
 
-This is harmless today because there is exactly one user: every live session
-resolves to the shared `_ANON_USER` row
-(`app/ws/session.py::_persist_session_start`), so all notes and tasks already
-carry the same `user_id`. Adding a `user_id=` filter to the reads would
-therefore be cosmetic.
+**Rows are created owned.** The live session resolves its owner once, at the
+handshake, from the access token in `?token=`
+(`app/ws/live.py::_resolve_user_id` → `app/ws/session.py::_resolve_owner`).
+That id reaches every tool through `Orchestrator(user_id=...)`, so whatever the
+agent saves is stamped with the person who said it.
 
-Closing the gap needs, in order:
+**Reads and writes are filtered by the caller.** `GET /notes`, `GET /tasks`,
+`POST /tasks/{id}/done`, `DELETE /notes/{id}` and `DELETE /tasks/{id}` resolve
+the caller via `app/core/deps.py::get_data_owner` and pass `user_id=` to the
+repo. The ids in those paths are small integers straight off the client, so
+ownership cannot be inferred from the caller knowing one — `repo.delete_note` &
+friends check it and answer *not found* rather than *not yours*, since a 403
+would confirm the row exists.
 
-1. **an identity on the client — partly done.** When signed in, the app now
-   sends `Authorization: Bearer` on these REST calls (see
-   `mobile/lib/data/data_api.dart`). The WS `hello` still carries no identity,
-   so the live session — the thing that actually *creates* notes and tasks —
-   has none.
-2. `_ANON_USER` replaced by that identity in `_persist_session_start`, so new
-   rows are tagged with a real user instead of the shared one.
-3. these endpoints resolving the caller and scoping every read *and* write by
-   it. They ignore the Bearer header today;
-   `app/core/deps.py::get_current_user` already does the resolving.
+`tests/test_data_scoping.py` holds the line on both halves.
 
-**Fix this before the admin/user module serves more than one real account**,
-and pick the identity model first (a device-scoped id keeps the current
-no-login UX; the admin module's JWT gives real auth but needs a login flow in
-the app). Deferred deliberately on 2026-07-14.
+Two deliberate asymmetries:
+
+- **Signed out ⇒ the anonymous user** (`repo.ANON_EXTERNAL_ID`), so a local run
+  with no login still works. Where `JWT_SECRET` is a real secret
+  (`Settings.auth_enabled`) there is no such fallback: the WS closes the
+  connection and the REST endpoints 401.
+- **A *bad* token is always a 401**, never a quiet downgrade to anonymous — a
+  downgrade would hand the app someone else's rows instead of telling it to
+  refresh.
+
+Still shared across users: `/detect`, the Telegram webhook, and the glasses
+endpoints. None of them read or write per-user rows today.
 
 ## Docker
 
