@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../../core/theme.dart';
@@ -63,6 +65,45 @@ class _AuthScaffoldState extends State<AuthScaffold>
           ),
           SafeArea(child: widget.child),
         ],
+      ),
+    );
+  }
+}
+
+/// Centres a form in the space actually visible, and scrolls only when it
+/// doesn't fit — so a short form sits in the middle of the screen instead of
+/// hanging off the top with dead space beneath it.
+///
+/// The keyboard is handled here rather than by the Scaffold: [AuthScaffold]
+/// keeps `resizeToAvoidBottomInset: false` so the aurora doesn't lurch when
+/// the keyboard opens, which means the layout must subtract the inset itself.
+/// Otherwise the form stays centred *behind* the keyboard, and Flutter's
+/// scroll-into-view does nothing because the viewport it sees is still full
+/// height.
+class AuthForm extends StatelessWidget {
+  const AuthForm({super.key, required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final keyboard = MediaQuery.of(context).viewInsets.bottom;
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        padding: EdgeInsets.only(bottom: keyboard),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minHeight: math.max(0, constraints.maxHeight - keyboard),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 24, 22, 24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: children,
+            ),
+          ),
+        ),
       ),
     );
   }

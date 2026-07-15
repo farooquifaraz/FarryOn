@@ -1,3 +1,5 @@
+
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -159,13 +161,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         onPopInvokedWithResult: (didPop, _) {
           if (!didPop && twoFactor) _leaveTwoFactor();
         },
-        child: ListView(
-          padding: EdgeInsets.fromLTRB(
-            22,
-            32,
-            22,
-            32 + MediaQuery.of(context).viewInsets.bottom,
-          ),
+        child: AuthForm(
           children: [
             const AuthBrand(),
             const SizedBox(height: 34),

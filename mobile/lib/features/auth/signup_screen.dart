@@ -127,13 +127,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
 
     return AuthScaffold(
       appBar: AppBar(backgroundColor: Colors.transparent),
-      child: ListView(
-        padding: EdgeInsets.fromLTRB(
-          22,
-          8,
-          22,
-          32 + MediaQuery.of(context).viewInsets.bottom,
-        ),
+      child: AuthForm(
         children: [
           const AuthBrand(),
           const SizedBox(height: 30),

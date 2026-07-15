@@ -139,7 +139,9 @@ class GoogleButton extends StatelessWidget {
               border: Border.all(color: Aurora.glassBorder),
             ),
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 13),
+              // Matches GradientButton's 16 so the two stacked buttons read
+              // as a pair rather than two different controls.
+              padding: const EdgeInsets.symmetric(vertical: 16),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [

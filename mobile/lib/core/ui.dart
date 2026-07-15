@@ -88,12 +88,27 @@ class GradientButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final enabled = onPressed != null;
     return Opacity(
-      opacity: onPressed == null ? 0.5 : 1,
+      opacity: enabled ? 1 : 0.5,
       child: DecoratedBox(
         decoration: BoxDecoration(
           gradient: gradient,
           borderRadius: BorderRadius.circular(14),
+          // The button is the one thing on screen we want pressed, so it's
+          // the one thing that emits light — a teal glow lifts it off the
+          // dark ground instead of leaving it flat on it. Dropped when
+          // disabled: a glowing button you can't press is a lie.
+          boxShadow: enabled
+              ? [
+                  BoxShadow(
+                    color: Aurora.teal.withValues(alpha: 0.45),
+                    blurRadius: 22,
+                    spreadRadius: -4,
+                    offset: const Offset(0, 6),
+                  ),
+                ]
+              : null,
         ),
         child: Material(
           color: Colors.transparent,
@@ -101,7 +116,7 @@ class GradientButton extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
             onTap: onPressed,
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 14),
+              padding: const EdgeInsets.symmetric(vertical: 16),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [

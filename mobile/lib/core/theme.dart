@@ -85,6 +85,14 @@ class Aurora {
   );
 
   /// The assembled dark theme.
+  /// One rounded border, recoloured per state — so every field in the app
+  /// keeps the same shape and only its colour reacts.
+  static OutlineInputBorder _fieldBorder(Color color, {double width = 1}) =>
+      OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: color, width: width),
+      );
+
   static ThemeData theme() {
     final scheme = ColorScheme.fromSeed(
       seedColor: teal,
@@ -122,6 +130,45 @@ class Aurora {
       bottomSheetTheme: const BottomSheetThemeData(
         backgroundColor: surfaceHigh,
         surfaceTintColor: Colors.transparent,
+      ),
+      // Fields are the app's most-touched surface, so they get the glass
+      // language the cards already use — a translucent fill and a hairline
+      // border — instead of Material's bare grey outline, which read as
+      // unstyled against everything around it. Radius 14 matches
+      // GradientButton so a field and the button under it agree.
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        // Resting vs focused fill: the lift is what tells you where the
+        // caret is, without needing a colour to shout it.
+        fillColor: glass,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+        border: _fieldBorder(glassBorder),
+        enabledBorder: _fieldBorder(glassBorder),
+        // Mint at 1.6px: the only strong colour on the field, spent on the
+        // one thing that matters — which field is live.
+        focusedBorder: _fieldBorder(mint, width: 1.6),
+        errorBorder: _fieldBorder(tint(danger, 0.5)),
+        focusedErrorBorder: _fieldBorder(danger, width: 1.6),
+        disabledBorder: _fieldBorder(tint(glassBorder, 0.5)),
+        labelStyle: const TextStyle(color: textMuted, fontSize: 14.5),
+        floatingLabelStyle: const TextStyle(
+          color: mint,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+        // Hints sit below the label in weight — muted, dimmed further, so a
+        // filled field always reads louder than its placeholder.
+        hintStyle: TextStyle(color: tint(textMuted, 0.6), fontSize: 14),
+        helperStyle: const TextStyle(color: textMuted, fontSize: 11.5),
+        errorStyle: const TextStyle(color: danger, fontSize: 11.5),
+        // The prefix icon tracks focus with the border, so the whole field
+        // lights up as one thing rather than in pieces.
+        prefixIconColor: WidgetStateColor.resolveWith(
+          (states) => states.contains(WidgetState.focused) ? mint : textMuted,
+        ),
+        suffixIconColor: WidgetStateColor.resolveWith(
+          (states) => states.contains(WidgetState.focused) ? mint : textMuted,
+        ),
       ),
       textTheme: base.textTheme.apply(
         bodyColor: textPrimary,
