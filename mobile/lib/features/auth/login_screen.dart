@@ -78,7 +78,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             ? result.message
             : 'Incorrect email or password.';
       }
-      // On success the auth gate swaps this screen out — nothing to do here.
+      // On success FarryOnApp's auth listener pops this screen — the gate alone
+      // can't, since this route sits *above* the home it swaps.
     });
   }
 

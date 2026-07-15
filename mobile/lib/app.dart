@@ -7,15 +7,41 @@ import 'features/live/live_screen.dart';
 import 'state/auth.dart';
 
 /// Root widget: "Midnight Aurora" theming and the auth-gated home route.
-class FarryOnApp extends StatelessWidget {
+class FarryOnApp extends ConsumerStatefulWidget {
   const FarryOnApp({super.key});
 
   @override
+  ConsumerState<FarryOnApp> createState() => _FarryOnAppState();
+}
+
+class _FarryOnAppState extends ConsumerState<FarryOnApp> {
+  final _navigatorKey = GlobalKey<NavigatorState>();
+
+  @override
   Widget build(BuildContext context) {
+    // Signing in has to dismiss the auth screens, and only this listener can do
+    // it: [AuthGate] swaps what `home` builds, but Sign In and Create Account
+    // are *pushed on top of* home, and a route pushed above home survives home
+    // changing underneath it. Without this, a successful sign-in left the login
+    // screen sitting over a live, connected LiveScreen — Farry running, camera
+    // on, talking to the backend, while the user still stared at a login form
+    // and reasonably concluded it had failed.
+    //
+    // It lives here rather than in each screen because there are five ways in
+    // (password, 2FA, Google — from either the login or the signup screen), and
+    // a per-screen pop is a thing you can forget on the sixth. This cannot be
+    // forgotten: every path ends at signedIn.
+    ref.listen<AuthState>(authProvider, (previous, next) {
+      if (next.isSignedIn && previous?.isSignedIn != true) {
+        _navigatorKey.currentState?.popUntil((route) => route.isFirst);
+      }
+    });
+
     return MaterialApp(
       title: 'Farry',
       debugShowCheckedModeBanner: false,
       theme: Aurora.theme(),
+      navigatorKey: _navigatorKey,
       home: const AuthGate(),
     );
   }
