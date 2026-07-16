@@ -27,7 +27,7 @@ Legend: ☐ not done · ☑ done+verified (date) · ⚠ blocked
 | # | Thing | Why |
 |---|---|---|
 | 5 | **Reset the Google client secret** | `GOCSPX-…` was pasted into chat. I never stored it, but treat it as public. |
-| 6 | **Remove `CURL_CA_BUNDLE`** from Windows env | Points at `C:\Program Files\PostgreSQL\18\ssl\certs\ca-bundle.crt`, which doesn't exist. Silently breaks pip *and* Google cert fetch. |
+| 6 | ~~Remove `CURL_CA_BUNDLE`~~ — **fixed in code 2026-07-16** | It points at a file PostgreSQL never shipped, and it broke Google sign-in on every phone: the backend couldn't fetch Google's certs, so the app said "Couldn't reach Google". `app/core/tls.py` now drops it at startup. Still worth removing from the Windows env — it breaks `pip` too, which we can't fix from here. |
 | 7 | ~~Decide about the push~~ — **done 2026-07-16** | 112 commits merged to `main` via PR #1; `main` is the default branch. |
 
 ### Feature backlog
