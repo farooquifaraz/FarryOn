@@ -37,6 +37,19 @@ logger = get_logger(__name__)
 
 # -- Endpoints / constants ---------------------------------------------------
 VISION_ENDPOINT = "https://vision.googleapis.com/v1/images:annotate"
+
+
+def _api_key_header(api_key: str) -> dict[str, str]:
+    """Send the Google API key as a header, never as ``?key=`` in the URL.
+
+    Google accepts either. The URL form is what the docs show and what everyone
+    copies, and it leaks: httpx logs the full request line at INFO — the level
+    this service actually runs at — so every call printed the live key into the
+    log. Logs get pasted into chats, shipped to aggregators, and (once, in this
+    repo) committed to git. A header keeps the secret out of anything that
+    records URLs.
+    """
+    return {"x-goog-api-key": api_key}
 WIKI_SUMMARY_API = "https://en.wikipedia.org/api/rest_v1/page/summary/"
 LENS_UPLOAD_BY_URL = "https://lens.google.com/uploadbyurl?url="
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -185,7 +198,10 @@ async def _vision_annotate(
 
     try:
         r = await client.post(
-            f"{VISION_ENDPOINT}?key={api_key}", json=payload, timeout=_HTTP_TIMEOUT
+            VISION_ENDPOINT,
+            json=payload,
+            headers=_api_key_header(api_key),
+            timeout=_HTTP_TIMEOUT,
         )
     except httpx.RequestError as exc:
         _count("error")
@@ -265,8 +281,9 @@ async def get_ai_explanation(
     for model in GEMINI_MODELS:
         try:
             r = await client.post(
-                f"{GEMINI_BASE}/{model}:generateContent?key={gemini_key}",
+                f"{GEMINI_BASE}/{model}:generateContent",
                 json=body,
+                headers=_api_key_header(gemini_key),
                 timeout=_HTTP_TIMEOUT,
             )
             # Renamed (404) or transient/throttled (429/5xx) — try the next
@@ -344,8 +361,9 @@ async def gemini_vision_identify(
     for model in GEMINI_MODELS:
         try:
             r = await client.post(
-                f"{GEMINI_BASE}/{model}:generateContent?key={gemini_key}",
+                f"{GEMINI_BASE}/{model}:generateContent",
                 json=body,
+                headers=_api_key_header(gemini_key),
                 timeout=_HTTP_TIMEOUT,
             )
             if r.status_code in (404, 429, 500, 502, 503):
@@ -407,8 +425,9 @@ async def gemini_vision_answer(
     for model in GEMINI_MODELS:
         try:
             r = await client.post(
-                f"{GEMINI_BASE}/{model}:generateContent?key={gemini_key}",
+                f"{GEMINI_BASE}/{model}:generateContent",
                 json=body,
+                headers=_api_key_header(gemini_key),
                 timeout=_HTTP_TIMEOUT,
             )
             if r.status_code in (404, 429, 500, 502, 503):
