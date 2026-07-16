@@ -110,10 +110,10 @@ runs in CI, so the next regression is found by a person or not at all.
 
 | # | Case | Expected | State |
 |---|---|---|---|
-| D1 | Voice turn end-to-end | Farry hears, answers, TTS plays | ◐ 2026-07-16 — driven by **text**, not the mic: `listening → thinking → speaking`, she ran `web_search`, answered correctly in Hindi ("दुबई संयुक्त अरब अमीरात का एक बड़ा शहर और अमीरात है।") and streamed **65 audio frames = 3.5s of speech**. That proves the model, the tools and TTS generation. It does **not** prove the mic captures or the phone plays — those still need a person to speak. |
+| D1 | Voice turn end-to-end | Farry hears, answers, TTS plays | ☑ **2026-07-16 — Faraz spoke into the mic.** Transcripts prove the whole chain: `user: "Can you please check what is this?"` → `assistant: "I see a prayer rug on the floor…"` → `user: "Yes."` → `assistant: "Yes, you can pray there."` — and `user: "हेलो"`, so it heard both English and Hindi, with the camera feeding it at the same time. Earlier text-driven run had already shown `listening → thinking → speaking` + 3.5s of streamed TTS. |
 | D2 | Camera on → "what am I looking at" | Correct answer from a fresh frame | ☑ **2026-07-16 — pointed at a real laptop.** Farry: "a dark-coloured **Lenovo** laptop… a **USB-C adapter** connected to its **left side**… the screen displays a **chat application** with text in **English and Hindi/Devanagari**". Brand, port, port *side*, and the script on the screen — all correct. Region-correct buy links (Amazon UAE/Saudi). Frame gate visible in the same log: 15 of 54 frames forwarded. **This test also caught the API-key leak** — see the commit. |
 | D3 | Barge-in — talk over her | She stops immediately | ☑ 2026-07-16 — sent the same `interrupt` message the app sends, 1.5s into her answer (177 audio frames in). **Last audio frame landed 0.01s *before* the interrupt** — nothing after it — and state went `speaking → listening` in the same instant. |
-| D4 | Screen off, keep talking | Mic stays alive | ☐ |
+| D4 | Screen off, keep talking | Mic stays alive | ☑ 2026-07-16 (Faraz) |
 | D5 | "Note yaad rakho X" → Notes screen | X is there, owned by you | ☑ 2026-07-16 — Farry ran `create_note`; the row came out owned by the speaker, showed on their `/notes`, and stayed invisible to another account. This is also **B7**: scoping holds through the agent's own tools, not just REST. |
 | D6 | "Reminder lagao" → fires | Notification fires (release build — R8 has bitten twice here) | ☑ **2026-07-16 — fires.** Release build, Vivo, driven from the app. Farry ran `create_task`; Android registered `RTC_WAKEUP origWhen=18:09:00.000 tag=…ScheduledNotificationReceiver`, listed under `Alarm clock:` and `Next wake from idle` (so `setAlarmClock()` — Doze can't defer it). Slept the screen, waited: the notification arrived, `icon=RESOURCE id=0x7f07007c` (= `ic_notification`, so the shrinker didn't eat it). **Caveat: it silently does nothing until POST_NOTIFICATIONS is granted** — see D10. |
 | D7 | Wifi drop mid-session | Reconnects; camera comes back | ☑ 2026-07-16 — killed the **backend** for 15s rather than the phone's wifi (dropping wifi also drops the phone's wireless ADB, so the screen goes with it): the app reconnected on its own and came back **LIVE with the camera still running**. Separately, a real 10s wifi drop *also* reconnected — and survived the phone's IP changing (.127 → .118), which is the harder case. An earlier "Camera off" after that drop turned out to be one of my own stray taps, not a regression. |
@@ -158,9 +158,10 @@ glasses included.
 | # | Case | Expected | State |
 |---|---|---|---|
 | G1 | Frame gate | Frames sent < frames captured (`vision.frame_forwarded` logs both) | ☑ |
-| G2 | Daily quota exhausted | Refused cleanly, told why | ☐ |
+| G2 | Daily quota exhausted | Refused cleanly, told why | ☑ 2026-07-16 — metering verified live (`QUOTA_ENFORCEMENT_ENABLED=true` → three searches recorded as `web_searches=3` against `u15`). The refusal itself is covered by `test_quota_allows_up_to_cap_then_blocks` (→ `quota_exceeded`); driving a real cap to its limit would have burned ~11 live Tavily calls to re-prove tested logic. |
 | G3 | Token cost logged per turn | It's in the log | ☑ |
 | G4 | Vision 403 fallback | Degrades instead of dying | ☑ |
+| G5 | **`voice_seconds` is capped but never counted** | The cap should mean something | ☐ — **found 2026-07-16.** `config.py` promises `free: voice_seconds 300` / `pro: 900`, but nothing calls `check_quota(ctx, "voice_seconds")` — only `image_scans` (identify.py) and `web_searches` (web_search.py) do. So after a real spoken session `daily_usage` reads `voice_seconds=0`. Same for `text_turns` and `frames_sent`. **Voice is the most expensive thing FarryOn does and it is the one thing not metered** — the plan limit is decoration until something increments it. |
 
 ### H. Production deploy — **all blocked on Part 1 #1**
 
