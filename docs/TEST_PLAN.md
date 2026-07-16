@@ -2,8 +2,8 @@
 
 What still needs proving before real users, and what is already proven.
 
-**The automated suites are not repeated here.** 246 backend tests (`pytest`) and
-120 mobile tests (`flutter test`) run in seconds and cover the logic. This
+**The automated suites are not repeated here.** 256 backend tests (`pytest`) and
+126 mobile tests (`flutter test`) run in seconds and cover the logic. This
 document is for what they *can't* reach: a real device, real hardware, real
 providers, real money, and the admin panel — which has **zero** automated tests.
 
@@ -17,7 +17,7 @@ Legend: ☐ not done · ☑ done+verified (date) · ⚠ blocked
 
 | # | Thing | Why it blocks | Where |
 |---|---|---|---|
-| 1 | **Postgres on Render** | Production runs SQLite on the free plan with no disk. Every deploy wipes it — **accounts vanish**. `autoDeploy: true` means each push does this. | `render.yaml` |
+| 1 | **Postgres on Render** | Production runs SQLite on the free plan with no disk. Every deploy wipes it — **accounts vanish**. `autoDeploy` is now **off** so a push no longer deploys; turn it back on once `DATABASE_URL` is real. | `render.yaml` |
 | 2 | **Email provider** | Verification + reset links are only *logged*, never sent. Nobody can verify an email or recover a password. | `backend/app/modules/auth/notifications.py` — the three `send_*` functions are the swap point |
 | 3 | **Payment provider** | The webhook is gated by a shared secret, not a provider HMAC. Anyone who learns the secret can forge "payment succeeded". | `backend/app/modules/billing/router.py` |
 | 4 | **Release keystore** | Release builds are signed with the **debug** key. Play Store will reject it, and a real keystore's different SHA-1 needs its own Android OAuth client or Google sign-in breaks. | `mobile/android/app/build.gradle.kts:39` |
@@ -28,7 +28,7 @@ Legend: ☐ not done · ☑ done+verified (date) · ⚠ blocked
 |---|---|---|
 | 5 | **Reset the Google client secret** | `GOCSPX-…` was pasted into chat. I never stored it, but treat it as public. |
 | 6 | **Remove `CURL_CA_BUNDLE`** from Windows env | Points at `C:\Program Files\PostgreSQL\18\ssl\certs\ca-bundle.crt`, which doesn't exist. Silently breaks pip *and* Google cert fetch. |
-| 7 | **Decide about the push** | ~110 commits are unpushed. Pushing triggers Render autoDeploy — see #1 before you do. |
+| 7 | ~~Decide about the push~~ — **done 2026-07-16** | 112 commits merged to `main` via PR #1; `main` is the default branch. |
 
 ### Feature backlog
 
@@ -52,13 +52,13 @@ who you are.
 |---|---|---|---|
 | A1 | Google sign-in from the login screen | Lands on the live screen, **login form gone** | ☑ 2026-07-15 |
 | A2 | Google sign-in from the **signup** screen | Same — two routes above home must both pop | ☐ |
-| A3 | Password sign-in | Lands on live screen, form gone | ☐ |
-| A4 | Wrong password | "Incorrect email or password", stays put, button re-enables | ☐ |
+| A3 | Password sign-in | Lands on live screen, form gone | ☑ 2026-07-16 (Vivo) |
+| A4 | Wrong password | "Incorrect email or password", stays put, button re-enables | ☑ 2026-07-16 (Vivo) |
 | A5 | Sign out | Back to splash; Settings closes too | ☑ 2026-07-15 |
 | A6 | Kill the app and reopen | Restore splash → straight to live screen, no login | ☐ |
 | A7 | **Airplane mode, then open the app** | Restore falls back to the cached token; live screen shows its offline state. Must **not** sign you out. | ☐ |
-| A8 | Sign in on the phone, then check the admin panel | The user is listed, with the right provider | ☐ |
-| A9 | Google sign-in, cancel the account picker | No error banner — cancelling is not a failure | ☐ |
+| A8 | Sign in on the phone, then check the admin panel | The user is listed, with the right provider | ☑ 2026-07-16 (phone-made accounts all appear, none with a role) |
+| A9 | Google sign-in, cancel the account picker | No error banner — cancelling is not a failure | ☑ 2026-07-16 (Vivo) |
 | A10 | 2FA account: sign in | Code prompt, then live screen | ☐ |
 | A11 | Backend down, tap Sign In | Honest "can't reach" message, not a hang | ☐ |
 | A12 | Avatar tap | Opens Settings, showing your name + email | ☑ 2026-07-15 |
@@ -69,15 +69,15 @@ train ride.
 
 ### B. User scoping — two real accounts
 
-Proven at the API level (`test_data_scoping.py`, 10 tests) and on the live
-server. What's untested is **two accounts on real devices**.
+Proven at the API level (`test_data_scoping.py`, 12 tests) and on the live
+server, and now on a real phone (B4).
 
 | # | Case | Expected | State |
 |---|---|---|---|
 | B1 | Two accounts, API level | Each sees only their own | ☑ 2026-07-15 |
 | B2 | B deletes A's note by id | 404, row survives | ☑ 2026-07-15 |
 | B3 | WS session owner = token holder | Session row carries the real user | ☑ 2026-07-15 (device) |
-| B4 | **Sign in as A on the phone, save a note by voice, sign out, sign in as B** | B's Notes screen is **empty** | ☐ |
+| B4 | **Sign in as A on the phone, save a note by voice, sign out, sign in as B** | B's Notes screen is **empty** | ☑ 2026-07-16 (Vivo) — "1 NOTE", only their own; the other user's note seeded at the same moment did not appear |
 | B5 | Same, then sign back in as A | A's note is back | ☐ |
 | B6 | A and B on **two different phones**, at once | Neither sees the other's notes; neither session steals the other's rows | ☐ |
 | B7 | Ask Farry "read my notes" as B | Farry reads only B's | ☐ |
@@ -91,16 +91,16 @@ The biggest untested surface in the project. Every case below is manual.
 
 | # | Case | Expected | State |
 |---|---|---|---|
-| C1 | Admin login | Dashboard loads | ☐ |
-| C2 | **Non-admin logs into the admin panel** | Refused — this is the whole point of RBAC | ☐ |
-| C3 | User list: search, paginate | Works past page 1 | ☐ |
+| C1 | Admin login | Dashboard loads | ☑ 2026-07-16 |
+| C2 | **Non-admin logs into the admin panel** | Refused — this is the whole point of RBAC | ☑ 2026-07-16 — **found a bug**: the panel let them in (data was safe; backend refused all 11 admin routes). Gated on `dashboard.read`. |
+| C3 | User list: search, paginate | Works past page 1 | ☑ 2026-07-16 (14 accounts listed) |
 | C4 | Change a user's role | Takes effect; audit log records it | ☐ |
-| C5 | Suspend a user → that user uses the app | Kicked out (403 `USER_SUSPENDED`) | ☐ |
+| C5 | Suspend a user → that user uses the app | Kicked out (403 `USER_SUSPENDED`) | ☑ 2026-07-16 — **found two bugs**: the app said "check the backend" over a healthy backend, and the WS let a suspended token keep a live session open. Both fixed. |
 | C6 | Impersonate a user | Works; audit log shows the `act` claim | ☐ |
 | C7 | Revenue screen with zero payments | Shows ₹0, not a crash or a blank | ☐ |
 | C8 | Subscriptions list | Free vs paid vs expired are distinguishable | ☐ |
 | C9 | Token expires while the panel is open | Auto-refresh, no surprise logout | ☐ |
-| C10 | Audit log | Every admin action is there | ☐ |
+| C10 | Audit log | Every admin action is there | ☑ 2026-07-16 (logins recorded) |
 
 **C2 and C5 first.** If C2 fails, the admin panel is a public admin panel.
 
