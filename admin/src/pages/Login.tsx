@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { ApiRequestError } from "../lib/api";
-import { useAuth } from "../lib/auth";
+import { NotAnAdminError, useAuth } from "../lib/auth";
 
 export default function Login() {
   const { user, login, verify2fa } = useAuth();
@@ -32,7 +32,17 @@ export default function Login() {
         navigate("/");
       }
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Something went wrong. Try again.");
+      if (err instanceof NotAnAdminError) {
+        // Their password was right — say so, rather than "wrong credentials",
+        // which would send someone hunting for a typo that isn't there. Reset
+        // to the email step so a 2FA prompt doesn't linger over a dead login.
+        setPendingToken(null);
+        setError(err.message);
+      } else {
+        setError(
+          err instanceof ApiRequestError ? err.message : "Something went wrong. Try again.",
+        );
+      }
     } finally {
       setBusy(false);
     }

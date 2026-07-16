@@ -52,11 +52,31 @@ class TaskItem {
       );
 }
 
+/// The server says this session is over: the token expired, was revoked, or the
+/// account was suspended or deleted.
+///
+/// Distinct from every other failure because it means something different to the
+/// person holding the phone. A network error is "try again in a minute"; this is
+/// "you are not signed in any more", and offering Retry for it is a button that
+/// can never work. A suspended user was shown "Couldn't load — check the
+/// backend." over a perfectly healthy backend.
+class SessionExpiredException implements Exception {
+  const SessionExpiredException();
+  @override
+  String toString() => 'SessionExpiredException';
+}
+
 /// Thin REST client for the backend's Notes/Tasks endpoints. Points at the same
 /// backend the live session uses (via [AppConfig.httpBase]).
 class DataApi {
-  DataApi(this._config, {http.Client? client})
+  DataApi(this._config, {http.Client? client, this.onSessionExpired})
       : _client = client ?? _defaultClient();
+
+  /// Called once per request that comes back 401, before the throw — wired in
+  /// `dataApiProvider` to sign the user out. It lives on the client rather than
+  /// in each screen's catch because all six endpoints can 401 and a per-screen
+  /// check is a thing you forget on the seventh.
+  final void Function()? onSessionExpired;
 
   /// An unreachable backend must fail fast: with only the overall [_timeout],
   /// a dead host left the Notes/Reminders screens on a bare spinner for the
@@ -93,9 +113,21 @@ class DataApi {
   /// *is* answering isn't cut off mid-response.
   static const _timeout = Duration(seconds: 20);
 
+  /// Every response passes through here. A 401 is the one status worth telling
+  /// apart: it isn't a bad request or a flaky network, it means this session is
+  /// finished and no amount of retrying will change that.
+  http.Response _check(http.Response r) {
+    if (r.statusCode == 401) {
+      onSessionExpired?.call();
+      throw const SessionExpiredException();
+    }
+    return r;
+  }
+
   Future<List<NoteItem>> notes() async {
-    final r =
-        await _client.get(_uri('/notes'), headers: _headers).timeout(_timeout);
+    final r = _check(
+      await _client.get(_uri('/notes'), headers: _headers).timeout(_timeout),
+    );
     final list = jsonDecode(r.body) as List<dynamic>;
     return list
         .map((e) => NoteItem.fromJson(e as Map<String, dynamic>))
@@ -103,8 +135,9 @@ class DataApi {
   }
 
   Future<List<TaskItem>> tasks() async {
-    final r =
-        await _client.get(_uri('/tasks'), headers: _headers).timeout(_timeout);
+    final r = _check(
+      await _client.get(_uri('/tasks'), headers: _headers).timeout(_timeout),
+    );
     final list = jsonDecode(r.body) as List<dynamic>;
     return list
         .map((e) => TaskItem.fromJson(e as Map<String, dynamic>))
@@ -112,26 +145,32 @@ class DataApi {
   }
 
   Future<void> setTaskDone(int id, bool done) async {
-    await _client
-        .post(
-          _uri('/tasks/$id/done').replace(queryParameters: {
-            'done': done.toString(),
-          }),
-          headers: _headers,
-        )
-        .timeout(_timeout);
+    _check(
+      await _client
+          .post(
+            _uri('/tasks/$id/done').replace(queryParameters: {
+              'done': done.toString(),
+            }),
+            headers: _headers,
+          )
+          .timeout(_timeout),
+    );
   }
 
   Future<void> deleteNote(int id) async {
-    await _client
-        .delete(_uri('/notes/$id'), headers: _headers)
-        .timeout(_timeout);
+    _check(
+      await _client
+          .delete(_uri('/notes/$id'), headers: _headers)
+          .timeout(_timeout),
+    );
   }
 
   Future<void> deleteTask(int id) async {
-    await _client
-        .delete(_uri('/tasks/$id'), headers: _headers)
-        .timeout(_timeout);
+    _check(
+      await _client
+          .delete(_uri('/tasks/$id'), headers: _headers)
+          .timeout(_timeout),
+    );
   }
 
   void dispose() => _client.close();

@@ -10,6 +10,7 @@ import '../data/live_client.dart';
 import '../features/glasses_lab/bridge/glasses_channel.dart';
 import '../playback/pcm_player.dart';
 import '../protocol/messages.dart';
+import 'auth.dart';
 import 'live_controller.dart';
 import 'live_state.dart';
 import 'permissions.dart';
@@ -39,8 +40,16 @@ final permissionsProvider = Provider<PermissionsService>(
 );
 
 /// REST client for the Notes/Tasks view; tracks the current backend config.
+///
+/// A 401 from any of its endpoints signs the user out. The server only says that
+/// when the session really is finished — expired, revoked, or the account
+/// suspended or deleted — so the honest response is to send them to the login
+/// screen, not to show a backend error over a backend that is fine.
 final dataApiProvider = Provider<DataApi>((ref) {
-  final api = DataApi(ref.read(configProvider));
+  final api = DataApi(
+    ref.read(configProvider),
+    onSessionExpired: () => ref.read(authProvider.notifier).signOut(),
+  );
   ref.listen<AppConfig>(configProvider, (_, next) => api.updateConfig(next));
   ref.onDispose(api.dispose);
   return api;

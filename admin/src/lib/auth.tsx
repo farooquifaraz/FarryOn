@@ -46,6 +46,36 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+/** Whether this account may use the admin panel at all.
+ *
+ * Everyone with a FarryOn login can authenticate here — /auth/login is the same
+ * endpoint the phone uses — so a correct password is not, by itself, permission
+ * to be in this building. Without this check a plain user signed in and browsed
+ * the whole shell: sidebar, dashboard, "Welcome back", every page reporting
+ * "Missing permission: users.read" over an empty table. Nothing leaked (the
+ * backend refused all eleven admin routes) but the login screen promises
+ * "Restricted to accounts with an admin role", and it wasn't restricting.
+ *
+ * The gate is a permission, not a role name or level: `manager` legitimately
+ * belongs here with 6 permissions while `user` has none, and a future role only
+ * has to be granted `dashboard.read` to work. This is UI only — every route the
+ * panel calls is still enforced server-side by require_permission.
+ */
+const PANEL_PERMISSION = "dashboard.read";
+
+function mayUsePanel(me: Me | null): boolean {
+  return me?.permissions.includes(PANEL_PERMISSION) ?? false;
+}
+
+/** Thrown by `login`/`verify2fa` when the credentials are right but the account
+ *  has no business here. Carries the message the sign-in screen shows. */
+export class NotAnAdminError extends Error {
+  constructor() {
+    super("This account doesn't have admin access.");
+    this.name = "NotAnAdminError";
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Me | null>(null);
   const [impersonating, setImpersonating] = useState<Me | null>(null);
@@ -62,7 +92,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     (async () => {
-      if (loadTokens()) setUser(await fetchMe());
+      if (loadTokens()) {
+        // Re-check on every reload, not just at login: an admin whose role was
+        // revoked while they had the tab open must not walk back in with the
+        // session they already hold.
+        const me = await fetchMe();
+        if (mayUsePanel(me)) setUser(me);
+        else clearTokens();
+      }
       setLoading(false);
     })();
   }, [fetchMe]);
@@ -80,7 +117,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         access_token: res.data.access_token as string,
         refresh_token: res.data.refresh_token as string,
       });
-      setUser(await fetchMe());
+      const me = await fetchMe();
+      if (!mayUsePanel(me)) {
+        // Drop the tokens rather than keep a session that can't do anything —
+        // otherwise a reload would walk straight back into the empty panel.
+        clearTokens();
+        throw new NotAnAdminError();
+      }
+      setUser(me);
       return { twoFactorRequired: false };
     },
     [fetchMe],
@@ -93,7 +137,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         { method: "POST", body: { pending_token: pendingToken, code } },
       );
       saveTokens(res.data);
-      setUser(await fetchMe());
+      const me = await fetchMe();
+      if (!mayUsePanel(me)) {
+        clearTokens();
+        throw new NotAnAdminError();
+      }
+      setUser(me);
     },
     [fetchMe],
   );
