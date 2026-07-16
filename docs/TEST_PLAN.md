@@ -94,15 +94,17 @@ The biggest untested surface in the project. Every case below is manual.
 | C1 | Admin login | Dashboard loads | ☑ 2026-07-16 |
 | C2 | **Non-admin logs into the admin panel** | Refused — this is the whole point of RBAC | ☑ 2026-07-16 — **found a bug**: the panel let them in (data was safe; backend refused all 11 admin routes). Gated on `dashboard.read`. |
 | C3 | User list: search, paginate | Works past page 1 | ☑ 2026-07-16 (14 accounts listed) |
-| C4 | Change a user's role | Takes effect; audit log records it | ☐ |
+| C4 | Change a user's role | Takes effect; audit log records it | ☑ 2026-07-16 — set `manager`; not cosmetic: they then get 200 on `/users` (has `users.read`) and 403 on DELETE (no `users.delete`). Audit: `user.set_roles` by actor 16. |
 | C5 | Suspend a user → that user uses the app | Kicked out (403 `USER_SUSPENDED`) | ☑ 2026-07-16 — **found two bugs**: the app said "check the backend" over a healthy backend, and the WS let a suspended token keep a live session open. Both fixed. |
-| C6 | Impersonate a user | Works; audit log shows the `act` claim | ☐ |
-| C7 | Revenue screen with zero payments | Shows ₹0, not a crash or a blank | ☐ |
-| C8 | Subscriptions list | Free vs paid vs expired are distinguishable | ☐ |
-| C9 | Token expires while the panel is open | Auto-refresh, no surprise logout | ☐ |
+| C6 | Impersonate a user | Works; audit log shows the `act` claim | ☑ 2026-07-16 — token carries `sub:15` + `act:{impersonator_id:16}`, audit row records both. The admin gets the *target's* lesser power, not their own (DELETE → 403). Impersonation lives in memory only, so a reload drops it. |
+| C7 | Revenue screen with zero payments | Shows $0, not a crash or a blank | ☑ 2026-07-16 — $0.00 / $0.00 / 0 with "No payments yet." and "No active subscriptions." `Math.max(1, ...)` already guards the empty-spread `-Infinity`. Real numbers also reconcile to the DB: $28.99 = 1900 + 999 cents. |
+| C8 | Subscriptions list | Free vs paid vs expired are distinguishable | ☑ 2026-07-16 — pro/premium, status + lifetime paid per row, filters for active/trialing/past due/canceled. |
+| C9 | Token expires while the panel is open | Auto-refresh, no surprise logout | ☑ 2026-07-16 — corrupted the access token; the page loaded anyway and the refresh token rotated. Single-flight, so a burst of 401s triggers one refresh. |
 | C10 | Audit log | Every admin action is there | ☑ 2026-07-16 (logins recorded) |
 
-**C2 and C5 first.** If C2 fails, the admin panel is a public admin panel.
+**C2 and C5 were run first and both earned it** — see the findings above. The
+remaining gap in this section is that all ten are still *manual*: nothing here
+runs in CI, so the next regression is found by a person or not at all.
 
 ### D. The live session (Farry herself)
 
