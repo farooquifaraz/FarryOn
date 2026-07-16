@@ -26,6 +26,7 @@ from app.config import Settings, get_settings
 from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from app.core.deps import get_data_owner
 from app.core.responses import AppError, app_error_handler
+from app.core.tls import sanitize_ca_env
 from app.db import repo
 from app.db.base import dispose_db, get_sessionmaker, init_db
 from app.db.models import User
@@ -94,6 +95,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """
     settings = settings or get_settings()
     configure_logging(settings.log_level)
+    # Before anything can make an HTTPS call: drop a CA-bundle env var that
+    # points at a file the machine doesn't have. See app/core/tls.py — this is
+    # what made Google sign-in fail with "Couldn't reach Google" on a perfectly
+    # healthy phone.
+    sanitize_ca_env()
 
     app = FastAPI(
         title="FarryOn Backend",
