@@ -10,6 +10,7 @@ main.py/repo.py loses a `user_id=` argument.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
@@ -141,6 +142,58 @@ def test_ws_ignores_a_refresh_token_used_as_an_access_token() -> None:
                 return user.external_id == repo.ANON_EXTERNAL_ID
 
         assert asyncio.run(_is_anon()), "a refresh token must not name a user here"
+
+
+def test_ws_refuses_a_suspended_account() -> None:
+    """Suspending someone must end their live session, not just their REST calls.
+
+    The two doors used to disagree: get_current_user checked status and the
+    force-logout watermark, _resolve_owner checked only the soft-delete. So an
+    admin could suspend an account and watch it keep talking to Farry until the
+    access token aged out — on the operator's model budget. Both now go through
+    app/core/account.py.
+    """
+    with _client() as client:
+        token = _sign_up(client, "suspended@example.com")
+        user_id = _user_id(client, token)
+
+        async def _suspend() -> None:
+            async with get_sessionmaker()() as db:
+                user = await db.get(repo.User, user_id)
+                user.status = "suspended"
+                await db.commit()
+
+        asyncio.run(_suspend())
+
+        with client.websocket_connect(f"/ws/live?token={token}") as ws:
+            msg = _handshake(ws)
+            assert msg["type"] == "error", f"expected a refusal, got {msg}"
+            assert msg["code"] == "session_rejected"
+
+
+def test_ws_refuses_a_token_minted_before_a_force_logout() -> None:
+    # "Sign out everywhere" sets tokens_revoked_before. An access token older
+    # than that watermark is dead even though it still parses and hasn't expired.
+    with _client() as client:
+        token = _sign_up(client, "revoked@example.com")
+        user_id = _user_id(client, token)
+
+        async def _revoke() -> None:
+            async with get_sessionmaker()() as db:
+                user = await db.get(repo.User, user_id)
+                # Well ahead of the token's iat, and tz-aware so the comparison
+                # is honest on SQLite (which hands back naive datetimes).
+                user.tokens_revoked_before = datetime.now(timezone.utc) + timedelta(
+                    minutes=5
+                )
+                await db.commit()
+
+        asyncio.run(_revoke())
+
+        with client.websocket_connect(f"/ws/live?token={token}") as ws:
+            msg = _handshake(ws)
+            assert msg["type"] == "error"
+            assert msg["code"] == "session_rejected"
 
 
 # ---- Reads -----------------------------------------------------------------

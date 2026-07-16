@@ -46,6 +46,7 @@ from app.ai.events import (
     TurnCompleteEvent,
 )
 from app.config import Settings
+from app.core.account import token_rejection
 from app.db import repo
 from app.prompts.system import build_system_prompt
 from app.db.base import get_sessionmaker
@@ -69,13 +70,17 @@ class Session:
         gateway_factory: Callable[[str | None, str | None], AIGateway],
         engine: ToolEngine,
         settings: Settings,
-        user_id: int | None = None,
+        claims: dict[str, Any] | None = None,
     ) -> None:
         self._ws = websocket
-        # Who this connection belongs to, already verified from the handshake
-        # token by ws/live.py::_resolve_user_id. None = nobody signed in, which
-        # only reaches here on a local run (production rejects the connection).
-        self._authed_user_id = user_id
+        # The handshake token's claims, signature/exp already verified by
+        # ws/live.py::_resolve_claims. None = nobody signed in, which only
+        # reaches here on a local run (production rejects the connection).
+        # Kept whole rather than reduced to an id because `iat` is needed too:
+        # a token minted before the account's force-logout watermark is dead
+        # even though it parses (see app/core/account.py).
+        self._claims = claims
+        self._authed_user_id = int(claims["sub"]) if claims else None
         # The gateway is built AFTER the handshake, once we know which provider
         # the client asked for (hello.provider) — see :meth:`_resolve_provider`.
         self._gateway_factory = gateway_factory
@@ -174,7 +179,18 @@ class Session:
                     )
                     reason = "connect_failed"
                     return
-            await self._persist_session_start()
+            if not await self._persist_session_start():
+                # Suspended, deleted, or force-logged-out since the token was
+                # minted. Say so and close rather than send `ready`: the app
+                # treats a dead session as its cue to sign out, and a session
+                # that can't own anything has nothing to offer anyway.
+                await self._send_error(
+                    "session_rejected",
+                    "This account is no longer active. Sign in again.",
+                    fatal=True,
+                )
+                reason = "rejected"
+                return
             await self._send_json(
                 {
                     "type": "ready",
@@ -700,20 +716,33 @@ class Session:
     async def _resolve_owner(self, db: AsyncSession) -> User:
         """Load the signed-in user, or the shared anonymous row if there is none.
 
-        Raises :class:`LookupError` if the token named a user who has since been
-        deleted — the one case where we must not quietly fall back to anonymous,
-        since that would hand a stranger's session the shared pile of data.
+        Applies the same rule as the REST side (app/core/account.py): deleted,
+        force-logged-out and suspended accounts are all refused. They used not to
+        be — only the soft-delete was checked here — so an admin could suspend
+        someone and watch them keep talking to Farry until their access token
+        aged out, on the operator's model budget.
+
+        Raises :class:`PermissionError` rather than falling back to anonymous:
+        that fallback would hand a refused session the shared pile of data.
         """
         if self._authed_user_id is None:
             return await repo.get_or_create_user(db, repo.ANON_EXTERNAL_ID)
 
         user = await db.get(User, self._authed_user_id)
-        if user is None or user.deleted_at is not None:
-            raise LookupError(f"user {self._authed_user_id} no longer exists")
+        rejection = token_rejection(
+            user, issued_at=(self._claims or {}).get("iat", 0)
+        )
+        if rejection is not None:
+            raise PermissionError(rejection)
+        assert user is not None  # token_rejection returns a code for None
         return user
 
-    async def _persist_session_start(self) -> None:
+    async def _persist_session_start(self) -> bool:
         """Resolve the session's owner and record the session start row.
+
+        Returns False when the account may not have a session at all — the
+        caller must close. Every other failure returns True: a DB hiccup losing
+        an audit row must not take a working conversation down with it.
 
         The owner is whoever the handshake token named. Everything the agent
         creates from here — notes, tasks, transcripts — is stamped with this id
@@ -743,9 +772,23 @@ class Session:
                     device_kind=device.get("kind"),
                 )
                 await db.commit()
+            except PermissionError as exc:
+                # NOT best-effort. Failing to write an audit row is survivable;
+                # "this account may not be here" is not, and swallowing it would
+                # leave the session running with no owner — invisible rows and a
+                # suspended user still burning model budget.
+                await db.rollback()
+                logger.warning(
+                    "ws.session_rejected",
+                    session_id=self.session_id,
+                    user_id=self._authed_user_id,
+                    reason=str(exc),
+                )
+                return False
             except Exception as exc:  # noqa: BLE001 - persistence is best-effort
                 await db.rollback()
                 logger.error("session.persist_failed", error=str(exc))
+        return True
 
     async def _cleanup(self, reason: str) -> None:
         """Cancel tool tasks, close the gateway, mark the session ended."""

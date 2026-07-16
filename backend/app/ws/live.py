@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
-def _resolve_user_id(websocket: WebSocket, settings: Settings) -> int | None:
+def _resolve_claims(websocket: WebSocket, settings: Settings) -> dict | None:
     """The signed-in user behind this connection, or ``None`` if there isn't one.
 
     A WebSocket handshake can't carry an ``Authorization`` header, so the access
@@ -41,9 +41,10 @@ def _resolve_user_id(websocket: WebSocket, settings: Settings) -> int | None:
     if claims is None or claims.get("type") != "access":
         return None
     try:
-        return int(claims["sub"])
+        int(claims["sub"])  # a token whose subject isn't an id names nobody
     except (KeyError, TypeError, ValueError):
         return None
+    return claims
 
 
 @router.websocket("/ws/live")
@@ -58,8 +59,8 @@ async def ws_live(websocket: WebSocket) -> None:
     """
     settings = get_settings()
 
-    user_id = _resolve_user_id(websocket, settings)
-    if settings.auth_enabled and user_id is None:
+    claims = _resolve_claims(websocket, settings)
+    if settings.auth_enabled and claims is None:
         logger.warning("ws.auth_rejected")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
@@ -85,7 +86,7 @@ async def ws_live(websocket: WebSocket) -> None:
         gateway_factory=gateway_factory,
         engine=engine,
         settings=settings,
-        user_id=user_id,
+        claims=claims,
     )
     try:
         await session.run()

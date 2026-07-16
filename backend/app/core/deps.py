@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import timezone
 
 from fastapi import Depends, Header
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
+from app.core.account import token_rejection
 from app.core.responses import AppError
 from app.core.security import decode_token
 from app.db.base import get_sessionmaker
@@ -65,29 +65,21 @@ async def get_current_user(
     user = (
         await db.execute(select(User).where(User.id == user_id))
     ).scalar_one_or_none()
-    if user is None or user.deleted_at is not None:
+
+    # Same rule the WebSocket applies — see app/core/account.py.
+    rejection = token_rejection(user, issued_at=claims.get("iat", 0))
+    if rejection == "UNAUTHENTICATED":
         raise AppError("UNAUTHENTICATED", "Invalid session.", status_code=401)
-
-    if user.tokens_revoked_before is not None:
-        issued_at = claims.get("iat", 0)
-        revoked_before = user.tokens_revoked_before
-        if revoked_before.tzinfo is None:
-            # SQLite round-trips DateTime(timezone=True) as naive — but the
-            # value was always written as UTC (see _utcnow()), so a naive
-            # read must be re-tagged UTC before .timestamp(), which
-            # otherwise assumes local time and silently shifts by the
-            # machine's UTC offset.
-            revoked_before = revoked_before.replace(tzinfo=timezone.utc)
-        if issued_at < revoked_before.timestamp():
-            raise AppError(
-                "UNAUTHENTICATED", "Session was revoked. Sign in again.", status_code=401
-            )
-
-    if user.status in ("suspended", "deactivated"):
+    if rejection == "SESSION_REVOKED":
+        raise AppError(
+            "UNAUTHENTICATED", "Session was revoked. Sign in again.", status_code=401
+        )
+    if rejection == "USER_SUSPENDED":
         raise AppError(
             "USER_SUSPENDED", "This account is no longer active.", status_code=403
         )
 
+    assert user is not None  # token_rejection returns UNAUTHENTICATED for None
     return user
 
 
