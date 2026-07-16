@@ -161,7 +161,7 @@ glasses included.
 | G2 | Daily quota exhausted | Refused cleanly, told why | ☑ 2026-07-16 — metering verified live (`QUOTA_ENFORCEMENT_ENABLED=true` → three searches recorded as `web_searches=3` against `u15`). The refusal itself is covered by `test_quota_allows_up_to_cap_then_blocks` (→ `quota_exceeded`); driving a real cap to its limit would have burned ~11 live Tavily calls to re-prove tested logic. |
 | G3 | Token cost logged per turn | It's in the log | ☑ |
 | G4 | Vision 403 fallback | Degrades instead of dying | ☑ |
-| G5 | **`voice_seconds` is capped but never counted** | The cap should mean something | ☐ — **found 2026-07-16.** `config.py` promises `free: voice_seconds 300` / `pro: 900`, but nothing calls `check_quota(ctx, "voice_seconds")` — only `image_scans` (identify.py) and `web_searches` (web_search.py) do. So after a real spoken session `daily_usage` reads `voice_seconds=0`. Same for `text_turns` and `frames_sent`. **Voice is the most expensive thing FarryOn does and it is the one thing not metered** — the plan limit is decoration until something increments it. |
+| G5 | `voice_seconds` is capped and counted | The cap should mean something | ☑ **fixed 2026-07-16.** `Session._meter_voice` counts mic bytes against the plan's daily cap, batched to the DB every 15s of speech plus a flush on close; over the cap the session is told and closed. `text_turns` / `frames_sent` are still dead columns — nothing writes them, and nothing reads them either. |
 
 ### H. Production deploy — **all blocked on Part 1 #1**
 
