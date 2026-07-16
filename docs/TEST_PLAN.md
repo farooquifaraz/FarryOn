@@ -111,7 +111,7 @@ runs in CI, so the next regression is found by a person or not at all.
 | # | Case | Expected | State |
 |---|---|---|---|
 | D1 | Voice turn end-to-end | Farry hears, answers, TTS plays | ☐ |
-| D2 | Camera on → "what am I looking at" | Correct answer from a fresh frame | ☑ 2026-07-16 — the Finder sheet returned "an abstract gradient background, transitioning from dark grey to bright white", which is exactly what the phone's camera was looking at (a blank surface). Right answer, right frame. Worth redoing against a real object. |
+| D2 | Camera on → "what am I looking at" | Correct answer from a fresh frame | ☑ **2026-07-16 — pointed at a real laptop.** Farry: "a dark-coloured **Lenovo** laptop… a **USB-C adapter** connected to its **left side**… the screen displays a **chat application** with text in **English and Hindi/Devanagari**". Brand, port, port *side*, and the script on the screen — all correct. Region-correct buy links (Amazon UAE/Saudi). Frame gate visible in the same log: 15 of 54 frames forwarded. **This test also caught the API-key leak** — see the commit. |
 | D3 | Barge-in — talk over her | She stops immediately | ☐ |
 | D4 | Screen off, keep talking | Mic stays alive | ☐ |
 | D5 | "Note yaad rakho X" → Notes screen | X is there, owned by you | ☑ 2026-07-16 — Farry ran `create_note`; the row came out owned by the speaker, showed on their `/notes`, and stayed invisible to another account. This is also **B7**: scoping holds through the agent's own tools, not just REST. |
