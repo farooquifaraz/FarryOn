@@ -111,13 +111,14 @@ runs in CI, so the next regression is found by a person or not at all.
 | # | Case | Expected | State |
 |---|---|---|---|
 | D1 | Voice turn end-to-end | Farry hears, answers, TTS plays | ☐ |
-| D2 | Camera on → "what am I looking at" | Correct answer from a fresh frame | ☐ |
+| D2 | Camera on → "what am I looking at" | Correct answer from a fresh frame | ☑ 2026-07-16 — the Finder sheet returned "an abstract gradient background, transitioning from dark grey to bright white", which is exactly what the phone's camera was looking at (a blank surface). Right answer, right frame. Worth redoing against a real object. |
 | D3 | Barge-in — talk over her | She stops immediately | ☐ |
 | D4 | Screen off, keep talking | Mic stays alive | ☐ |
 | D5 | "Note yaad rakho X" → Notes screen | X is there, owned by you | ☑ 2026-07-16 — Farry ran `create_note`; the row came out owned by the speaker, showed on their `/notes`, and stayed invisible to another account. This is also **B7**: scoping holds through the agent's own tools, not just REST. |
-| D6 | "Reminder lagao" → fires | Notification fires (release build — R8 has bitten twice here) | ⚠ **half-done 2026-07-16.** Farry schedules it (`create_task` with a due_date) and the build-level guards check out: `ic_notification` **is** in the release APK's resource table (keep.xml works), `com.dexterous.**` is unobfuscated and `-keepattributes Signature` is present. But the notification is scheduled **on the phone**, by `live_controller._applyReminder` reacting to the `tool_result` — so only a session driven **from the app** proves it. Blocked on a phone I can unlock. |
-| D7 | Wifi drop mid-session | Reconnects; camera comes back | ☐ |
+| D6 | "Reminder lagao" → fires | Notification fires (release build — R8 has bitten twice here) | ☑ **2026-07-16 — fires.** Release build, Vivo, driven from the app. Farry ran `create_task`; Android registered `RTC_WAKEUP origWhen=18:09:00.000 tag=…ScheduledNotificationReceiver`, listed under `Alarm clock:` and `Next wake from idle` (so `setAlarmClock()` — Doze can't defer it). Slept the screen, waited: the notification arrived, `icon=RESOURCE id=0x7f07007c` (= `ic_notification`, so the shrinker didn't eat it). **Caveat: it silently does nothing until POST_NOTIFICATIONS is granted** — see D10. |
+| D7 | Wifi drop mid-session | Reconnects; camera comes back | ◐ 2026-07-16 — dropped wifi for 10s: the app **reconnected** on its own (fresh `ws.connected` from the phone). The "camera comes back" half is unverified — killing wifi also killed the phone's wireless ADB, so I lost the screen. |
 | D8 | Provider fallback (bad OpenAI key) | Falls back to Gemini + a non-fatal notice | ☑ 2026-07-16 — ran the backend with a deliberately broken `OPENAI_API_KEY`: `gateway.fallback` → Gemini, session survived, client told which model it got. |
+| D10 | **Reminder with notifications denied** | Should say so, not fail silently | ☐ — **found 2026-07-16**: the first D6 attempt scheduled nothing at all. `dumpsys alarm` had zero farryon entries and no error surfaced anywhere; Farry cheerfully confirmed "reminder set". Granting POST_NOTIFICATIONS fixed it. A reminder that quietly never fires is the same class of bug as the two R8 ones. |
 | D9 | Long session | Watchdog ends it rather than billing forever | ☑ 2026-07-16 — with `IDLE_DISCONNECT_SECONDS=8`, a silent session closed itself at 12.8s (`session.expired reason=idle`). Real caps are 5 min idle / 30 min hard. |
 
 **D6 deserves paranoia**: reminders have silently broken twice in release builds
