@@ -23,13 +23,33 @@ logger = get_logger(__name__)
 
 def _user_key(ctx: ToolContext) -> str:
     """Stable per-user key: the user id, else the session id, else anonymous."""
-    if ctx.user_id is not None:
-        return f"u{ctx.user_id}"
-    return ctx.session_id or "anonymous"
+    return user_key_for(ctx.user_id, ctx.session_id)
 
 
 def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def plan_cap(metric: str) -> int:
+    """This plan's daily cap for ``metric``: ``-1`` unlimited, ``0`` off.
+
+    Public because the live session meters voice itself — it can't route through
+    :func:`check_quota`, which is built around a per-call :class:`ToolContext`
+    that a raw audio frame doesn't have.
+    """
+    settings = get_settings()
+    return settings.plan_limits.get(settings.default_plan, {}).get(metric, -1)
+
+
+def user_key_for(user_id: int | None, session_id: str | None) -> str:
+    """The ``daily_usage`` key for a user, matching what the tools use.
+
+    Shared so the session and the tools meter the *same* person. Two spellings of
+    this would quietly bill one user twice under different keys.
+    """
+    if user_id is not None:
+        return f"u{user_id}"
+    return session_id or "anonymous"
 
 
 async def check_quota(

@@ -24,6 +24,7 @@ import contextlib
 import json
 import time
 import uuid
+from datetime import datetime, timezone
 from collections.abc import Callable
 from typing import Any
 
@@ -45,12 +46,13 @@ from app.ai.events import (
     TranscriptEvent,
     TurnCompleteEvent,
 )
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.core.account import token_rejection
 from app.db import repo
 from app.prompts.system import build_system_prompt
 from app.db.base import get_sessionmaker
 from app.db.models import User
+from app.tools.quota import plan_cap, user_key_for
 from app.logging_conf import get_logger
 from app.observability import metrics
 from app.ws.frames import FrameTag, decode_frame, encode_frame
@@ -58,6 +60,17 @@ from app.ws.frames import FrameTag, decode_frame, encode_frame
 logger = get_logger(__name__)
 
 PROTOCOL_VERSION = 1
+
+#: Mic audio is PCM16 LE mono at 16 kHz — fixed by PROTOCOL.md §"mic in", not
+#: negotiated. The client's `config` message is informational, so the byte count
+#: is the only honest source of duration: trusting a client-declared sample rate
+#: would let a client under-report its own bill.
+_MIC_BYTES_PER_SECOND = 16_000 * 2
+
+#: How much speech to accumulate before writing it down. A DB round-trip per
+#: audio frame would be one every 20-100 ms per live session; a crash loses at
+#: most this much unbilled, which is the right side of that trade.
+_VOICE_FLUSH_EVERY_S = 15.0
 
 
 class Session:
@@ -109,6 +122,21 @@ class Session:
         # by the watchdog to end runaway or forgotten-open sessions.
         self._session_started: float = time.monotonic()
         self._last_activity: float = time.monotonic()
+        # Voice metering. Mic audio is the most expensive thing this product
+        # does and was the one metered resource nothing counted: the plans have
+        # sold `voice_seconds` caps (free 300 / pro 900) since they were written,
+        # while `check_quota` only ever ran for image_scans and web_searches, so
+        # `daily_usage.voice_seconds` sat at 0 forever and the cap could never
+        # fire. Counted here rather than in a tool because audio arrives as raw
+        # frames, with no ToolContext to hang a check on.
+        #
+        # `_voice_used_s` is today's total, read once at session start;
+        # `_voice_pending_s` is what this session has added since the last flush.
+        # Kept apart so the DB is written every _VOICE_FLUSH_EVERY_S of speech
+        # rather than on every ~20-100 ms frame.
+        self._voice_used_s: float = 0.0
+        self._voice_pending_s: float = 0.0
+        self._voice_capped: bool = False
 
     # -- Public entrypoint ----------------------------------------------------
 
@@ -191,6 +219,12 @@ class Session:
                 )
                 reason = "rejected"
                 return
+            # AFTER the owner is resolved, never before: _usage_key() is built
+            # from _user_id, which _persist_session_start is what sets. Loading
+            # first would read (and later bill) a key made from the session id,
+            # so every session would start from zero and the daily cap would
+            # never be reached.
+            await self._load_voice_usage()
             await self._send_json(
                 {
                     "type": "ready",
@@ -382,6 +416,8 @@ class Session:
             metrics.FRAMES_IN.labels(kind="audio").inc()
             metrics.AUDIO_BYTES_IN.inc(len(payload))
             self._last_activity = time.monotonic()  # real user turn (idle reset)
+            if not await self._meter_voice(len(payload)):
+                return  # over today's cap — _meter_voice has ended the session
             await self._gateway.send_audio(payload, ts_ms=ts)
         elif tag == FrameTag.INPUT_VIDEO:
             metrics.FRAMES_IN.labels(kind="video").inc()
@@ -713,6 +749,100 @@ class Session:
 
     # -- Persistence + teardown ----------------------------------------------
 
+    async def _meter_voice(self, payload_bytes: int) -> bool:
+        """Count this audio chunk against today's voice budget.
+
+        Returns False when the speaker is over their plan's daily cap, having
+        already told them and closed the session — the caller must not forward
+        the audio. Returns True in every other case, including when enforcement
+        is off, when the plan is unlimited, and when the DB write fails.
+
+        That last one is deliberate: if we can't record usage we let the audio
+        through. Metering exists to protect the operator's bill, and dropping a
+        user mid-sentence over a database hiccup costs more than the seconds it
+        saves. Under-billing is recoverable; a conversation cut dead is not.
+        """
+        seconds = payload_bytes / _MIC_BYTES_PER_SECOND
+        self._voice_pending_s += seconds
+
+        cap = plan_cap("voice_seconds")
+        enforcing = get_settings().quota_enforcement_enabled
+
+        if enforcing and cap >= 0:
+            total = self._voice_used_s + self._voice_pending_s
+            if total > cap and not self._voice_capped:
+                self._voice_capped = True
+                await self._flush_voice_usage()
+                logger.info(
+                    "quota.voice_exceeded",
+                    session_id=self.session_id,
+                    user_key=self._usage_key(),
+                    used_s=round(total, 1),
+                    cap_s=cap,
+                )
+                await self._send_error(
+                    "quota_exceeded",
+                    f"You've used today's {cap // 60} minutes of voice on the "
+                    f"{get_settings().default_plan} plan. Upgrade to Pro for much more.",
+                    fatal=True,
+                )
+                return False
+            if self._voice_capped:
+                return False
+
+        if self._voice_pending_s >= _VOICE_FLUSH_EVERY_S:
+            await self._flush_voice_usage()
+        return True
+
+    def _usage_key(self) -> str:
+        """The daily_usage key — same spelling the tools use, so one person is
+        one row rather than two."""
+        return user_key_for(self._user_id, self.session_id)
+
+    async def _flush_voice_usage(self) -> None:
+        """Write the speech counted since the last flush, and fold it into the
+        running total. Best-effort: a failed write must never break the call
+        (see :meth:`_meter_voice`), but the seconds are kept pending so the next
+        flush still bills them."""
+        if self._voice_pending_s < 1:
+            return
+        whole = int(self._voice_pending_s)
+        sessionmaker = get_sessionmaker()
+        try:
+            async with sessionmaker() as db:
+                await repo.bump_daily_usage(
+                    db,
+                    user_key=self._usage_key(),
+                    day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                    voice_seconds=whole,
+                )
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001 - never break the call over this
+            logger.warning("quota.voice_flush_failed", error=str(exc))
+            return
+        self._voice_used_s += whole
+        self._voice_pending_s -= whole
+
+    async def _load_voice_usage(self) -> None:
+        """Read today's voice total once, at session start.
+
+        Once — not per frame: the cap is a daily budget, and a session that
+        started under it may run a little past on its last breath rather than
+        pay for a DB read every 20 ms.
+        """
+        if not get_settings().quota_enforcement_enabled:
+            return
+        try:
+            async with get_sessionmaker()() as db:
+                row = await repo.get_daily_usage(
+                    db,
+                    user_key=self._usage_key(),
+                    day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                )
+                self._voice_used_s = float(row.voice_seconds if row else 0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("quota.voice_load_failed", error=str(exc))
+
     async def _resolve_owner(self, db: AsyncSession) -> User:
         """Load the signed-in user, or the shared anonymous row if there is none.
 
@@ -799,6 +929,10 @@ class Session:
         logger.info(
             "session.closing", session_id=self.session_id, reason=reason
         )
+        # Bill the speech since the last flush. Without this every session under
+        # _VOICE_FLUSH_EVERY_S would be free, and a user could talk all day in
+        # 14-second bursts — the cap would count nothing.
+        await self._flush_voice_usage()
         # Cost summary: how many camera frames the gate saved this session.
         if self._frames_in_video:
             saved_pct = round(
