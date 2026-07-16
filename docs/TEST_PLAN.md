@@ -114,15 +114,19 @@ runs in CI, so the next regression is found by a person or not at all.
 | D2 | Camera on → "what am I looking at" | Correct answer from a fresh frame | ☐ |
 | D3 | Barge-in — talk over her | She stops immediately | ☐ |
 | D4 | Screen off, keep talking | Mic stays alive | ☐ |
-| D5 | "Note yaad rakho X" → Notes screen | X is there, owned by you | ☐ |
-| D6 | "Reminder lagao" → fires | Notification fires (release build — R8 has bitten twice here) | ☐ |
+| D5 | "Note yaad rakho X" → Notes screen | X is there, owned by you | ☑ 2026-07-16 — Farry ran `create_note`; the row came out owned by the speaker, showed on their `/notes`, and stayed invisible to another account. This is also **B7**: scoping holds through the agent's own tools, not just REST. |
+| D6 | "Reminder lagao" → fires | Notification fires (release build — R8 has bitten twice here) | ⚠ **half-done 2026-07-16.** Farry schedules it (`create_task` with a due_date) and the build-level guards check out: `ic_notification` **is** in the release APK's resource table (keep.xml works), `com.dexterous.**` is unobfuscated and `-keepattributes Signature` is present. But the notification is scheduled **on the phone**, by `live_controller._applyReminder` reacting to the `tool_result` — so only a session driven **from the app** proves it. Blocked on a phone I can unlock. |
 | D7 | Wifi drop mid-session | Reconnects; camera comes back | ☐ |
-| D8 | Provider fallback (bad OpenAI key) | Falls back to Gemini + a non-fatal notice | ☐ |
-| D9 | Long session | Watchdog ends it rather than billing forever | ☐ |
+| D8 | Provider fallback (bad OpenAI key) | Falls back to Gemini + a non-fatal notice | ☑ 2026-07-16 — ran the backend with a deliberately broken `OPENAI_API_KEY`: `gateway.fallback` → Gemini, session survived, client told which model it got. |
+| D9 | Long session | Watchdog ends it rather than billing forever | ☑ 2026-07-16 — with `IDLE_DISCONNECT_SECONDS=8`, a silent session closed itself at 12.8s (`session.expired reason=idle`). Real caps are 5 min idle / 30 min hard. |
 
 **D6 deserves paranoia**: reminders have silently broken twice in release builds
 (R8 stripping Gson signatures, then the resource shrinker eating the icon). It
-works in debug and fails in release, so **only a release build proves it**.
+works in debug and fails in release, so **only a release build proves it** — and
+only a session driven from the app, since `_applyReminder` hangs off the WS
+`tool_result` the phone receives. Note the old "fixed with minify-off" is no
+longer how it works: `isMinifyEnabled = true` is back, held safe by
+`proguard-rules.pro`. Re-verify on a device after touching those settings.
 
 ### E. Glasses
 
