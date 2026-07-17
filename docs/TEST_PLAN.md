@@ -17,7 +17,7 @@ Legend: ☐ not done · ☑ done+verified (date) · ⚠ blocked
 
 | # | Thing | Why it blocks | Where |
 |---|---|---|---|
-| 1 | **Postgres on Render** | Production runs SQLite on the free plan with no disk. Every deploy wipes it — **accounts vanish**. `autoDeploy` is now **off** so a push no longer deploys; turn it back on once `DATABASE_URL` is real. | `render.yaml` |
+| 1 | **Postgres — wherever you host** | Not a Render problem, a *SQLite* problem: the file is wiped on every container rebuild, so accounts vanish. The admin module's schema also uses partial unique indexes and tz-aware timestamps that only Postgres enforces — CI already runs those 75 tests against Postgres 16 and they pass. | `render.yaml` is now moot; the setting that matters is `DATABASE_URL` |
 | 2 | **Email provider** | Verification + reset links are only *logged*, never sent. Nobody can verify an email or recover a password. | `backend/app/modules/auth/notifications.py` — the three `send_*` functions are the swap point |
 | 3 | **Payment provider** | The webhook is gated by a shared secret, not a provider HMAC. Anyone who learns the secret can forge "payment succeeded". | `backend/app/modules/billing/router.py` |
 | 4 | **Release keystore** | Release builds are signed with the **debug** key. Play Store will reject it, and a real keystore's different SHA-1 needs its own Android OAuth client or Google sign-in breaks. | `mobile/android/app/build.gradle.kts:39` |
@@ -164,16 +164,22 @@ glasses included.
 | G4 | Vision 403 fallback | Degrades instead of dying | ☑ |
 | G5 | `voice_seconds` is capped and counted | The cap should mean something | ☑ **fixed 2026-07-16.** `Session._meter_voice` counts mic bytes against the plan's daily cap, batched to the DB every 15s of speech plus a flush on close; over the cap the session is told and closed. `text_turns` / `frames_sent` are still dead columns — nothing writes them, and nothing reads them either. |
 
-### H. Production deploy — **all blocked on Part 1 #1**
+### H. Production deploy — **parked 2026-07-16**
 
-Do not run these until Postgres is real. On SQLite they'd pass and prove nothing.
+Faraz has dropped Render and will pick a host later, so there is no production to
+test against. These stay written down because they're the right list for whatever
+host comes next — and because none of them can be faked locally: the whole point
+of H1 is that a *real* redeploy doesn't wipe real accounts.
+
+Do not run them until there's a host with a real `DATABASE_URL`. On local SQLite
+they'd pass and prove nothing.
 
 | # | Case | Expected | State |
 |---|---|---|---|
 | H1 | Deploy, then **redeploy** | Accounts **survive** — the whole point | ⚠ |
 | H2 | Sign up on prod, verify email | Link **arrives** (needs #2) | ⚠ |
 | H3 | Password reset on prod | Link arrives, works | ⚠ |
-| H4 | Cold Render dyno | App waits it out instead of failing fast | ☐ |
+| H4 | ~~Cold Render dyno~~ | — | ✗ **dropped 2026-07-16**: Faraz isn't deploying to Render. Whatever host replaces it, the equivalent test is "first request after the instance has been idle" — keep it in mind, but there's nothing to test until a host is picked. |
 | H5 | Google sign-in against prod | Needs the prod SHA-1's own OAuth client | ⚠ |
 | H6 | Two users on prod | Scoping holds with Postgres, not just SQLite | ⚠ |
 
@@ -182,8 +188,8 @@ Do not run these until Postgres is real. On SQLite they'd pass and prove nothing
 | # | Case | Expected | State |
 |---|---|---|---|
 | I1 | `flutter build apk --release` | Builds (R8 has broken this before) | ☑ 2026-07-15 |
-| I2 | Reminders in release | Fires (see D6) | ☐ |
-| I3 | Notification icon in release | Not blank (shrinker ate it once) | ☐ |
+| I2 | Reminders in release | Fires (see D6) | ☑ 2026-07-16 — same run as D6: release build, alarm registered as `setAlarmClock`, fired with the screen asleep. |
+| I3 | Notification icon in release | Not blank (shrinker ate it once) | ☑ 2026-07-16 — the fired notification carried `icon=RESOURCE id=0x7f07007c`, and `aapt2 dump resources` finds `drawable/ic_notification` in the release APK. keep.xml is doing its job. |
 | I4 | Signed with a **real** keystore | Blocked on Part 1 #4 | ⚠ |
 | I5 | Google sign-in with the release SHA-1 | Needs its own Android OAuth client | ⚠ |
 
