@@ -2,12 +2,14 @@
 
 What still needs proving before real users, and what is already proven.
 
-**The automated suites are not repeated here.** 256 backend tests (`pytest`) and
-126 mobile tests (`flutter test`) run in seconds and cover the logic. This
+> One-page summary: **[STATUS.md](STATUS.md)**. This file is the detail.
+
+**The automated suites are not repeated here.** 266 backend tests (`pytest`) and
+132 mobile tests (`flutter test`) run in seconds and cover the logic. This
 document is for what they *can't* reach: a real device, real hardware, real
 providers, real money, and the admin panel — which has **zero** automated tests.
 
-Legend: ☐ not done · ☑ done+verified (date) · ⚠ blocked
+Legend: ☐ not done · ☑ done+verified (date) · ⚠ blocked · ✗ dropped
 
 ---
 
