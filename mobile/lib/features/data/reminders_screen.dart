@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/data_cache.dart';
 import '../../core/theme.dart';
 import '../../core/ui.dart';
 import '../../data/data_api.dart';
+import '../../state/auth.dart';
 import '../../state/providers.dart';
 import 'data_common.dart';
 
@@ -33,6 +37,15 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
   }
 
   Future<void> _load() async {
+    final userId = ref.read(authProvider).userId;
+    final cached = DataCache.tasks(userId);
+    if (cached != null && _tasks == null) {
+      setState(() {
+        _tasks = cached;
+        _loading = false;
+      });
+    }
+
     setState(() {
       _loading = _tasks == null;
       _error = false;
@@ -40,6 +53,7 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
     try {
       final t = await _api.tasks();
       if (!mounted) return;
+      unawaited(DataCache.saveTasks(userId, t));
       setState(() {
         _tasks = t;
         _loading = false;
@@ -47,7 +61,7 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _error = true;
+        _error = _tasks == null; // only if we have nothing to show
         _loading = false;
       });
     }
@@ -71,6 +85,8 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
         ]);
     try {
       await _api.setTaskDone(t.id, !t.done);
+      // Write the flip through, or reopening reads the cache and un-ticks it.
+      unawaited(DataCache.saveTasks(ref.read(authProvider).userId, _tasks ?? []));
     } catch (_) {
       if (!mounted) return;
       setState(() => _tasks = prev);
@@ -83,6 +99,7 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
     setState(() => _tasks = _tasks?.where((x) => x.id != t.id).toList());
     try {
       await _api.deleteTask(t.id);
+      unawaited(DataCache.saveTasks(ref.read(authProvider).userId, _tasks ?? []));
     } catch (_) {
       if (!mounted) return;
       setState(() => _tasks = prev);

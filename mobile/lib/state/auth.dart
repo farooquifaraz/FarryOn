@@ -5,6 +5,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 import '../core/config.dart';
 import '../core/config_store.dart';
+import '../core/data_cache.dart';
 import '../core/logger.dart';
 import '../data/auth_api.dart';
 import 'providers.dart';
@@ -302,6 +303,10 @@ class AuthNotifier extends Notifier<AuthState> {
         .timeout(const Duration(seconds: 2), onTimeout: () {});
 
     await _persist(ConfigStore.clearAuthSession, 'Clearing the stored session');
+    // Drop the cached notes/tasks with the session. They're the leaving user's,
+    // the phone's storage isn't encrypted, and the server still has them — the
+    // next sign-in pulls them back.
+    await _persist(DataCache.clear, 'Clearing the cached notes and tasks');
     final cfg = ref.read(configProvider);
     if (cfg.authToken != null) {
       ref.read(configProvider.notifier).state = cfg.copyWith(clearToken: true);

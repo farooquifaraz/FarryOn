@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/data_cache.dart';
 import '../../core/theme.dart';
 import '../../core/ui.dart';
 import '../../data/data_api.dart';
+import '../../state/auth.dart';
 import '../../state/providers.dart';
 import 'data_common.dart';
 
@@ -35,7 +39,24 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     _load();
   }
 
+  /// Paint what we have, then go and check.
+  ///
+  /// The cache read is synchronous, so a returning user sees their notes in the
+  /// first frame — no spinner — and the refresh happens behind them. If the
+  /// refresh fails but we had something cached, that is **not** an error: the
+  /// notes on screen are the ones the server last gave us, and telling someone
+  /// on a plane that we "couldn't load" while their notes sit right there would
+  /// be a lie about a working app.
   Future<void> _load() async {
+    final userId = ref.read(authProvider).userId;
+    final cached = DataCache.notes(userId);
+    if (cached != null && _notes == null) {
+      setState(() {
+        _notes = cached;
+        _loading = false;
+      });
+    }
+
     setState(() {
       _loading = _notes == null;
       _error = false;
@@ -43,6 +64,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     try {
       final n = await _api.notes();
       if (!mounted) return;
+      unawaited(DataCache.saveNotes(userId, n));
       setState(() {
         _notes = n;
         _loading = false;
@@ -50,7 +72,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _error = true;
+        _error = _notes == null; // only if we have nothing to show
         _loading = false;
       });
     }
@@ -62,6 +84,9 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     setState(() => _notes = _notes?.where((x) => x.id != n.id).toList());
     try {
       await _api.deleteNote(n.id);
+      // Write the shorter list through, or the next open reads the cache and
+      // the note walks back in.
+      unawaited(DataCache.saveNotes(ref.read(authProvider).userId, _notes ?? []));
     } catch (_) {
       if (!mounted) return;
       setState(() => _notes = prev);
