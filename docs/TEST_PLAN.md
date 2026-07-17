@@ -56,16 +56,17 @@ who you are.
 | A4 | Wrong password | "Incorrect email or password", stays put, button re-enables | ☑ 2026-07-16 (Vivo) |
 | A5 | Sign out | Back to splash; Settings closes too | ☑ 2026-07-15 |
 | A6 | Kill the app and reopen | Restore splash → straight to live screen, no login | ☐ |
-| A7 | **Airplane mode, then open the app** | Restore falls back to the cached token; live screen shows its offline state. Must **not** sign you out. | ☐ |
+| A7 | **Airplane mode, then open the app** | Restore falls back to the cached token; live screen shows its offline state. Must **not** sign you out. | ☑ **2026-07-16 — pinned by tests** (`mobile/test/auth_restore_test.dart`, 6 cases, mutation-checked). Driven through AuthNotifier, not the radio: airplane mode also kills the phone's wireless ADB, so the screen goes with it. Covers offline, a *hung* backend (the 4s timeout — the nastier case), 401, rotation, and no-session. The restore path had **no test at all** before this. |
 | A8 | Sign in on the phone, then check the admin panel | The user is listed, with the right provider | ☑ 2026-07-16 (phone-made accounts all appear, none with a role) |
 | A9 | Google sign-in, cancel the account picker | No error banner — cancelling is not a failure | ☑ 2026-07-16 (Vivo) |
 | A10 | 2FA account: sign in | Code prompt, then live screen | ☐ |
 | A11 | Backend down, tap Sign In | Honest "can't reach" message, not a hang | ☐ |
 | A12 | Avatar tap | Opens Settings, showing your name + email | ☑ 2026-07-15 |
 
-**A7 is the one I'd test first.** The restore path has a 4s timeout and a
-never-sign-out-unless-401 rule, and getting that wrong logs people out on a bad
-train ride.
+**A7 was the one to test first, and it had no test at all.** The restore path's
+never-sign-out-unless-401 rule is now pinned; the remaining ☐s here need either a
+2FA account (A10), a signup-screen Google run (A2), or a person watching the
+screen (A6, A11).
 
 ### B. User scoping — two real accounts
 
