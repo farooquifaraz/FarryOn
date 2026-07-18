@@ -31,6 +31,19 @@ from app.db.models import (
 #: (ws/live.py and core/deps.py::get_data_owner), so nothing lands here.
 ANON_EXTERNAL_ID = "anonymous"
 
+
+def _live(stmt, model):
+    """Hide soft-deleted rows.
+
+    Every read of notes/tasks goes through this. Deletes are tombstones now
+    (docs/LOCAL_FIRST_SYNC.md phase 1) so they can sync and so the admin panel
+    can still see what a user removed — which means every query that forgets
+    this filter shows people their own deleted notes back. One helper rather
+    than ten hand-written `.where(...)` clauses, because the tenth is the one
+    that gets missed.
+    """
+    return stmt.where(model.deleted_at.is_(None))
+
 #: Counter columns on :class:`DailyUsage` that ``bump_daily_usage`` may touch.
 _USAGE_COUNTERS = (
     "voice_seconds", "frames_sent", "text_turns", "web_searches", "image_scans",
@@ -145,7 +158,7 @@ async def list_notes(
     session: AsyncSession, *, user_id: int | None = None, limit: int = 50
 ) -> list[Note]:
     """Return notes (newest first), optionally scoped to a user."""
-    stmt = select(Note).order_by(Note.created_at.desc()).limit(limit)
+    stmt = _live(select(Note), Note).order_by(Note.created_at.desc()).limit(limit)
     if user_id is not None:
         stmt = stmt.where(Note.user_id == user_id)
     return list((await session.execute(stmt)).scalars().all())
@@ -159,8 +172,10 @@ async def list_tasks(
     limit: int = 50,
 ) -> list[Task]:
     """Return tasks (open first, then newest), optionally scoped to a user."""
-    stmt = select(Task).order_by(Task.done.asc(), Task.created_at.desc()).limit(
-        limit
+    stmt = (
+        _live(select(Task), Task)
+        .order_by(Task.done.asc(), Task.created_at.desc())
+        .limit(limit)
     )
     if user_id is not None:
         stmt = stmt.where(Task.user_id == user_id)
@@ -178,7 +193,7 @@ async def find_task(
     ("the dentist task") without knowing its id.
     """
     stmt = (
-        select(Task)
+        _live(select(Task), Task)
         .where(Task.title.ilike(f"%{query.strip()}%"))
         .order_by(Task.done.asc(), Task.created_at.desc())
     )
@@ -192,7 +207,7 @@ async def find_note(
 ) -> Note | None:
     """Find the most recent note whose text matches ``query``."""
     stmt = (
-        select(Note)
+        _live(select(Note), Note)
         .where(Note.text.ilike(f"%{query.strip()}%"))
         .order_by(Note.created_at.desc())
     )
@@ -213,7 +228,7 @@ async def find_tasks(
 ) -> list[Task]:
     """Return up to ``limit`` tasks matching ``query`` (open ones first)."""
     stmt = (
-        select(Task)
+        _live(select(Task), Task)
         .where(Task.title.ilike(f"%{query.strip()}%"))
         .order_by(Task.done.asc(), Task.created_at.desc())
         .limit(limit)
@@ -232,7 +247,7 @@ async def find_notes(
 ) -> list[Note]:
     """Return up to ``limit`` notes whose text matches ``query`` (newest first)."""
     stmt = (
-        select(Note)
+        _live(select(Note), Note)
         .where(Note.text.ilike(f"%{query.strip()}%"))
         .order_by(Note.created_at.desc())
         .limit(limit)
@@ -329,26 +344,36 @@ async def update_task(
     title: str | None = None,
     due_date: str | None = None,
 ) -> Task | None:
-    """Update a task's title and/or due date; returns the row or None."""
+    """Update a task's title and/or due date; None if missing or deleted."""
     task = await session.get(Task, task_id)
-    if task is not None:
-        if title is not None:
-            task.title = title
-        if due_date is not None:
-            task.due_date = due_date
-        await session.flush()
+    if not _actionable(task, None):
+        return None
+    if title is not None:
+        task.title = title
+    if due_date is not None:
+        task.due_date = due_date
+    await session.flush()
     return task
 
 
-def _owned_by(row: Note | Task, user_id: int | None) -> bool:
-    """Whether ``user_id`` may act on ``row``.
+def _actionable(row: Note | Task | None, user_id: int | None) -> bool:
+    """Whether ``user_id`` may act on ``row`` at all.
 
-    ``user_id=None`` means "don't check" — for the agent's own tool calls, which
-    already run inside their session's user, and for admin moderation. Callers
-    that take a row id straight from a client MUST pass a real id: a bare id is
-    guessable, so without this an authenticated stranger can delete row 4 by
-    asking for row 4.
+    Two rules in one place, because they're always asked together:
+
+    **Ownership.** ``user_id=None`` means "don't check" — for the agent's own
+    tool calls, which already run inside their session's user, and for admin
+    moderation. Callers that take a row id straight from a client MUST pass a
+    real id: a bare id is guessable, so without this an authenticated stranger
+    can delete row 4 by asking for row 4.
+
+    **Not already deleted.** ``session.get()`` happily returns a tombstone, so
+    without this you can delete the same note twice, or tick a task the user
+    threw away — and each one bumps ``updated_at``, so the ghost would sync
+    back out to every device as a fresh change.
     """
+    if row is None or row.deleted_at is not None:
+        return False
     return user_id is None or row.user_id == user_id
 
 
@@ -361,7 +386,7 @@ async def set_task_done(
 ) -> Task | None:
     """Mark a task done/undone; None if missing or not ``user_id``'s to touch."""
     task = await session.get(Task, task_id)
-    if task is None or not _owned_by(task, user_id):
+    if not _actionable(task, user_id):
         return None
     task.done = done
     await session.flush()
@@ -373,9 +398,12 @@ async def delete_note(
 ) -> bool:
     """Delete a note; False if missing or not ``user_id``'s to delete."""
     note = await session.get(Note, note_id)
-    if note is None or not _owned_by(note, user_id):
+    if not _actionable(note, user_id):
         return False
-    await session.delete(note)
+    # Tombstone, not DELETE: a row that vanishes can't be synced (the other
+    # device keeps it forever) and the admin panel loses sight of anything a
+    # user removed. The reads filter these out — see _live().
+    note.deleted_at = datetime.now(timezone.utc)
     await session.flush()
     return True
 
@@ -385,9 +413,12 @@ async def delete_task(
 ) -> bool:
     """Delete a task; False if missing or not ``user_id``'s to delete."""
     task = await session.get(Task, task_id)
-    if task is None or not _owned_by(task, user_id):
+    if not _actionable(task, user_id):
         return False
-    await session.delete(task)
+    # Tombstone, not DELETE: a row that vanishes can't be synced (the other
+    # device keeps it forever) and the admin panel loses sight of anything a
+    # user removed. The reads filter these out — see _live().
+    task.deleted_at = datetime.now(timezone.utc)
     await session.flush()
     return True
 

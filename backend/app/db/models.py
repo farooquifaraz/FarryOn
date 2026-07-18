@@ -256,6 +256,26 @@ class Note(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )
+    # --- sync columns (docs/LOCAL_FIRST_SYNC.md phase 1) ---
+    #
+    # client_id is a UUID minted by whoever creates the row — the phone offline,
+    # or the backend when Farry's tool runs. It is the sync identity: the
+    # integer id can't be, because a phone with no network can't ask for one but
+    # must still show the row now. It also makes a push idempotent, so an app
+    # killed mid-send doesn't land the same note twice.
+    client_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, unique=True, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, index=True
+    )
+    # Soft delete. A row that simply vanishes is indistinguishable from one that
+    # was never sent, so a hard DELETE can never be synced — the other device
+    # keeps the row forever. It also cost the admin panel its moderation view of
+    # anything a user removed.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
 
 class Task(Base):
@@ -275,6 +295,26 @@ class Task(Base):
     done: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
+    )
+    # --- sync columns (docs/LOCAL_FIRST_SYNC.md phase 1) ---
+    #
+    # client_id is a UUID minted by whoever creates the row — the phone offline,
+    # or the backend when Farry's tool runs. It is the sync identity: the
+    # integer id can't be, because a phone with no network can't ask for one but
+    # must still show the row now. It also makes a push idempotent, so an app
+    # killed mid-send doesn't land the same note twice.
+    client_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, unique=True, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, index=True
+    )
+    # Soft delete. A row that simply vanishes is indistinguishable from one that
+    # was never sent, so a hard DELETE can never be synced — the other device
+    # keeps the row forever. It also cost the admin panel its moderation view of
+    # anything a user removed.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
     )
 
 

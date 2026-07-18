@@ -71,9 +71,17 @@ def _seed_task(user_id: int, title: str) -> int:
 
 
 def _note_exists(note_id: int) -> bool:
+    """Whether the note is still *live* — a tombstone doesn't count.
+
+    Deletes are soft now (docs/LOCAL_FIRST_SYNC.md phase 1), so the row survives
+    with `deleted_at` set. What these tests care about is whether the user can
+    still reach it, which is what `deleted_at IS NULL` means.
+    """
+
     async def _go() -> bool:
         async with get_sessionmaker()() as db:
-            return await db.get(repo.Note, note_id) is not None
+            row = await db.get(repo.Note, note_id)
+            return row is not None and row.deleted_at is None
 
     return asyncio.run(_go())
 
