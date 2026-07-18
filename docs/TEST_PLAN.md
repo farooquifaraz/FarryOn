@@ -63,6 +63,7 @@ who you are.
 | A9 | Google sign-in, cancel the account picker | No error banner — cancelling is not a failure | ☑ 2026-07-16 (Vivo) |
 | A10 | 2FA account: sign in | Code prompt, then live screen | ☐ |
 | A11 | Backend down, tap Sign In | Honest "can't reach" message, not a hang | ☐ |
+| A13 | **Notes/Reminders with the backend dead** | Cached rows still show; no false "check the backend" | ☑ **2026-07-16 (Vivo)** — opened Notes online (2 notes), killed the backend, reopened: same 2 notes. Then force-stopped the app and reopened cold with the backend still dead: same 2 notes, read from disk. |
 | A12 | Avatar tap | Opens Settings, showing your name + email | ☑ 2026-07-15 |
 
 **A7 was the one to test first, and it had no test at all.** The restore path's

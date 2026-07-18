@@ -1,6 +1,6 @@
 # Notes & reminders: local-first, server-synced
 
-**Status: design, not built. Needs Faraz's sign-off before any code.**
+**Status: phase 2 built and device-verified 2026-07-16. Phases 1, 3-5 not built.**
 Written 2026-07-16 after he asked for notes/reminders to be "managed locally,
 synced to the server, and downloaded again on a new phone".
 
@@ -162,7 +162,7 @@ Each is shippable on its own, and each is testable before the next.
 | # | What | Why this order |
 |---|---|---|
 | **1** | Migration: `updated_at`, `deleted_at`, `client_id`; soft delete; `GET ?since=` | Nothing else can be correct first. Ship alone — the app keeps working unchanged. |
-| **2** | Local SQLite mirror; screens read from it; pull on start/resume | The visible win: instant + offline reads. Writes still go straight to the server. |
+| **2** | ~~Local mirror; screens read from it~~ — **DONE 2026-07-16** | Shipped as JSON in SharedPreferences, not SQLite: the API caps these at 200 rows and `chat_history.dart` already stores this way. Swap the storage behind `DataCache`'s six functions when phase 3 wants real rows. Verified on the Vivo: killed the backend, force-stopped the app, reopened — both notes came back off disk. |
 | **3** | Outbox: local writes queue and push | Offline *writes*. Needs `client_id` for idempotency. |
 | **4** | WS `tool_result` → local DB | Farry's notes appear without a refresh. The channel already exists. |
 | **5** | New-device restore = full pull | Falls out of phase 1 + 2. Mostly a test. |
