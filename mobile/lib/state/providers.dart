@@ -91,6 +91,9 @@ final liveControllerProvider = Provider<LiveController>((ref) {
     permissions: permissions,
     clientFactory: clientFactory,
     glassesBridge: GlassesChannel.shared,
+    // Read at call time, not captured: this controller outlives a sign-in, and
+    // a stale id would file one user's notes under another's cache key.
+    currentUserId: () => ref.read(authProvider).userId,
   );
   ref.onDispose(controller.dispose);
   return controller;

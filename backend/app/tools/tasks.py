@@ -88,4 +88,11 @@ class CreateTaskTool(Tool):
             user_id=ctx.user_id,
             session_id=ctx.session_id,
         )
-        return {"id": task.id, "title": task.title, "due_date": task.due_date}
+        # done/createdAt included for the phone's local cache — see notes.py.
+        return {
+            "id": task.id,
+            "title": task.title,
+            "due_date": task.due_date,
+            "done": task.done,
+            "createdAt": task.created_at.isoformat(),
+        }

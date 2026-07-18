@@ -33,4 +33,12 @@ class CreateNoteTool(Tool):
             user_id=ctx.user_id,
             session_id=ctx.session_id,
         )
-        return {"id": note.id, "text": note.text}
+        # createdAt travels with the result so the phone can drop the note
+        # straight into its local cache (docs/LOCAL_FIRST_SYNC.md phase 4).
+        # Without it the app has to refetch to learn when its own note was
+        # made, which is the refresh this is meant to remove.
+        return {
+            "id": note.id,
+            "text": note.text,
+            "createdAt": note.created_at.isoformat(),
+        }

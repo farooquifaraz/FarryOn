@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../capture/capture_source.dart';
 import '../capture/device_registry.dart';
 import '../capture/glasses_capture_source.dart';
+import '../core/cache_patch.dart';
 import '../core/chat_history.dart';
 import '../core/config.dart';
 import '../core/location.dart';
@@ -53,7 +54,9 @@ class LiveController {
         clientFactory,
     String? platform,
     GlassesBridgeApi? glassesBridge,
-  })  : _config = config,
+    int? Function()? currentUserId,
+  })  : _currentUserId = currentUserId ?? (() => null),
+        _config = config,
         _registry = registry,
         _player = player,
         _permissions = permissions,
@@ -95,6 +98,12 @@ class LiveController {
   /// Optional glasses bridge for wear-to-talk (null in unit tests). Wear-on
   /// auto-opens the mic, wear-off pauses it — no long-press, hands-free.
   final GlassesBridgeApi? _glassesBridge;
+
+  /// Who the cached notes/tasks belong to. A callback, not a stored id: this
+  /// controller outlives a sign-in, and a stale id would file one user's notes
+  /// under another's cache key — the bug the backend was fixed for on
+  /// 2026-07-15, re-created on the client where no server scoping can catch it.
+  final int? Function() _currentUserId;
   StreamSubscription<GlassesLabEvent>? _wearSub;
   bool _glassesWorn = false;
 
@@ -838,6 +847,7 @@ class LiveController {
     }
     _emit(_state.copyWith(tools: list));
     _applyReminder(msg);
+    applyToolResultToCache(msg, _currentUserId());
     _applyOpenUrl(msg);
     _applyOpenMessaging(msg);
 
