@@ -39,6 +39,10 @@ def _session(user_id: int | None = 7) -> Session:
     s = Session.__new__(Session)
     s.session_id = "test-session"
     s._user_id = user_id
+    # None means "no resolved plan", so plan_cap() falls back to default_plan —
+    # which is what cap_of() sets. A real session resolves this in
+    # _load_voice_usage; this fixture skips that to test metering in isolation.
+    s._plan_name = None
     s._voice_used_s = 0.0
     s._voice_pending_s = 0.0
     s._voice_capped = False

@@ -14,10 +14,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.core.security import hash_password
-from app.db.models import Permission, Role, RolePermission, User, UserRole
+from app.db.models import Permission, Plan, Role, RolePermission, User, UserRole
 from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
+
+# The billing catalog. Prices live here (the plans table is billing's source of
+# truth); the matching daily caps live in Settings.plan_limits, keyed by the
+# same name — one place for money, one for cost-control, joined by name. The
+# "free" fallback tier is not sold, so it is not seeded here.
+#
+# name -> (price_cents, interval, description)
+PLAN_CATALOG: dict[str, tuple[int, str, str]] = {
+    "plus": (999, "month", "Plus — 7 minutes of voice a day, 20 scans."),
+    "pro": (1999, "month", "Pro — 15 minutes of voice a day, unlimited scans."),
+}
 
 # code -> human description
 DEFAULT_PERMISSIONS: dict[str, str] = {
@@ -152,7 +163,41 @@ async def seed_first_super_admin(
         await session.flush()
 
 
+async def seed_plans(session: AsyncSession) -> None:
+    """Upsert the billing catalog. Idempotent — safe on every deploy.
+
+    Matched by name: a plan that exists has its price/interval/description
+    brought in line with the catalog (so a price change here reaches the DB on
+    the next deploy), and a missing one is created active. Plans NOT in the
+    catalog are left untouched — an operator may have added a custom plan
+    through the admin panel, and this must not delete it. `is_active` is only
+    set on create, so an operator can retire a catalog plan by deactivating it
+    without this resurrecting it every deploy.
+    """
+    for name, (price_cents, interval, description) in PLAN_CATALOG.items():
+        existing = (
+            await session.execute(select(Plan).where(Plan.name == name))
+        ).scalar_one_or_none()
+        if existing is None:
+            session.add(
+                Plan(
+                    name=name,
+                    price_cents=price_cents,
+                    currency="USD",
+                    interval=interval,
+                    description=description,
+                    is_active=True,
+                )
+            )
+        else:
+            existing.price_cents = price_cents
+            existing.interval = interval
+            existing.description = description
+    await session.flush()
+
+
 async def run_seed(session: AsyncSession, settings: Settings) -> None:
-    """Run the full seed sequence (roles/permissions, then first super_admin)."""
+    """Run the full seed sequence (roles/permissions, plans, first super_admin)."""
     roles = await seed_roles_and_permissions(session)
+    await seed_plans(session)
     await seed_first_super_admin(session, settings, roles)

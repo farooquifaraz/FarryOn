@@ -96,6 +96,12 @@ class ToolContext:
     #: 2026-07-11: identify_image rejected a perfectly delivered glasses photo
     #: because it re-checked the stale snapshot after the wait).
     latest_frame: Callable[[], tuple[bytes | None, float | None]] | None = None
+    #: The user's caps-bearing plan name, resolved lazily by the quota check and
+    #: cached here for the life of this context so several metered tool calls in
+    #: one turn don't each re-query the subscription. ``None`` until first
+    #: resolved. A field rather than an ad-hoc attribute because ToolContext is
+    #: ``slots=True`` — an arbitrary attribute would silently fail to stick.
+    resolved_plan: str | None = None
 
 
 class Tool(abc.ABC):

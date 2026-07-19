@@ -43,6 +43,45 @@ def _plan_out(plan: Plan) -> dict:
     }
 
 
+# ---- Plan resolution -----------------------------------------------------
+
+
+async def active_plan_name(db: AsyncSession, user_id: int | None) -> str:
+    """The plan whose caps apply to this user right now.
+
+    The name of their active (or trialing) subscription's plan, else the
+    configured `default_plan`. This is what quota enforcement must key on — the
+    old code read the single global `default_plan` for everyone, which meant a
+    paying Pro user got the free tier's caps and an unpaid user got whatever the
+    default happened to be. Cost protection that ignores what someone actually
+    pays for is not cost protection.
+
+    A user with no id (anonymous session) has no subscription, so they get the
+    default. `past_due`/`canceled`/`expired` subscriptions are deliberately not
+    active — a lapsed payment drops you to the default tier, it does not keep
+    the caps you stopped paying for.
+    """
+    from app.config import get_settings
+
+    default = get_settings().default_plan
+    if user_id is None:
+        return default
+
+    row = (
+        await db.execute(
+            select(Plan.name)
+            .join(Subscription, Subscription.plan_id == Plan.id)
+            .where(
+                Subscription.user_id == user_id,
+                Subscription.status.in_(ACTIVE_STATUSES),
+            )
+            .order_by(Subscription.started_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return row or default
+
+
 # ---- Plans ---------------------------------------------------------------
 
 

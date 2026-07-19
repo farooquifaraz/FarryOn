@@ -214,12 +214,28 @@ class Settings(BaseSettings):
     # OFF by default: quotas only mean something with real per-user auth, and
     # hard enforcement would interrupt single-user testing. Turn on for launch.
     quota_enforcement_enabled: bool = Field(default=False)
+    # The plan a user with no active subscription falls back to. Everything the
+    # app does costs us Gemini tokens on every minute of use (measured ~$0.01-
+    # 0.015/active-minute, and a long session re-bills its whole context each
+    # turn, so cost rises faster than time) — so "free" here is a small taste,
+    # not a usable tier. Set its caps to 0 for a hard paywall.
     default_plan: str = Field(default="free")
     # Per-plan daily caps, enforced server-side. 0 = feature off, -1 = unlimited.
+    #
+    # Pricing (global/USD, paid-only) decided 2026-07-19 against measured cost,
+    # with cap-cost held to ~40% of price so the gross margin floor is ~60% even
+    # for a user who maxes the cap every day; typical use (~3-5 min/day) leaves
+    # far more. voice_seconds is the real cost driver; image scans are one-shot
+    # Gemini calls (~$0.0003) so their caps are about abuse, not unit economics.
+    #
+    #   free  — unpaid taste. ~$1.80/mo max if a signup maxes it and never pays.
+    #   plus  — $9.99/mo. 7 min/day  (420s). Cap-cost ~$4/mo  → ~60% margin.
+    #   pro   — $19.99/mo. 15 min/day (900s). Cap-cost ~$9/mo → ~55% margin.
     plan_limits: dict[str, dict[str, int]] = Field(
         default_factory=lambda: {
-            "free": {"voice_seconds": 300, "image_scans": 3, "web_searches": 10},
-            "pro": {"voice_seconds": 900, "image_scans": -1, "web_searches": 50},
+            "free": {"voice_seconds": 180, "image_scans": 2, "web_searches": 5},
+            "plus": {"voice_seconds": 420, "image_scans": 20, "web_searches": 50},
+            "pro": {"voice_seconds": 900, "image_scans": -1, "web_searches": 200},
         }
     )
 

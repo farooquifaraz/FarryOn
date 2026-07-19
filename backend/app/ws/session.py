@@ -104,6 +104,11 @@ class Session:
         self.session_id: str = uuid.uuid4().hex
         self.resume_of: str | None = None
         self._user_id: int | None = None
+        # The caps-bearing plan for this session's user, resolved once in
+        # _load_voice_usage. None until then; _meter_voice falls back to the
+        # global default via plan_cap(plan=None) if enforcement somehow runs
+        # first.
+        self._plan_name: str | None = None
 
         self._send_lock = asyncio.Lock()
         self._closing = False
@@ -765,7 +770,7 @@ class Session:
         seconds = payload_bytes / _MIC_BYTES_PER_SECOND
         self._voice_pending_s += seconds
 
-        cap = plan_cap("voice_seconds")
+        cap = plan_cap("voice_seconds", self._plan_name)
         enforcing = get_settings().quota_enforcement_enabled
 
         if enforcing and cap >= 0:
@@ -780,10 +785,12 @@ class Session:
                     used_s=round(total, 1),
                     cap_s=cap,
                 )
+                plan = self._plan_name or get_settings().default_plan
+                upsell = "" if plan == "pro" else " Upgrade for more."
                 await self._send_error(
                     "quota_exceeded",
                     f"You've used today's {cap // 60} minutes of voice on the "
-                    f"{get_settings().default_plan} plan. Upgrade to Pro for much more.",
+                    f"{plan} plan.{upsell}",
                     fatal=True,
                 )
                 return False
@@ -840,6 +847,13 @@ class Session:
                     day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 )
                 self._voice_used_s = float(row.voice_seconds if row else 0)
+                # Resolve the caps-bearing plan here, in the same one-shot DB
+                # trip: the alternative is a query per audio frame. A signed-in
+                # user gets their subscription's plan; anonymous falls back to
+                # the default inside active_plan_name.
+                from app.modules.billing import service as billing
+
+                self._plan_name = await billing.active_plan_name(db, self._user_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("quota.voice_load_failed", error=str(exc))
 

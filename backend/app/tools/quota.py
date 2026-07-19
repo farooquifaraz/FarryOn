@@ -30,15 +30,42 @@ def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def plan_cap(metric: str) -> int:
-    """This plan's daily cap for ``metric``: ``-1`` unlimited, ``0`` off.
+def plan_cap(metric: str, plan: str | None = None) -> int:
+    """A plan's daily cap for ``metric``: ``-1`` unlimited, ``0`` off.
 
     Public because the live session meters voice itself — it can't route through
     :func:`check_quota`, which is built around a per-call :class:`ToolContext`
-    that a raw audio frame doesn't have.
+    that a raw audio frame doesn't have. The session resolves the user's plan
+    once (async, off :func:`billing.service.active_plan_name`) and passes it in;
+    ``plan=None`` falls back to the global default for callers that have no user.
     """
     settings = get_settings()
-    return settings.plan_limits.get(settings.default_plan, {}).get(metric, -1)
+    return settings.plan_limits.get(
+        plan or settings.default_plan, {}
+    ).get(metric, -1)
+
+
+async def _plan_for(ctx: ToolContext) -> str:
+    """The caps-bearing plan name for the user behind ``ctx``.
+
+    Resolved from their active subscription, cached on the context so a session
+    that fires several metered tools doesn't re-query the plan each time. Any
+    lookup failure falls back to the default rather than blocking the tool — a
+    quota check that can't read the plan must not become a hard denial.
+    """
+    if ctx.resolved_plan is not None:
+        return ctx.resolved_plan
+    settings = get_settings()
+    plan = settings.default_plan
+    if ctx.session is not None and ctx.user_id is not None:
+        try:
+            from app.modules.billing import service as billing
+
+            plan = await billing.active_plan_name(ctx.session, ctx.user_id)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("quota.plan_lookup_failed", error=str(e))
+    ctx.resolved_plan = plan
+    return plan
 
 
 def user_key_for(user_id: int | None, session_id: str | None) -> str:
@@ -64,7 +91,7 @@ async def check_quota(
     settings = get_settings()
     if not settings.quota_enforcement_enabled:
         return None
-    plan = settings.default_plan
+    plan = await _plan_for(ctx)
     cap = settings.plan_limits.get(plan, {}).get(metric, -1)
     if cap < 0:  # unlimited on this plan — still record for visibility
         if ctx.session is not None:
