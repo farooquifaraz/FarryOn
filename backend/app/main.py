@@ -32,6 +32,7 @@ from app.db.base import dispose_db, get_sessionmaker, init_db
 from app.db.models import User
 from app.logging_conf import configure_logging, get_logger
 from app.modules.audit.router import router as audit_router
+from app.modules.billing.router import me_router as billing_me_router
 from app.modules.billing.router import router as billing_router
 from app.modules.billing.router import webhook_router as billing_webhook_router
 from app.modules.auth.router import me_router as auth_me_router
@@ -147,6 +148,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(audit_router, prefix="/api/v1")
     app.include_router(impersonation_router, prefix="/api/v1")
     app.include_router(billing_router, prefix="/api/v1")
+    app.include_router(billing_me_router, prefix="/api/v1")
     app.include_router(billing_webhook_router, prefix="/api/v1")
 
     @app.get("/healthz", response_class=JSONResponse, tags=["ops"])

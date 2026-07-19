@@ -82,6 +82,65 @@ async def active_plan_name(db: AsyncSession, user_id: int | None) -> str:
     return row or default
 
 
+# ---- Checkout ------------------------------------------------------------
+
+
+async def create_checkout(db: AsyncSession, *, user: User, plan_name: str) -> dict:
+    """Start a Stripe Checkout Session for ``user`` to subscribe to ``plan_name``.
+
+    Returns ``{"url": <hosted checkout url>}``. The caller (the user's own
+    request) redirects there; Stripe collects payment and, on success, fires
+    the webhook (phase 3) that flips the subscription active. Nothing is written
+    to our DB here — a checkout that's started but abandoned must not leave a
+    dangling subscription row; the webhook is the single source of that truth.
+
+    Refuses a plan that isn't sold (only `stripe_price_ids` keys are), so the
+    free fallback tier and any typo can't reach Stripe. Returns a 503-shaped
+    error when Stripe isn't configured, so local testing without keys is clean.
+    """
+    from app.config import get_settings
+    from app.services import stripe_client
+    from app.services.stripe_client import StripeError
+
+    settings = get_settings()
+    if not settings.stripe_secret_key:
+        raise AppError(
+            "BILLING_NOT_CONFIGURED",
+            "Payments aren't set up yet.",
+            status_code=503,
+        )
+    price_id = settings.stripe_price_ids.get(plan_name)
+    if not price_id:
+        raise AppError(
+            "UNKNOWN_PLAN",
+            f"'{plan_name}' isn't a plan you can subscribe to.",
+            status_code=400,
+        )
+
+    try:
+        session = await stripe_client.create_checkout_session(
+            secret_key=settings.stripe_secret_key,
+            price_id=price_id,
+            success_url=settings.stripe_success_url,
+            cancel_url=settings.stripe_cancel_url,
+            client_reference_id=str(user.id),
+            customer_email=user.email,
+            metadata={"user_id": str(user.id), "plan": plan_name},
+        )
+    except StripeError as e:
+        raise AppError(
+            "STRIPE_ERROR",
+            e.args[0] if e.args else "Checkout could not be started.",
+            status_code=502,
+        ) from e
+
+    url = session.get("url")
+    if not url:
+        raise AppError("STRIPE_ERROR", "Stripe did not return a checkout URL.", status_code=502)
+    logger.info("billing.checkout_started", user_id=user.id, plan=plan_name)
+    return {"url": url}
+
+
 # ---- Plans ---------------------------------------------------------------
 
 

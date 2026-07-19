@@ -186,11 +186,31 @@ class Settings(BaseSettings):
 
     # -- Admin/User module: billing webhooks --------------------------------
     # Shared secret the payment provider webhook must present in the
-    # X-Webhook-Secret header. Placeholder until a real provider is chosen —
-    # Stripe/Razorpay each have their own HMAC signature scheme, which should
-    # replace this check in modules/billing/router.py when integrating.
+    # X-Webhook-Secret header. Still used by the generic /webhooks/billing/{provider}
+    # path; Stripe uses its own signed webhook (stripe_webhook_secret below).
     # Webhooks are rejected (503) while this is unset.
     billing_webhook_secret: str | None = Field(default=None)
+
+    # -- Stripe (global/USD checkout + subscriptions) -----------------------
+    # Secret key (sk_test_… in test mode, sk_live_… in production). Checkout is
+    # unavailable — POST /billing/checkout returns 503 — while this is unset, so
+    # the app runs fine without it during local testing.
+    stripe_secret_key: str | None = Field(default=None)
+    # Stripe Price id (price_…) for each SOLD plan, keyed by our plan name. These
+    # are created once in the Stripe dashboard (Products → Prices); Stripe is the
+    # billing source of truth for the amount actually charged, our plans table
+    # mirrors it for display. A plan with no mapping here can't be checked out.
+    stripe_price_ids: dict[str, str] = Field(default_factory=dict)
+    # Where Stripe returns the user after checkout. {CHECKOUT_SESSION_ID} in the
+    # success URL is filled in by Stripe. Point these at the mobile app's deep
+    # links (or a web landing) in production.
+    stripe_success_url: str = Field(
+        default="https://farryon.app/billing/success?session_id={CHECKOUT_SESSION_ID}"
+    )
+    stripe_cancel_url: str = Field(default="https://farryon.app/billing/cancel")
+    # Signing secret (whsec_…) for the Stripe webhook — verifies the
+    # Stripe-Signature header. Phase 3. Rejected (503) while unset.
+    stripe_webhook_secret: str | None = Field(default=None)
 
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)

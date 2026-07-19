@@ -12,6 +12,14 @@ SubscriptionStatus = Literal["trialing", "active", "past_due", "canceled", "expi
 PaymentStatus = Literal["succeeded", "failed", "refunded"]
 
 
+class CheckoutRequest(BaseModel):
+    """The plan a signed-in user wants to subscribe to. Validated against the
+    sold plans (stripe_price_ids) in the service, not here — the set of sellable
+    plans is config, not a fixed literal."""
+
+    plan: str = Field(min_length=2, max_length=64)
+
+
 class PlanCreateRequest(BaseModel):
     name: str = Field(min_length=2, max_length=64)
     price_cents: int = Field(ge=0)

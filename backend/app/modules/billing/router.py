@@ -19,10 +19,29 @@ from app.core.responses import AppError, ok
 from app.db.models import User
 from app.modules.audit.service import write_audit
 from app.modules.billing import service
-from app.modules.billing.schemas import PlanCreateRequest, PlanUpdateRequest, WebhookEvent
+from app.modules.billing.schemas import (
+    CheckoutRequest,
+    PlanCreateRequest,
+    PlanUpdateRequest,
+    WebhookEvent,
+)
 
 router = APIRouter(prefix="/admin", tags=["billing"])
 webhook_router = APIRouter(prefix="/webhooks", tags=["billing"])
+# User-facing (not admin): the signed-in user starting their own subscription.
+me_router = APIRouter(prefix="/billing", tags=["billing"])
+
+
+@me_router.post("/checkout")
+async def create_checkout_endpoint(
+    body: CheckoutRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Start a Stripe Checkout Session for the caller. Returns ``{url}`` to
+    redirect to. Authenticated as the user themselves — no admin permission;
+    anyone signed in may subscribe."""
+    return ok(await service.create_checkout(db, user=user, plan_name=body.plan))
 
 
 def _client_ip(request: Request) -> str | None:
