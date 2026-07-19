@@ -148,6 +148,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    // Drop any impersonation token BEFORE the logout call, or `api()` sends the
+    // victim's bearer (it prefers the impersonation token) while the body
+    // carries the admin's refresh token — the server then sees the admin's
+    // token being revoked by the impersonated user, and depending on
+    // enforcement either revokes under the wrong principal or rejects it,
+    // leaving the admin's refresh token alive after a "successful" logout.
+    setImpersonationToken(null);
     const tokens = loadTokens();
     if (tokens) {
       try {
@@ -176,7 +183,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         { method: "POST" },
       );
       setImpersonationToken(res.data.access_token);
-      setImpersonating(await fetchMe());
+      // `fetchMe` swallows every error and returns null. If it fails here — a
+      // blip, a 500, the fresh token momentarily rejected — we must NOT leave
+      // the impersonation token set: `impersonating` would be null so no banner
+      // shows, yet every later request would still go out as the victim. Clear
+      // it and fail loudly instead of browsing as someone else in silence.
+      const who = await fetchMe();
+      if (!who) {
+        setImpersonationToken(null);
+        setImpersonating(null);
+        throw new Error("Could not start impersonation — please try again.");
+      }
+      setImpersonating(who);
     },
     [fetchMe],
   );

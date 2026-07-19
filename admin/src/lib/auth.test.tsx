@@ -332,4 +332,45 @@ describe("impersonation", () => {
     expect(screen.getByTestId("impersonating")).toHaveTextContent("none");
     expect(screen.getByTestId("user")).toHaveTextContent("none");
   });
+
+  test("logout is authenticated as the admin, never as the victim", async () => {
+    // The token must be dropped BEFORE the logout call. Otherwise api() sends
+    // the victim's bearer while the body carries the admin's refresh token, and
+    // the admin's token is never revoked. We assert the request the server
+    // actually saw, not just the end state — the end state passed even when the
+    // logout went out under the wrong principal.
+    signedIn({ access_token: "admin-access", refresh_token: "admin-refresh" });
+    const stub = stubFetch((call) =>
+      call.url.endsWith("/impersonate") ? ok({ access_token: "victim-token" }) : ok(me(ADMIN)),
+    );
+    const auth = await mount();
+    await act(async () => await auth.startImpersonation(42));
+
+    await act(async () => await auth.logout());
+
+    const logoutCall = stub.to("/auth/logout")[0];
+    expect(logoutCall.headers.Authorization).toBe("Bearer admin-access");
+    expect(logoutCall.body).toEqual({ refresh_token: "admin-refresh" });
+  });
+
+  test("a failed /me after impersonate does NOT leave the token set", async () => {
+    // The scoping leak: impersonate succeeds, /me then fails, and the admin is
+    // left silently sending the victim's bearer on every later request with no
+    // banner to say so. It must clear the token and throw, not carry on.
+    signedIn();
+    const stub = stubFetch((call) =>
+      call.url.endsWith("/impersonate") ? ok({ access_token: "victim-token" }) : fail(500, "BOOM"),
+    );
+    const auth = await mount();
+
+    await expect(auth.startImpersonation(42)).rejects.toThrow();
+
+    expect(getImpersonationToken()).toBeNull();
+    expect(screen.getByTestId("impersonating")).toHaveTextContent("none");
+    // And the leak's real consequence: the next request goes out as the admin.
+    stub.calls.length = 0;
+    await act(async () => await auth.logout());
+    const logoutCall = stub.to("/auth/logout")[0];
+    expect(logoutCall?.headers.Authorization).not.toBe("Bearer victim-token");
+  });
 });
