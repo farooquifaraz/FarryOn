@@ -64,6 +64,7 @@ who you are.
 | A10 | 2FA account: sign in | Code prompt, then live screen | ☐ |
 | A11 | Backend down, tap Sign In | Honest "can't reach" message, not a hang | ☐ |
 | A13 | **Notes/Reminders with the backend dead** | Cached rows still show; no false "check the backend" | ☑ **2026-07-16 (Vivo)** — opened Notes online (2 notes), killed the backend, reopened: same 2 notes. Then force-stopped the app and reopened cold with the backend still dead: same 2 notes, read from disk. |
+| A14 | **Farry's own note appears without a refresh** | It's in the list next time you open Notes | ☑ **2026-07-19 (Vivo)** — said "yaad rakho…", killed the backend, opened Notes: "Phase4 test note" at the top of 3. With the server down it could only have come from the WS `tool_result`. |
 | A12 | Avatar tap | Opens Settings, showing your name + email | ☑ 2026-07-15 |
 
 **A7 was the one to test first, and it had no test at all.** The restore path's
