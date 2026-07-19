@@ -47,12 +47,15 @@ jobs:
 
   # ------------------------------------------- backend (admin module, Postgres)
   backend-postgres:
-    # The admin/user module's schema uses Postgres-enforced constructs
-    # (partial unique index on users.email, tz-aware datetimes via asyncpg)
-    # that SQLite doesn't exercise — run that module's suites against the
-    # real thing. Scoped to those test files so the job stays green
-    # independently of the SQLite job above.
-    name: Backend admin module (pytest, Postgres 16)
+    # Production is Postgres, and SQLite quietly permits things it does not.
+    # This ran only the admin module's nine files until 2026-07-19, when the
+    # first full local run against Postgres failed 11 tests outside them: the
+    # soft-delete suite had been inserting notes with `user_id=1` and never
+    # creating that user. SQLite does not enforce foreign keys unless
+    # `PRAGMA foreign_keys` is on, so it had been green all along. The whole
+    # suite runs here now — a narrower job is a job that misses that class of
+    # bug by construction.
+    name: Backend full suite (pytest, Postgres 16)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -89,18 +92,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run admin/user module tests
-        run: >
-          pytest -q
-          tests/test_auth.py
-          tests/test_rbac.py
-          tests/test_users.py
-          tests/test_sessions.py
-          tests/test_twofa.py
-          tests/test_sso.py
-          tests/test_audit.py
-          tests/test_impersonation.py
-          tests/test_billing.py
+      - name: Run the full suite against Postgres
+        run: pytest -q
 
   # ------------------------------------------------------------------- mobile
   mobile:

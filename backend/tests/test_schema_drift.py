@@ -25,23 +25,41 @@ async def _drop_column(table: str, column: str) -> None:
     """Take a column away behind SQLAlchemy's back — a database from before
     the migration that added it.
 
-    Its indexes go first: SQLite refuses to drop a column an index still names,
-    and a database that never had the column never had them either.
+    Two dialects, because the suite runs on both and the drift warning has to
+    be true on the one production uses. Postgres drops a column's indexes with
+    it; SQLite refuses to drop a column an index still names, so those go first
+    (a database that never had the column never had them either).
     """
     async with get_sessionmaker()() as db:
-        indexes = (
-            await db.execute(text(f"PRAGMA index_list({table})"))
-        ).all()
-        for row in indexes:
-            name = row[1]
-            cols = {
-                r[2]
-                for r in (await db.execute(text(f"PRAGMA index_info({name})"))).all()
-            }
-            if column in cols:
-                await db.execute(text(f"DROP INDEX IF EXISTS {name}"))
+        if db.bind.dialect.name == "sqlite":
+            for row in (await db.execute(text(f"PRAGMA index_list({table})"))).all():
+                name = row[1]
+                cols = {
+                    r[2]
+                    for r in (await db.execute(text(f"PRAGMA index_info({name})"))).all()
+                }
+                if column in cols:
+                    await db.execute(text(f"DROP INDEX IF EXISTS {name}"))
         await db.execute(text(f"ALTER TABLE {table} DROP COLUMN {column}"))
         await db.commit()
+
+
+async def _columns(table: str) -> set[str]:
+    """The table's columns, asked the way each dialect answers."""
+    async with get_sessionmaker()() as db:
+        if db.bind.dialect.name == "sqlite":
+            rows = (await db.execute(text(f"PRAGMA table_info({table})"))).all()
+            return {r[1] for r in rows}
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = :t"
+                ),
+                {"t": table},
+            )
+        ).all()
+        return {r[0] for r in rows}
 
 
 @pytest.fixture
@@ -84,12 +102,9 @@ async def test_the_check_never_alters_anything(drift_log) -> None:
     await _drop_column("tasks", "deleted_at")
     await init_db()
 
-    async with get_sessionmaker()() as db:
-        cols = {
-            r[1]
-            for r in (await db.execute(text("PRAGMA table_info(tasks)"))).all()
-        }
-    assert "deleted_at" not in cols, "the check repaired the schema on its own"
+    assert "deleted_at" not in await _columns("tasks"), (
+        "the check repaired the schema on its own"
+    )
     assert "db.schema_drift" in drift_log()
 
 
