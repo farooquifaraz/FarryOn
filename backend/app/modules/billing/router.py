@@ -9,6 +9,7 @@ scheme replaces it — see Settings.billing_webhook_secret.
 from __future__ import annotations
 
 import hmac
+import json
 
 from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +19,7 @@ from app.core.deps import get_current_user, get_db, require_permission
 from app.core.responses import AppError, ok
 from app.db.models import User
 from app.modules.audit.service import write_audit
-from app.modules.billing import service
+from app.modules.billing import service, stripe_webhook
 from app.modules.billing.schemas import (
     CheckoutRequest,
     PlanCreateRequest,
@@ -190,3 +191,57 @@ async def billing_webhook_endpoint(
         user_agent=request.headers.get("user-agent"),
     )
     return ok(result)
+
+
+@webhook_router.post("/stripe")
+async def stripe_webhook_endpoint(
+    request: Request,
+    stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Receive a Stripe webhook: verify its signature, translate it, apply it.
+
+    Reads the RAW body — Stripe's signature is over the exact bytes, so this
+    must not go through a parsed-model dependency (that would re-serialize and
+    every signature would fail). Unmapped events are acknowledged, not errored:
+    Stripe retries any non-2xx for days.
+    """
+    if not settings.stripe_webhook_secret:
+        raise AppError(
+            "WEBHOOK_NOT_CONFIGURED", "Stripe webhooks aren't configured.", status_code=503
+        )
+
+    payload = await request.body()
+    try:
+        stripe_webhook.verify_signature(
+            payload, stripe_signature, settings.stripe_webhook_secret
+        )
+    except stripe_webhook.SignatureError as e:
+        raise AppError("UNAUTHENTICATED", str(e), status_code=401) from e
+
+    try:
+        stripe_event = json.loads(payload)
+    except ValueError as e:
+        raise AppError("INVALID_EVENT", "Body is not JSON.", status_code=400) from e
+
+    events = stripe_webhook.to_events(stripe_event)
+    if not events:
+        # Nothing we act on — a 2xx so Stripe stops redelivering it.
+        return ok({"ignored": stripe_event.get("type")})
+
+    results = []
+    for event in events:
+        result = await service.handle_webhook_event(db, provider="stripe", event=event)
+        await write_audit(
+            db,
+            actor_id=None,
+            action=f"billing.{event.event_type}",
+            entity_type="billing",
+            entity_id=result.get("subscription_id") or result.get("payment_id"),
+            after=event.model_dump(mode="json"),
+            ip=_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+        )
+        results.append(result)
+    return ok({"applied": results})

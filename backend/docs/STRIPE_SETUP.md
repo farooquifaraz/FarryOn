@@ -59,11 +59,55 @@ payment succeeds in Stripe — but **the subscription won't flip active in our D
 until Phase 3** (the webhook that hears "payment completed" and writes the row).
 That's the next piece.
 
-## What's NOT done yet (Phase 3)
+## 5. Wire the webhook (Phase 3 — now built)
 
-- The Stripe **webhook** — Stripe calls us on `checkout.session.completed` /
-  `customer.subscription.*` and we write/activate the subscription. Until then,
-  checkout works and charges, but the app won't know the user is subscribed.
+The webhook is what turns a completed payment into an active subscription in our
+DB. Without it, checkout charges the card but the app never learns the user
+subscribed.
+
+**In the Stripe dashboard:** Developers → Webhooks → **Add endpoint**.
+
+- Endpoint URL: `https://YOUR_BACKEND/api/v1/webhooks/stripe`
+  (for local testing, use the Stripe CLI instead — see below)
+- Events to send — select these five:
+  - `checkout.session.completed`  ← the activation event
+  - `customer.subscription.deleted`
+  - `customer.subscription.updated`
+  - `invoice.payment_succeeded`
+  - `invoice.payment_failed`
+- After creating it, copy the **Signing secret** (`whsec_…`).
+
+Add it to `backend/.env`:
+
+```
+STRIPE_WEBHOOK_SECRET=whsec_YOURSECRET
+```
+
+**Local testing without a public URL** — the Stripe CLI forwards events to your
+localhost and prints a `whsec_…` to use:
+
+```
+stripe login
+stripe listen --forward-to localhost:8000/api/v1/webhooks/stripe
+# → prints "Ready! Your webhook signing secret is whsec_…"  — put that in .env
+stripe trigger checkout.session.completed
+```
+
+### The end-to-end flow, once both secrets are set
+
+1. App calls `POST /billing/checkout {plan}` → gets a Stripe URL.
+2. User pays with `4242 4242 4242 4242`.
+3. Stripe fires `checkout.session.completed` → our webhook verifies the
+   signature, reads `metadata.user_id` + `metadata.plan`, and creates an
+   **active** subscription row (idempotent — a redelivery won't double it).
+4. `billing.active_plan_name` now returns that plan, so the user's quota caps
+   are the plan's caps. Renewals (`invoice.payment_succeeded`) and cancellations
+   flow through the same webhook.
+
+## What's still NOT done (Phase 4)
+
 - Turning on **quota enforcement** (`quota_enforcement_enabled=true`) so the
-  plan's caps actually apply. That's deliberately last, after the money path is
-  proven end-to-end.
+  caps actually apply. Deliberately last — after the money path is proven
+  end-to-end with real test payments.
+- The **mobile upgrade flow**: a "you've hit today's limit — upgrade" prompt
+  that opens the checkout URL, and handling the success/cancel return.

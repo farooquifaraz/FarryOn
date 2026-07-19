@@ -429,6 +429,21 @@ async def _handle_subscription_event(
     if event.event_type == "subscription.created":
         if not event.plan_name:
             raise AppError("INVALID_EVENT", "plan_name required for subscription.created", status_code=400)
+        # Idempotent on the provider's subscription id: Stripe redelivers
+        # checkout.session.completed, and without this each redelivery would add
+        # another active subscription row for the same paid subscription.
+        if event.provider_subscription_id:
+            dup = (
+                await db.execute(
+                    select(Subscription).where(
+                        Subscription.provider == provider,
+                        Subscription.provider_subscription_id
+                        == event.provider_subscription_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if dup is not None:
+                return {"subscription_id": dup.id, "status": dup.status, "duplicate": True}
         plan = (
             await db.execute(select(Plan).where(Plan.name == event.plan_name))
         ).scalar_one_or_none()
