@@ -159,6 +159,17 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
     }
   }
 
+  Future<void> _startUpgrade(BuildContext context, LiveNotifier notifier) async {
+    // Default the upgrade to Plus — the cheapest paid tier that lifts the cap.
+    // A plan picker can come later; the point at the cap is to get them moving.
+    final problem = await notifier.startUpgrade('plus');
+    if (problem != null && context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(SnackBar(content: Text(problem)));
+    }
+  }
+
   void _showPermissionDialog(PermissionOutcome outcome) {
     final permanent = outcome == PermissionOutcome.permanentlyDenied;
     showDialog<void>(
@@ -370,7 +381,11 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
           // 7. Reconnect overlay — shown after the session ends or drops.
           if (state.connection == ConnectionStatus.disconnected)
             Positioned.fill(
-              child: _ReconnectOverlay(onReconnect: notifier.connect),
+              child: ReconnectOverlay(
+                onReconnect: notifier.connect,
+                capReached: state.capReached,
+                onUpgrade: () => _startUpgrade(context, notifier),
+              ),
             ),
         ],
       ),
@@ -762,35 +777,83 @@ class _MicButton extends StatelessWidget {
 
 /// Full-screen overlay shown when the session has ended/dropped, with a button
 /// to start a new live session (voice can't restart it — the mic is off).
-class _ReconnectOverlay extends StatelessWidget {
-  const _ReconnectOverlay({required this.onReconnect});
+class ReconnectOverlay extends StatelessWidget {
+  const ReconnectOverlay({
+    required this.onReconnect,
+    this.capReached = false,
+    this.onUpgrade,
+  });
 
   final VoidCallback onReconnect;
+
+  /// The session ended because today's plan cap was spent. When true the
+  /// overlay leads with Upgrade — a plain "Start session" would just re-hit the
+  /// same cap and end again — and explains why, rather than the bare "Session
+  /// ended" that reads like a fault.
+  final bool capReached;
+  final VoidCallback? onUpgrade;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       color: Colors.black.withValues(alpha: 0.72),
       alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.power_settings_new,
-              size: 48, color: Aurora.textMuted),
-          const SizedBox(height: 12),
-          const Text('Session ended',
-              style: TextStyle(color: Aurora.textPrimary, fontSize: 18)),
-          const SizedBox(height: 18),
-          FilledButton.icon(
-            onPressed: onReconnect,
-            icon: const Icon(Icons.play_arrow),
-            label: const Text('Start session'),
-            style: FilledButton.styleFrom(
-              backgroundColor: Aurora.teal,
-              foregroundColor: Aurora.tealInk,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-            ),
+          Icon(
+            capReached ? Icons.hourglass_bottom_rounded : Icons.power_settings_new,
+            size: 48,
+            color: capReached ? Aurora.amber : Aurora.textMuted,
           ),
+          const SizedBox(height: 12),
+          Text(
+            capReached ? "That's today's free minutes" : 'Session ended',
+            style: const TextStyle(color: Aurora.textPrimary, fontSize: 18),
+            textAlign: TextAlign.center,
+          ),
+          if (capReached) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'Upgrade for more voice time each day, or come back tomorrow.',
+              style: TextStyle(color: Aurora.textMuted, fontSize: 14),
+              textAlign: TextAlign.center,
+            ),
+          ],
+          const SizedBox(height: 18),
+          if (capReached && onUpgrade != null)
+            FilledButton.icon(
+              onPressed: onUpgrade,
+              icon: const Icon(Icons.workspace_premium_rounded),
+              label: const Text('Upgrade'),
+              style: FilledButton.styleFrom(
+                backgroundColor: Aurora.amber,
+                foregroundColor: Colors.black,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+              ),
+            ),
+          if (capReached) const SizedBox(height: 10),
+          // Start session stays available even at the cap: a new day may have
+          // ticked over, so it's a secondary action rather than gone.
+          capReached
+              ? TextButton(
+                  onPressed: onReconnect,
+                  child: const Text('Try starting again',
+                      style: TextStyle(color: Aurora.textMuted)),
+                )
+              : FilledButton.icon(
+                  onPressed: onReconnect,
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text('Start session'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Aurora.teal,
+                    foregroundColor: Aurora.tealInk,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 24, vertical: 14),
+                  ),
+                ),
         ],
       ),
     );

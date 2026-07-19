@@ -91,6 +91,13 @@ async def check_quota(
     settings = get_settings()
     if not settings.quota_enforcement_enabled:
         return None
+    if ctx.session is None:
+        # No DB to meter against — we can't record a use, so we can't fairly
+        # enforce a cap either. Allow it, same fail-open rule the voice meter
+        # uses on a DB error: metering protects the bill, and blocking a tool
+        # over missing plumbing costs more than the one call it would save. In
+        # production a metered tool always has a session; this is the edge.
+        return None
     plan = await _plan_for(ctx)
     cap = settings.plan_limits.get(plan, {}).get(metric, -1)
     if cap < 0:  # unlimited on this plan — still record for visibility

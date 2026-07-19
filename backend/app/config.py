@@ -231,9 +231,15 @@ class Settings(BaseSettings):
     idle_disconnect_seconds: int = Field(default=300)  # 5 min with no audio/text
 
     # -- Per-user daily quotas (cost protection) -------------------------------
-    # OFF by default: quotas only mean something with real per-user auth, and
-    # hard enforcement would interrupt single-user testing. Turn on for launch.
-    quota_enforcement_enabled: bool = Field(default=False)
+    # ON by default as of Phase 4 (2026-07-20): every minute costs real Gemini
+    # tokens, so shipping without caps is shipping an unbounded bill. A user with
+    # no subscription is on the `free` tier (3 min/day).
+    #
+    # LOCAL TESTING NOTE: with this on, a test account with no subscription is
+    # capped at 3 minutes of voice a day and the session ends when it's hit. To
+    # test without that interruption, either set QUOTA_ENFORCEMENT_ENABLED=false
+    # in backend/.env, or give the test user an active `pro` subscription row.
+    quota_enforcement_enabled: bool = Field(default=True)
     # The plan a user with no active subscription falls back to. Everything the
     # app does costs us Gemini tokens on every minute of use (measured ~$0.01-
     # 0.015/active-minute, and a long session re-bills its whole context each

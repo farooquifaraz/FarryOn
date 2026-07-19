@@ -93,6 +93,7 @@ class LiveSessionState {
     this.lastCapturedAt,
     this.lastError,
     this.permissionsGranted = false,
+    this.capReached = false,
   });
 
   /// Socket-level status.
@@ -159,6 +160,11 @@ class LiveSessionState {
   /// Whether mic+camera OS permissions have been granted.
   final bool permissionsGranted;
 
+  /// The session ended because today's plan cap was reached (not a fault). Lets
+  /// the reconnect overlay offer Upgrade instead of a Retry that re-hits the cap.
+  /// Cleared when a new session starts.
+  final bool capReached;
+
   bool get isConnected => connection == ConnectionStatus.connected;
 
   LiveSessionState copyWith({
@@ -182,6 +188,7 @@ class LiveSessionState {
     String? lastError,
     bool clearError = false,
     bool? permissionsGranted,
+    bool? capReached,
   }) =>
       LiveSessionState(
         connection: connection ?? this.connection,
@@ -203,5 +210,6 @@ class LiveSessionState {
         lastCapturedAt: lastCapturedAt ?? this.lastCapturedAt,
         lastError: clearError ? null : (lastError ?? this.lastError),
         permissionsGranted: permissionsGranted ?? this.permissionsGranted,
+        capReached: capReached ?? this.capReached,
       );
 }

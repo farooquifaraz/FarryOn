@@ -196,5 +196,33 @@ class DataApi {
     );
   }
 
+  /// Start a Stripe Checkout for [plan] and return the hosted URL to open.
+  ///
+  /// Returns null when checkout can't be started right now — most importantly a
+  /// 503 while Stripe keys aren't configured — so the caller can say "not
+  /// available yet" instead of throwing at a user who just tapped Upgrade. A
+  /// dead session (401) still propagates as [SessionExpiredException]: that
+  /// means sign in again, not "try later".
+  Future<String?> createCheckout(String plan) async {
+    try {
+      final r = _check(
+        await _client
+            .post(
+              _uri('/api/v1/billing/checkout'),
+              headers: {..._headers, 'Content-Type': 'application/json'},
+              body: jsonEncode({'plan': plan}),
+            )
+            .timeout(_timeout),
+      );
+      final body = jsonDecode(r.body) as Map<String, dynamic>;
+      final data = body['data'] as Map<String, dynamic>?;
+      return data?['url'] as String?;
+    } on SessionExpiredException {
+      rethrow;
+    } catch (_) {
+      return null;
+    }
+  }
+
   void dispose() => _client.close();
 }

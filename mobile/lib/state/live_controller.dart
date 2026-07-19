@@ -16,6 +16,7 @@ import '../core/log_store.dart';
 import '../core/logger.dart';
 import '../core/media_saver.dart';
 import '../core/notifications.dart';
+import '../data/data_api.dart';
 import '../data/finder_api.dart';
 import '../data/live_client.dart';
 import '../features/glasses_lab/bridge/glasses_channel.dart';
@@ -451,6 +452,9 @@ class LiveController {
       permissionsGranted: outcome == PermissionOutcome.granted,
       audioKind: _registry.audioKind.name,
       videoKind: _registry.videoKind.name,
+      // A new session starts fresh: a cap reached in the previous one no longer
+      // applies to this attempt (the user may have upgraded, or it's a new day).
+      capReached: false,
     ));
     if (outcome != PermissionOutcome.granted) {
       _log.warn('permissions not granted: $outcome');
@@ -616,7 +620,22 @@ class LiveController {
         _emit(_state.copyWith(liveState: msg.value));
       case ErrorMessage():
         _log.warn('server error ${msg.code}: ${msg.message}');
-        _emit(_state.copyWith(lastError: msg.message));
+        if (msg.code == 'quota_exceeded') {
+          // The session is ending because the daily cap is spent — not because
+          // anything broke. Say so where the user is looking (a notice in the
+          // transcript, the same amber line reminders use), and remember it so
+          // the reconnect overlay can offer Upgrade instead of a bare Retry that
+          // would just hit the cap again.
+          _emit(_state.copyWith(
+            capReached: true,
+            transcripts: [
+              ..._state.transcripts,
+              TranscriptEntry(role: 'notice', text: msg.message, isFinal: true),
+            ],
+          ));
+        } else {
+          _emit(_state.copyWith(lastError: msg.message));
+        }
       case PongMessage():
         break; // handled inside the client (heartbeat)
       case ResolveContactRequestMessage():
@@ -973,6 +992,33 @@ class LiveController {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } catch (e) {
       _log.warn('open external url failed: $e');
+    }
+  }
+
+  /// Open Stripe Checkout for [plan] in the browser. Returns a message to show
+  /// the user when it can't start — null on success.
+  ///
+  /// Kept on the controller because the reconnect overlay (where the cap notice
+  /// lives) already talks to it, and it holds the config with the auth token.
+  /// A null URL from the API means checkout isn't available yet (Stripe not
+  /// configured, or a transient error) — we tell the user rather than opening a
+  /// blank tab.
+  Future<String?> startUpgrade(String plan) async {
+    final api = DataApi(_config);
+    try {
+      final url = await api.createCheckout(plan);
+      if (url == null) {
+        return "Upgrades aren't available just yet. Please try again later.";
+      }
+      await _openExternal(Uri.parse(url));
+      return null;
+    } on SessionExpiredException {
+      return 'Please sign in again to upgrade.';
+    } catch (e) {
+      _log.warn('start upgrade failed: $e');
+      return "Couldn't start the upgrade. Please try again.";
+    } finally {
+      api.dispose();
     }
   }
 

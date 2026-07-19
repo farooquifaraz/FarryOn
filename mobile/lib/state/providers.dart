@@ -147,6 +147,7 @@ class LiveNotifier extends Notifier<LiveSessionState> {
   void respondToolPermission(String id, bool granted) =>
       _controller.respondToolPermission(id, granted);
   void dismissError() => _controller.dismissError();
+  Future<String?> startUpgrade(String plan) => _controller.startUpgrade(plan);
 
   /// The current camera source (for the camera preview widget).
   CaptureSource get activeSource =>

@@ -52,3 +52,21 @@ async def test_quota_unlimited_plan_never_blocks(db_session, monkeypatch) -> Non
     ctx = ToolContext(session=db_session, session_id="s3")
     for _ in range(5):
         assert await quota.check_quota(ctx, "image_scans") is None
+
+
+async def test_no_db_session_allows_rather_than_crashes(monkeypatch) -> None:
+    # With enforcement ON (now the default) a metered call whose context has no
+    # DB session must be allowed, not crash: we can't record a use, so we can't
+    # fairly enforce a cap. Regression for 3 web_search tests that broke the
+    # moment the enforcement default flipped to True (2026-07-20).
+    monkeypatch.setattr(
+        quota, "get_settings",
+        lambda: SimpleNamespace(
+            quota_enforcement_enabled=True,
+            default_plan="free",
+            plan_limits={"free": {"web_searches": 1}},
+        ),
+    )
+    ctx = ToolContext(session=None, session_id="no-db")
+    for _ in range(5):
+        assert await quota.check_quota(ctx, "web_searches") is None
