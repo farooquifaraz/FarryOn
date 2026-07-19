@@ -18,8 +18,8 @@ payment webhook that can't be forged, and an APK signed with a real key.
 
 ```
 Backend      266 automated tests      green (75 of them against real Postgres 16)
-Mobile       132 automated tests      green
-Admin panel    0 automated tests      ← the gap
+Mobile       163 automated tests      green
+Admin panel   39 automated tests      green (auth gate + API client; pages still eyes-only)
 Manual plan   44 / 66 verified
 Git          main, everything pushed, CI green
 ```

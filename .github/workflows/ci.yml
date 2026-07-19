@@ -129,3 +129,32 @@ jobs:
 
       - name: Test
         run: flutter test
+
+  # -------------------------------------------------------------------- admin
+  admin:
+    name: Admin panel (tsc + vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Typecheck covers the tests too, so a stale mock that no longer matches
+      # the real signature fails here rather than passing green against a shape
+      # the app stopped using.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test

@@ -5,9 +5,11 @@ What still needs proving before real users, and what is already proven.
 > One-page summary: **[STATUS.md](STATUS.md)**. This file is the detail.
 
 **The automated suites are not repeated here.** 266 backend tests (`pytest`) and
-132 mobile tests (`flutter test`) run in seconds and cover the logic. This
+163 mobile tests (`flutter test`) run in seconds and cover the logic. This
 document is for what they *can't* reach: a real device, real hardware, real
-providers, real money, and the admin panel — which has **zero** automated tests.
+providers, and real money. The admin panel gained 39 tests on 2026-07-19
+(`npm test` in `admin/`), but only over its two silent-failure pieces — the
+admin gate and the API client. Its pages are still eyes-only.
 
 Legend: ☐ not done · ☑ done+verified (date) · ⚠ blocked · ✗ dropped
 
@@ -90,9 +92,16 @@ server, and now on a real phone (B4).
 **B4–B7 are the real proof.** Everything so far tested the plumbing; these test
 the promise.
 
-### C. Admin panel — **no automated tests at all**
+### C. Admin panel
 
-The biggest untested surface in the project. Every case below is manual.
+> **Automated as of 2026-07-19:** `admin/src/lib/api.test.ts` (18) and
+> `auth.test.tsx` (21) cover the two pieces that fail silently — the admin gate
+> and the silent-refresh/impersonation client. Run with `npm test` in `admin/`;
+> CI runs them plus `tsc --noEmit`. The C1-C10 items below stay manual: they are
+> about what an operator sees on a real backend, which these don't touch.
+
+Every case below is still manual — they check what an operator sees against a
+live backend, which unit tests can't stand in for.
 
 | # | Case | Expected | State |
 |---|---|---|---|
