@@ -64,6 +64,39 @@ class _TranscriptViewState extends State<TranscriptView> {
   }
 }
 
+/// The app's own voice: full width, amber, no speaker name and no avatar.
+///
+/// Deliberately unlike both bubbles. It usually sits directly under Farry
+/// saying the opposite ("OK, I've set a reminder"), and the whole job of this
+/// line is to be believed over hers.
+Widget _notice(ThemeData theme, String text) => Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.fromLTRB(12, 9, 12, 10),
+      decoration: BoxDecoration(
+        color: Aurora.amber.withValues(alpha: 0.13),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Aurora.amber.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.notifications_off_rounded,
+              size: 17, color: Aurora.amber),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              text,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: Aurora.textPrimary,
+                height: 1.34,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
 class _Bubble extends StatelessWidget {
   const _Bubble({required this.entry});
 
@@ -72,6 +105,7 @@ class _Bubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    if (entry.isNotice) return _notice(theme, entry.text);
     final isUser = entry.isUser;
     final streaming = !entry.isFinal;
 

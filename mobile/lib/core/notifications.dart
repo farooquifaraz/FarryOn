@@ -5,6 +5,30 @@ import 'package:timezone/timezone.dart' as tz;
 
 import 'logger.dart';
 
+/// What actually happened to a reminder, so the caller can say so.
+///
+/// This exists because of a real failure: with notifications denied, the task
+/// was created, nothing was scheduled, and Farry answered "OK. I've set a
+/// reminder for 'drink water' in 3 minutes." `dumpsys alarm` had no entry and
+/// the plugin's own list was empty. A reminder that quietly never fires is
+/// worse than one that fails loudly — the user stops watching for the thing
+/// they asked to be reminded of.
+enum ReminderOutcome {
+  /// On the phone's alarm list. It will fire.
+  scheduled,
+
+  /// The user refused notifications. Nothing can fire until they change that.
+  notificationsOff,
+
+  /// Long past its time — deliberately dropped, see [Notifications.schedule].
+  tooOld,
+
+  /// The plugin refused it. The log has the reason.
+  failed;
+
+  bool get willFire => this == ReminderOutcome.scheduled;
+}
+
 /// Schedules and cancels local reminder notifications so a task's due time
 /// actually fires on the phone — even when the app is closed.
 ///
@@ -84,20 +108,31 @@ class Notifications {
   /// is fired a few seconds from now instead of being silently dropped, so the
   /// user never loses a reminder. Only clearly-stale times (>6h old) are
   /// skipped.
-  static Future<void> schedule({
+  static Future<ReminderOutcome> schedule({
     required int id,
     required String body,
     required DateTime when,
   }) async {
     await init();
-    if (!_ready) return;
+    if (!_ready) return ReminderOutcome.failed;
+
+    // Asked every time, not cached from init(): the user can turn notifications
+    // off in Settings long after the app started, and the answer we want is the
+    // one that holds now. `init()` used to *request* the permission and never
+    // look at the reply — which is how a refused permission still produced a
+    // cheerful "reminder set".
+    if (!await notificationsAllowed()) {
+      _log.warn('reminder $id NOT scheduled — notifications are off');
+      return ReminderOutcome.notificationsOff;
+    }
+
     final now = DateTime.now();
     var fireAt = when;
     if (when.isBefore(now)) {
       final lateBy = now.difference(when);
       if (lateBy > const Duration(hours: 6)) {
         _log.debug('skip reminder $id — ${lateBy.inMinutes}min in the past');
-        return;
+        return ReminderOutcome.tooOld;
       }
       fireAt = now.add(const Duration(seconds: 5));
       _log.info('reminder $id was ${lateBy.inSeconds}s late; firing in 5s');
@@ -122,8 +157,31 @@ class Notifications {
             UILocalNotificationDateInterpretation.absoluteTime,
       );
       _log.info('reminder $id scheduled for $when');
+      return ReminderOutcome.scheduled;
     } catch (e) {
       _log.warn('schedule reminder $id failed: $e');
+      return ReminderOutcome.failed;
+    }
+  }
+
+  /// Whether the OS will actually deliver a notification right now.
+  ///
+  /// Two sources because they can disagree: the plugin reports the app's
+  /// notification setting, and `permission_handler` reports POST_NOTIFICATIONS
+  /// (Android 13+). Either one being off means nothing reaches the user, so a
+  /// reminder only counts as schedulable when both agree.
+  static Future<bool> notificationsAllowed() async {
+    try {
+      final impl = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      final enabled = await impl?.areNotificationsEnabled() ?? true;
+      if (!enabled) return false;
+      return await Permission.notification.isGranted;
+    } catch (e) {
+      // A check that cannot run must not block a reminder — that would trade a
+      // silent failure for a silent refusal, which is no better.
+      _log.warn('could not read notification permission: $e');
+      return true;
     }
   }
 
@@ -140,6 +198,21 @@ class Notifications {
     );
     return when;
   }
+
+  /// The line to show a user whose reminder will not fire.
+  ///
+  /// Plain about the consequence — "won't fire" — rather than naming a
+  /// permission, because the person reading it wants to know whether to trust
+  /// the reminder, not which Android setting is involved.
+  static String? noticeFor(ReminderOutcome outcome) => switch (outcome) {
+        ReminderOutcome.scheduled => null,
+        ReminderOutcome.notificationsOff =>
+          "This reminder won't fire — notifications are turned off for Farry. "
+              'Turn them on in Settings and set it again.',
+        ReminderOutcome.tooOld => null,
+        ReminderOutcome.failed =>
+          "This reminder couldn't be set on your phone. Please try again.",
+      };
 
   static Future<void> cancel(int id) async {
     await init();

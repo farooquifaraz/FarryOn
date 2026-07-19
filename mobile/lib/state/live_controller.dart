@@ -884,13 +884,37 @@ class LiveController {
         if (due != null && due.isNotEmpty) {
           final when = DateTime.tryParse(due);
           if (when != null) {
-            unawaited(Notifications.schedule(id: id, body: title, when: when));
+            unawaited(_scheduleAndReport(id: id, title: title, when: when));
           }
         }
       case 'complete_task':
       case 'delete_task':
         unawaited(Notifications.cancel(id));
     }
+  }
+
+  /// Schedule a reminder and, if it will not fire, say so in the transcript.
+  ///
+  /// Farry has already told the user "OK, I've set a reminder" by the time this
+  /// runs — she writes the task server-side and cannot see the phone's
+  /// notification settings. So the correction has to come from here, and it has
+  /// to land right under her line where the user is already looking. Without
+  /// it, the reminder silently never fires (device-proven 2026-07-19: task
+  /// created, `dumpsys alarm` empty, Farry cheerful).
+  Future<void> _scheduleAndReport({
+    required int id,
+    required String title,
+    required DateTime when,
+  }) async {
+    final outcome = await Notifications.schedule(id: id, body: title, when: when);
+    final notice = Notifications.noticeFor(outcome);
+    if (notice == null) return;
+    _emit(_state.copyWith(
+      transcripts: [
+        ..._state.transcripts,
+        TranscriptEntry(role: 'notice', text: notice, isFinal: true),
+      ],
+    ));
   }
 
   /// Client-executed messaging: when a tool result asks to open a URL (a

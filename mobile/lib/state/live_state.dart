@@ -11,12 +11,18 @@ class TranscriptEntry {
     required this.isFinal,
   });
 
-  /// `"user"` or `"assistant"`.
+  /// `"user"`, `"assistant"`, or `"notice"`.
+  ///
+  /// A notice is the app correcting the record — "this reminder won't fire" —
+  /// and must not be dressed as Farry: she said it *was* set, and putting the
+  /// contradiction in her voice reads as her changing her mind rather than as
+  /// the phone reporting a fact she can't see.
   final String role;
   final String text;
   final bool isFinal;
 
   bool get isUser => role == 'user';
+  bool get isNotice => role == 'notice';
 
   TranscriptEntry copyWith({String? text, bool? isFinal}) => TranscriptEntry(
         role: role,

@@ -1,8 +1,8 @@
 import 'dart:convert';
 
+import 'package:farryon/core/config.dart';
 import 'package:farryon/core/outbox.dart';
 import 'package:farryon/core/outbox_sync.dart';
-import 'package:farryon/core/config.dart';
 import 'package:farryon/data/data_api.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
