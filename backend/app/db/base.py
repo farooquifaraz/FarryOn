@@ -15,6 +15,7 @@ there's no separate sync-driver connection string to maintain.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Any
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -26,6 +27,10 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool
 
 from app.config import Settings, get_settings
+from app.logging_conf import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -88,10 +93,18 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
 
 
 async def init_db(settings: Settings | None = None) -> None:
-    """Create all tables if they do not yet exist (``create_all`` bootstrap).
+    """Create any missing tables, then warn if the schema has drifted.
 
-    Importing :mod:`app.db.models` here guarantees every model is registered on
-    :data:`Base.metadata` before ``create_all`` runs.
+    ``create_all`` adds tables that don't exist. It does **not** alter tables
+    that do — a new column on an existing model is simply never created, and
+    nothing says so. A database bootstrapped this way therefore drifts silently
+    behind the migrations, and the first sign is a 500 from a real request:
+
+        sqlite3.OperationalError: no such column: notes.client_id
+
+    That is not hypothetical; it is what shipped on 2026-07-19. So after
+    creating, compare what the models expect against what the database has and
+    say something. Loudly, because the alternative is finding out from a user.
     """
     # Imported for side effect: registers models on Base.metadata.
     from app.db import models  # noqa: F401
@@ -99,6 +112,33 @@ async def init_db(settings: Settings | None = None) -> None:
     engine = _ensure_engine(settings)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_warn_on_schema_drift)
+
+
+def _warn_on_schema_drift(conn: Any) -> None:
+    """Log any column a model declares that the database hasn't got.
+
+    Read-only: it never alters anything. Fixing drift is ``alembic upgrade
+    head`` (or ``alembic stamp head`` first, for a database that predates
+    migrations) — a decision for whoever runs the server, not for startup.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    inspector = sa_inspect(conn)
+    existing = set(inspector.get_table_names())
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing:
+            continue  # create_all just made it, or it isn't ours
+        have = {c["name"] for c in inspector.get_columns(table.name)}
+        missing = {c.name for c in table.columns} - have
+        if missing:
+            logger.error(
+                "db.schema_drift",
+                table=table.name,
+                missing_columns=sorted(missing),
+                fix="run `alembic upgrade head` (or `alembic stamp head` first "
+                "if this database predates migrations)",
+            )
 
 
 async def dispose_db() -> None:
