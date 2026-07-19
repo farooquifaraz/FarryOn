@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/data_cache.dart';
+import '../../core/outbox.dart';
+import '../../core/outbox_sync.dart';
 import '../../core/theme.dart';
 import '../../core/ui.dart';
 import '../../data/data_api.dart';
@@ -51,6 +53,10 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
       _error = false;
     });
     try {
+      // The server is reachable, so anything queued offline can go now — and it
+      // must go BEFORE the fetch, or the reply would hand back the rows we
+      // just deleted and put them straight back on screen.
+      await OutboxSync.drain(_api, userId);
       final t = await _api.tasks();
       if (!mounted) return;
       unawaited(DataCache.saveTasks(userId, t));
@@ -76,34 +82,43 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
     }).length;
   }
 
-  /// Optimistic toggle: flip the row instantly, roll back + warn on failure.
+  /// Optimistic toggle: the flip lands now, and is queued if we're offline.
   Future<void> _toggle(TaskItem t) async {
-    final prev = _tasks;
     setState(() => _tasks = [
           for (final x in _tasks ?? const <TaskItem>[])
             if (x.id == t.id) x.copyWith(done: !x.done) else x,
         ]);
+    final userId = ref.read(authProvider).userId;
+    // Write the flip through, or reopening reads the cache and un-ticks it.
+    unawaited(DataCache.saveTasks(userId, _tasks ?? []));
     try {
       await _api.setTaskDone(t.id, !t.done);
-      // Write the flip through, or reopening reads the cache and un-ticks it.
-      unawaited(DataCache.saveTasks(ref.read(authProvider).userId, _tasks ?? []));
+    } on NotFoundException {
+      // The task is gone; there is nothing left to tick.
+    } on SessionExpiredException {
+      // Signing out already.
     } catch (_) {
-      if (!mounted) return;
-      setState(() => _tasks = prev);
-      dataSnack(context, "Couldn't update — try again.", error: true);
+      await Outbox.add(
+        userId,
+        OutboxOp(kind: OutboxKind.setTaskDone, id: t.id, done: !t.done),
+      );
     }
   }
 
   Future<void> _delete(TaskItem t) async {
-    final prev = _tasks;
     setState(() => _tasks = _tasks?.where((x) => x.id != t.id).toList());
+    final userId = ref.read(authProvider).userId;
+    unawaited(DataCache.saveTasks(userId, _tasks ?? []));
     try {
       await _api.deleteTask(t.id);
-      unawaited(DataCache.saveTasks(ref.read(authProvider).userId, _tasks ?? []));
+    } on NotFoundException {
+      // Already gone.
+    } on SessionExpiredException {
+      // Signing out already.
     } catch (_) {
+      await Outbox.add(userId, OutboxOp(kind: OutboxKind.deleteTask, id: t.id));
       if (!mounted) return;
-      setState(() => _tasks = prev);
-      dataSnack(context, "Couldn't delete — try again.", error: true);
+      dataSnack(context, "Deleted. Will sync when you're back online.");
     }
   }
 

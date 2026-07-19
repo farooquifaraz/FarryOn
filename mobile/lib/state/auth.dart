@@ -7,6 +7,7 @@ import '../core/config.dart';
 import '../core/config_store.dart';
 import '../core/data_cache.dart';
 import '../core/logger.dart';
+import '../core/outbox.dart';
 import '../data/auth_api.dart';
 import 'providers.dart';
 
@@ -307,6 +308,7 @@ class AuthNotifier extends Notifier<AuthState> {
     // the phone's storage isn't encrypted, and the server still has them — the
     // next sign-in pulls them back.
     await _persist(DataCache.clear, 'Clearing the cached notes and tasks');
+    await _persist(Outbox.clear, 'Clearing the queued changes');
     final cfg = ref.read(configProvider);
     if (cfg.authToken != null) {
       ref.read(configProvider.notifier).state = cfg.copyWith(clearToken: true);

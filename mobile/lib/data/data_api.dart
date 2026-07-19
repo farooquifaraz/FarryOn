@@ -66,6 +66,19 @@ class SessionExpiredException implements Exception {
   String toString() => 'SessionExpiredException';
 }
 
+/// The row isn't there — deleted on another device, or our own request landed
+/// and only the reply was lost.
+///
+/// Distinct from a network failure because the caller usually wants to treat it
+/// as *success*: a delete whose row is already gone got what it asked for. The
+/// backend answers 404 rather than 403 for someone else's row too (a 403 would
+/// confirm the row exists), so this deliberately does not mean "forbidden".
+class NotFoundException implements Exception {
+  const NotFoundException();
+  @override
+  String toString() => 'NotFoundException';
+}
+
 /// Thin REST client for the backend's Notes/Tasks endpoints. Points at the same
 /// backend the live session uses (via [AppConfig.httpBase]).
 class DataApi {
@@ -120,6 +133,16 @@ class DataApi {
     if (r.statusCode == 401) {
       onSessionExpired?.call();
       throw const SessionExpiredException();
+    }
+    // Only for writes: a 404 on a delete means the row is already gone, which
+    // the outbox treats as done rather than retrying forever. Reads never 404.
+    if (r.statusCode == 404) throw const NotFoundException();
+    // Anything else in the 4xx/5xx range is a failure the caller has to see. It
+    // used to fall through as success, so a write that the server rejected
+    // looked like it had worked — the screen kept the change and the outbox
+    // dropped the operation, and the two ends quietly disagreed forever.
+    if (r.statusCode >= 400) {
+      throw http.ClientException('HTTP ${r.statusCode}', r.request?.url);
     }
     return r;
   }

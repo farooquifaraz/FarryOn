@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/data_cache.dart';
+import '../../core/outbox.dart';
+import '../../core/outbox_sync.dart';
 import '../../core/theme.dart';
 import '../../core/ui.dart';
 import '../../data/data_api.dart';
@@ -62,6 +64,10 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
       _error = false;
     });
     try {
+      // The server is reachable, so anything queued offline can go now — and it
+      // must go BEFORE the fetch, or the reply would hand back the rows we
+      // just deleted and put them straight back on screen.
+      await OutboxSync.drain(_api, userId);
       final n = await _api.notes();
       if (!mounted) return;
       unawaited(DataCache.saveNotes(userId, n));
@@ -78,19 +84,28 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     }
   }
 
-  /// Optimistic delete: drop the row immediately, roll back + warn on failure.
+  /// Optimistic delete: the row goes now. Offline it stays gone and the
+  /// deletion is queued — see [Outbox].
   Future<void> _delete(NoteItem n) async {
-    final prev = _notes;
     setState(() => _notes = _notes?.where((x) => x.id != n.id).toList());
+    final userId = ref.read(authProvider).userId;
+    // Write the shorter list through either way, or the next open reads the
+    // cache and the note walks back in.
+    unawaited(DataCache.saveNotes(userId, _notes ?? []));
     try {
       await _api.deleteNote(n.id);
-      // Write the shorter list through, or the next open reads the cache and
-      // the note walks back in.
-      unawaited(DataCache.saveNotes(ref.read(authProvider).userId, _notes ?? []));
+    } on NotFoundException {
+      // Already gone — deleted on another device, or Farry removed it. The row
+      // is absent, which is what the tap asked for.
+    } on SessionExpiredException {
+      // DataApi is already signing out; the login screen is on its way.
     } catch (_) {
+      // Offline. Keep the deletion on screen and queue it: rolling back would
+      // put a note the user just threw away back in front of them, and it is
+      // the network that failed, not the request.
+      await Outbox.add(userId, OutboxOp(kind: OutboxKind.deleteNote, id: n.id));
       if (!mounted) return;
-      setState(() => _notes = prev);
-      dataSnack(context, "Couldn't delete the note — try again.", error: true);
+      dataSnack(context, "Deleted. Will sync when you're back online.");
     }
   }
 

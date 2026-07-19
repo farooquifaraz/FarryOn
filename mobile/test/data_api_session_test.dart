@@ -89,16 +89,18 @@ void main() {
       expect(signOuts, 0);
     });
 
-    test('a 404 from delete does NOT sign the user out', () async {
+    test('a 404 from delete throws NotFound, and does NOT sign out', () async {
       // 404 is what the backend answers for someone else's row — a scoping
-      // refusal, not an auth failure. See test_data_scoping.py.
+      // refusal, not an auth failure (see test_data_scoping.py). It's also what
+      // a row deleted on another device looks like, which is why it's its own
+      // exception: the outbox treats it as "already done" rather than retrying.
       var signOuts = 0;
       final api = apiThat(
         (_) => http.Response('{"deleted":false}', 404),
         onExpired: () => signOuts++,
       );
 
-      await api.deleteNote(99);
+      await expectLater(api.deleteNote(99), throwsA(isA<NotFoundException>()));
       expect(signOuts, 0);
     });
   });
