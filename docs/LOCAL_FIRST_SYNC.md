@@ -1,6 +1,6 @@
 # Notes & reminders: local-first, server-synced
 
-**Status: phases 1-4 built (2 and 4 device-verified). Phase 5 is mostly a test.**
+**Status: phases 1-4 built and device-verified (2, 3, 4 on the Vivo). Phase 5 is mostly a test.**
 Written 2026-07-16 after he asked for notes/reminders to be "managed locally,
 synced to the server, and downloaded again on a new phone".
 
@@ -169,7 +169,7 @@ Each is shippable on its own, and each is testable before the next.
 |---|---|---|
 | **1** | ~~Migration + soft delete~~ — **DONE 2026-07-16** | `0006_notes_tasks_sync`. Verified against seeded 0005-era rows (backfill `updated_at = created_at`, nothing lost) and a downgrade/re-upgrade round trip. `GET ?since=` is *not* built — phase 3 needs it, nothing does yet. |
 | **2** | ~~Local mirror; screens read from it~~ — **DONE 2026-07-16** | Shipped as JSON in SharedPreferences, not SQLite: the API caps these at 200 rows and `chat_history.dart` already stores this way. Swap the storage behind `DataCache`'s six functions when phase 3 wants real rows. Verified on the Vivo: killed the backend, force-stopped the app, reopened — both notes came back off disk. |
-| **3** | ~~Outbox: local writes queue and push~~ — **DONE 2026-07-19** | Much smaller than planned: the app can't *create* (voice-only, and Farry is server-side), so every queueable op acts on an existing server row and is idempotent. No `client_id` needed — the column still earns its place for a future editor. `core/outbox.dart` + `outbox_sync.dart`. |
+| **3** | ~~Outbox: local writes queue and push~~ — **DONE, device-verified 2026-07-19** | Much smaller than planned: the app can't *create* (voice-only, and Farry is server-side), so every queueable op acts on an existing server row and is idempotent. No `client_id` needed — the column still earns its place for a future editor. `core/outbox.dart` + `outbox_sync.dart`. Verified on the Vivo with the backend stopped: a deleted note stayed deleted (it used to spring back), the op sat in `outbox.v1.u15`, survived a force-stop, and reached the server on the next launch — `notes.deleted_at` set, `tasks.done=1`, queue empty. |
 | **4** | ~~WS `tool_result` → local cache~~ — **DONE, device-verified 2026-07-19** | `core/cache_patch.dart`. Covers create/delete note+task and complete_task; `update_task` is skipped because its result is partial. Verified on the Vivo: asked Farry to save a note, **killed the backend**, opened Notes — the new note was top of the list. It could only have come from the tool_result. |
 | **5** | New-device restore = full pull | Falls out of phase 1 + 2. Mostly a test. |
 
