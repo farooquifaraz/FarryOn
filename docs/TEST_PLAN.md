@@ -59,12 +59,12 @@ who you are.
 | A3 | Password sign-in | Lands on live screen, form gone | ☑ 2026-07-16 (Vivo) |
 | A4 | Wrong password | "Incorrect email or password", stays put, button re-enables | ☑ 2026-07-16 (Vivo) |
 | A5 | Sign out | Back to splash; Settings closes too | ☑ 2026-07-15 |
-| A6 | Kill the app and reopen | Restore splash → straight to live screen, no login | ☐ |
+| A6 | Kill the app and reopen | Restore splash → straight to live screen, no login | ☑ **2026-07-20** — force-stopped and reopened on the Vivo: went straight to the live screen (LIVE, still signed in as user 15), no login prompt. The stored keystore token restored the session and it auto-connected. |
 | A7 | **Airplane mode, then open the app** | Restore falls back to the cached token; live screen shows its offline state. Must **not** sign you out. | ☑ **2026-07-16 — pinned by tests** (`mobile/test/auth_restore_test.dart`, 6 cases, mutation-checked). Driven through AuthNotifier, not the radio: airplane mode also kills the phone's wireless ADB, so the screen goes with it. Covers offline, a *hung* backend (the 4s timeout — the nastier case), 401, rotation, and no-session. The restore path had **no test at all** before this. |
 | A8 | Sign in on the phone, then check the admin panel | The user is listed, with the right provider | ☑ 2026-07-16 (phone-made accounts all appear, none with a role) |
 | A9 | Google sign-in, cancel the account picker | No error banner — cancelling is not a failure | ☑ 2026-07-16 (Vivo) |
 | A10 | 2FA account: sign in | Code prompt, then live screen | ☐ |
-| A11 | Backend down, tap Sign In | Honest "can't reach" message, not a hang | ☐ |
+| A11 | Backend down, tap Sign In | Honest "can't reach" message, not a hang | ☑ **2026-07-20** — backend stopped, tapped Sign In on the Vivo: the button showed a spinner, then (at the ~20s timeout, not a hang) an honest error — "Timed out reaching the server — check the server address in settings." — and became tappable again. No crash, no infinite spinner. |
 | A13 | **Notes/Reminders with the backend dead** | Cached rows still show; no false "check the backend" | ☑ **2026-07-16 (Vivo)** — opened Notes online (2 notes), killed the backend, reopened: same 2 notes. Then force-stopped the app and reopened cold with the backend still dead: same 2 notes, read from disk. |
 | A14 | **Farry's own note appears without a refresh** | It's in the list next time you open Notes | ☑ **2026-07-19 (Vivo)** — said "yaad rakho…", killed the backend, opened Notes: "Phase4 test note" at the top of 3. With the server down it could only have come from the WS `tool_result`. |
 | A12 | Avatar tap | Opens Settings, showing your name + email | ☑ 2026-07-15 |
