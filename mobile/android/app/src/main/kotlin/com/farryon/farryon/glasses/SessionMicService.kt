@@ -1,11 +1,13 @@
 package com.farryon.farryon.glasses
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -30,6 +32,10 @@ class SessionMicService : Service() {
         private const val NOTIF_ID = 7802
 
         fun start(context: Context) {
+            // A microphone-type FGS is illegal without RECORD_AUDIO (Android 14+
+            // throws in startForeground). If the permission was revoked, don't
+            // start the service at all — the session runs in mic-denied mode.
+            if (!hasMicPermission(context)) return
             val intent = Intent(context, SessionMicService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -37,6 +43,10 @@ class SessionMicService : Service() {
                 context.startService(intent)
             }
         }
+
+        private fun hasMicPermission(context: Context): Boolean =
+            context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
 
         fun stop(context: Context) {
             context.stopService(Intent(context, SessionMicService::class.java))
@@ -65,6 +75,16 @@ class SessionMicService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // RECORD_AUDIO can be revoked while the service is sticky-restarting
+        // (user toggles it off mid-session); startForeground with the
+        // microphone type then throws SecurityException and crashes the app.
+        // Bail out instead — stopSelf() satisfies the startForegroundService
+        // contract, and NOT_STICKY stops the system from restarting us into
+        // the same crash.
+        if (!hasMicPermission(this)) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         val notification: Notification =
             (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 Notification.Builder(this, CHANNEL_ID)
@@ -79,13 +99,22 @@ class SessionMicService : Service() {
                 .build()
         // Android 10+ must declare the FGS type; microphone is the one that
         // keeps background mic capture legal.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIF_ID, notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
-            )
-        } else {
-            startForeground(NOTIF_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIF_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                )
+            } else {
+                startForeground(NOTIF_ID, notification)
+            }
+        } catch (e: Exception) {
+            // Permission state can change between the check above and here
+            // (or the OS can refuse the FGS for other policy reasons, e.g.
+            // ForegroundServiceStartNotAllowedException). A dead mic service
+            // must never take the whole app down.
+            stopSelf()
+            return START_NOT_STICKY
         }
         acquireWakeLock()
         return START_STICKY
