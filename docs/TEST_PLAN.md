@@ -86,8 +86,8 @@ server, and now on a real phone (B4).
 | B3 | WS session owner = token holder | Session row carries the real user | ☑ 2026-07-15 (device) |
 | B4 | **Sign in as A on the phone, save a note by voice, sign out, sign in as B** | B's Notes screen is **empty** | ☑ 2026-07-16 (Vivo) — "1 NOTE", only their own; the other user's note seeded at the same moment did not appear |
 | B5 | Same, then sign back in as A | A's note is back | ☐ |
-| B6 | A and B on **two different phones**, at once | Neither sees the other's notes; neither session steals the other's rows | ☐ |
-| B7 | Ask Farry "read my notes" as B | Farry reads only B's | ☐ |
+| B6 | A and B on **two different phones**, at once | Neither sees the other's notes; neither session steals the other's rows | ☑ **2026-07-22** — Vivo (user 15, password) + Samsung S23 (user 9, Google SSO) live at once: backend held two concurrent WS sessions (sub=15, sub=9). Vivo Notes showed exactly its 2; Samsung showed exactly its 1 (the note literally named "Vivo par NAHI dikhna chaiye" stayed off the Vivo). Neither session stole the other's rows. |
+| B7 | Ask Farry "read my notes" as B | Farry reads only B's | ☑ **2026-07-22** — typed "Read my notes" as user 9 on the Samsung while user 15's session was live: Farry answered "You have one note: 'Faraz (user 9) ka note…'" — only B's note, via the server-side list_notes path. |
 
 **B4–B7 are the real proof.** Everything so far tested the plumbing; these test
 the promise.
