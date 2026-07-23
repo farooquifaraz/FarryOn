@@ -12,6 +12,7 @@ import hmac
 import json
 
 from fastapi import APIRouter, Depends, Header, Request
+from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
@@ -31,6 +32,48 @@ router = APIRouter(prefix="/admin", tags=["billing"])
 webhook_router = APIRouter(prefix="/webhooks", tags=["billing"])
 # User-facing (not admin): the signed-in user starting their own subscription.
 me_router = APIRouter(prefix="/billing", tags=["billing"])
+
+
+_RETURN_PAGE = """<!doctype html>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {{ background:#0b1220; color:#e7ecf3; font-family:sans-serif;
+         display:flex; align-items:center; justify-content:center;
+         height:100vh; margin:0; text-align:center; }}
+  .card {{ padding:32px; }}
+  h1 {{ font-size:1.4rem; margin-bottom:8px; }}
+  p {{ color:#93a1b5; }}
+</style></head>
+<body><div class="card"><h1>{title}</h1><p>{body}</p></div></body></html>"""
+
+
+@me_router.get("/success", include_in_schema=False)
+async def checkout_success_page() -> "HTMLResponse":
+    """Where Stripe sends the browser after a successful payment.
+
+    Deliberately unauthenticated and stateless: the browser redirect carries no
+    bearer token, and nothing here writes anything — the WEBHOOK is the only
+    thing that activates the subscription. This page just tells a human what
+    happened and to go back to the app.
+    """
+    return HTMLResponse(
+        _RETURN_PAGE.format(
+            title="Payment complete \N{PARTY POPPER}",
+            body="Your plan is being activated — head back to the Farry app. "
+            "It may take a few seconds to show up.",
+        )
+    )
+
+
+@me_router.get("/cancel", include_in_schema=False)
+async def checkout_cancel_page() -> "HTMLResponse":
+    return HTMLResponse(
+        _RETURN_PAGE.format(
+            title="Checkout cancelled",
+            body="No charge was made. You can upgrade any time from "
+            "Settings → Subscription in the app.",
+        )
+    )
 
 
 @me_router.get("/me")

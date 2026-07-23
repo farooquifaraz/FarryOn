@@ -45,12 +45,22 @@ def verify_signature(payload: bytes, sig_header: str | None, secret: str) -> Non
     if not sig_header:
         raise SignatureError("Missing Stripe-Signature header.")
 
-    parts = dict(
-        p.split("=", 1) for p in sig_header.split(",") if "=" in p
-    )
-    timestamp = parts.get("t")
-    signature = parts.get("v1")
-    if not timestamp or not signature:
+    timestamp: str | None = None
+    signatures: list[str] = []
+    for part in sig_header.split(","):
+        if "=" not in part:
+            continue
+        key, value = part.strip().split("=", 1)
+        if key == "t":
+            timestamp = value
+        elif key == "v1":
+            # A list, not a single value: while an endpoint secret is being
+            # rolled, Stripe signs with BOTH secrets and sends two v1 entries.
+            # Keeping only the last (a dict would) rejects every webhook whose
+            # valid signature happened to come first — i.e. breaks billing for
+            # the whole duration of a secret rotation.
+            signatures.append(value)
+    if not timestamp or not signatures:
         raise SignatureError("Malformed Stripe-Signature header.")
 
     try:
@@ -62,7 +72,7 @@ def verify_signature(payload: bytes, sig_header: str | None, secret: str) -> Non
 
     signed = f"{timestamp}.".encode() + payload
     expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, signature):
+    if not any(hmac.compare_digest(expected, sig) for sig in signatures):
         raise SignatureError("Stripe signature mismatch.")
 
 

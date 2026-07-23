@@ -30,17 +30,23 @@ In `backend/.env` (create the lines if absent):
 
 ```
 STRIPE_SECRET_KEY=sk_test_YOURKEY
+STRIPE_WEBHOOK_SECRET=whsec_YOURSECRET
 STRIPE_PRICE_IDS={"plus":"price_YOURPLUS","pro":"price_YOURPRO"}
-STRIPE_SUCCESS_URL=https://farryon.app/billing/success?session_id={CHECKOUT_SESSION_ID}
-STRIPE_CANCEL_URL=https://farryon.app/billing/cancel
+STRIPE_SUCCESS_URL=http://192.168.1.107:8000/api/v1/billing/success
+STRIPE_CANCEL_URL=http://192.168.1.107:8000/api/v1/billing/cancel
 ```
+
+- The **Publishable key** (`pk_…`) is NOT used anywhere server-side — it's for
+  Stripe.js embedded elements, and we use Stripe's hosted checkout page
+  instead. Don't put it in `.env`; nothing reads it.
+- The success/cancel URLs point at two small pages the backend now serves
+  (`/api/v1/billing/success` and `/cancel`) — after paying, the phone's browser
+  lands on "Payment complete — head back to the app" instead of a dead page.
+  When the backend moves to a VPS, change the host here.
 
 - `STRIPE_PRICE_IDS` is JSON on one line — the keys (`plus`/`pro`) are OUR plan
   names, the values are Stripe's price ids. They must match the plan names in
   `app/db/seed.py` `PLAN_CATALOG`.
-- The success/cancel URLs are where Stripe returns the user. For now they can
-  point anywhere; when the mobile flow is wired we'll point them at the app's
-  deep links. `{CHECKOUT_SESSION_ID}` is filled in by Stripe.
 
 **Never commit these** — `.env` is gitignored. Give me the key and price ids by
 pasting them into `.env` yourself; I don't need to see the secret key.
@@ -55,9 +61,8 @@ POST /api/v1/billing/checkout   { "plan": "pro" }
 ```
 
 Open that URL, pay with `4242 4242 4242 4242` (any future expiry, any CVC). The
-payment succeeds in Stripe — but **the subscription won't flip active in our DB
-until Phase 3** (the webhook that hears "payment completed" and writes the row).
-That's the next piece.
+subscription flips active in our DB when the webhook (below) hears
+`checkout.session.completed` — so wire the webhook first, then pay.
 
 ## 5. Wire the webhook (Phase 3 — now built)
 

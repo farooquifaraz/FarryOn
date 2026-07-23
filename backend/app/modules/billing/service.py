@@ -168,6 +168,18 @@ async def create_checkout(db: AsyncSession, *, user: User, plan_name: str) -> di
             "Payments aren't set up yet.",
             status_code=503,
         )
+    # One paid subscription per user, full stop. A second checkout would create
+    # a second live subscription in Stripe and BOTH would charge every month —
+    # the customer pays twice and finds out on a bank statement. Plan changes go
+    # through cancel-then-subscribe (or a Stripe portal later), not stacking.
+    current = await active_plan_name(db, user.id)
+    if current != settings.default_plan:
+        raise AppError(
+            "ALREADY_SUBSCRIBED",
+            f"You're already on the {current} plan. To switch plans, cancel "
+            "the current one first.",
+            status_code=409,
+        )
     price_id = settings.stripe_price_ids.get(plan_name)
     if not price_id:
         raise AppError(

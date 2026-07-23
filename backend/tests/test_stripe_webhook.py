@@ -169,3 +169,26 @@ class TestMapping:
         # Stripe sends dozens of types we don't care about; each must be a no-op.
         assert stripe_webhook.to_events(_event("customer.created", {"id": "cus_1"})) == []
         assert stripe_webhook.to_events({"type": "ping"}) == []
+
+
+class TestSecretRolling:
+    def test_multiple_v1_signatures_accept_if_any_matches(self) -> None:
+        # While an endpoint secret is being rolled, Stripe signs with BOTH
+        # secrets and sends two v1 entries. A parser that keeps only the last
+        # one rejects every webhook whose valid signature came first — billing
+        # silently breaks for the whole rotation window.
+        body = b'{"ok":true}'
+        t = int(time.time())
+        good = hmac.new(SECRET.encode(), f"{t}.".encode() + body, hashlib.sha256).hexdigest()
+        header = f"t={t},v1={good},v1={'0' * 64}"
+        stripe_webhook.verify_signature(body, header, SECRET)  # no raise
+
+        header_reversed = f"t={t},v1={'0' * 64},v1={good}"
+        stripe_webhook.verify_signature(body, header_reversed, SECRET)  # no raise
+
+    def test_all_wrong_signatures_still_fail(self) -> None:
+        body = b"{}"
+        t = int(time.time())
+        header = f"t={t},v1={'0' * 64},v1={'f' * 64}"
+        with pytest.raises(SignatureError):
+            stripe_webhook.verify_signature(body, header, SECRET)

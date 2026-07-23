@@ -24,6 +24,7 @@ def _configure(monkeypatch, **over):
     from types import SimpleNamespace
 
     fields = {
+        "default_plan": "free",
         "stripe_secret_key": "sk_test_x",
         "stripe_price_ids": {"plus": "price_plus", "pro": "price_pro"},
         "stripe_success_url": "https://app/success?session_id={CHECKOUT_SESSION_ID}",
@@ -123,6 +124,46 @@ class TestRefusals:
         with pytest.raises(AppError) as ei:
             await service.create_checkout(db_session, user=user, plan_name="enterprise")
         assert ei.value.status_code == 400
+
+    async def test_an_already_subscribed_user_is_refused(self, db_session, monkeypatch) -> None:
+        # The double-billing guard. A second checkout would create a second
+        # live Stripe subscription and both would charge monthly — the customer
+        # pays twice and finds out on a bank statement.
+        from app.db.models import Plan, Subscription
+
+        _configure(monkeypatch)
+        user = await _user(db_session)
+        plan = Plan(name="plus", price_cents=999, currency="USD", interval="month")
+        db_session.add(plan)
+        await db_session.flush()
+        db_session.add(Subscription(user_id=user.id, plan_id=plan.id, status="active"))
+        await db_session.flush()
+
+        with pytest.raises(AppError) as ei:
+            await service.create_checkout(db_session, user=user, plan_name="pro")
+        assert ei.value.status_code == 409
+        assert "already" in str(ei.value.message).lower()
+
+    async def test_a_canceled_subscription_does_not_block_checkout(
+        self, db_session, monkeypatch
+    ) -> None:
+        # Lapsed is not subscribed: someone who cancelled must be able to
+        # re-subscribe, or the guard locks out returning customers.
+        from app.db.models import Plan, Subscription
+
+        _configure(monkeypatch)
+        user = await _user(db_session)
+        plan = Plan(name="plus", price_cents=999, currency="USD", interval="month")
+        db_session.add(plan)
+        await db_session.flush()
+        db_session.add(
+            Subscription(user_id=user.id, plan_id=plan.id, status="canceled")
+        )
+        await db_session.flush()
+        _fake_stripe(monkeypatch, {})
+
+        out = await service.create_checkout(db_session, user=user, plan_name="pro")
+        assert out["url"]
 
     async def test_a_stripe_error_becomes_502(self, db_session, monkeypatch) -> None:
         _configure(monkeypatch)
