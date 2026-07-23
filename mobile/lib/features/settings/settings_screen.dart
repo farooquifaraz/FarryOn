@@ -14,6 +14,7 @@ import '../data/conversations_screen.dart';
 import '../data/notes_screen.dart';
 import '../data/reminders_screen.dart';
 import '../debug/debug_logs_screen.dart';
+import 'subscription_screen.dart';
 
 /// The live, cloud-hosted FarryOn backend (Render). Mirrors the constants the
 /// old settings sheet used so the Cloud/Local presets behave identically.
@@ -186,6 +187,13 @@ class SettingsScreen extends ConsumerWidget {
                   : (auth.email.isNotEmpty ? auth.email : 'Signed in'),
               subtitle: auth.email,
               trailing: const SizedBox.shrink(),
+            ),
+            SettingsRow(
+              icon: Icons.workspace_premium_rounded,
+              gradient: Aurora.gradAmber,
+              title: 'Subscription',
+              subtitle: 'Your plan & today\'s usage',
+              onTap: () => SubscriptionScreen.open(context),
             ),
             SettingsRow(
               icon: Icons.logout_rounded,

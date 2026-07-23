@@ -52,6 +52,68 @@ class TaskItem {
       );
 }
 
+/// One metered resource on the user's plan: how much of today's allowance is
+/// gone. [cap] -1 means unlimited, 0 means the plan doesn't include it.
+class UsageMeter {
+  const UsageMeter({required this.used, required this.cap});
+  final int used;
+  final int cap;
+
+  bool get unlimited => cap == -1;
+
+  factory UsageMeter.fromJson(Map<String, dynamic> j) => UsageMeter(
+        used: (j['used'] as num?)?.toInt() ?? 0,
+        cap: (j['cap'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// A plan the user could move to, with its real price for the button label.
+class PlanOffer {
+  const PlanOffer({required this.name, required this.priceCents});
+  final String name;
+  final int priceCents;
+
+  factory PlanOffer.fromJson(Map<String, dynamic> j) => PlanOffer(
+        name: j['name'] as String? ?? '',
+        priceCents: (j['price_cents'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// `GET /api/v1/billing/me` — everything the Subscription screen shows.
+class SubscriptionOverview {
+  const SubscriptionOverview({
+    required this.plan,
+    required this.priceCents,
+    required this.usage,
+    required this.upgrades,
+    required this.checkoutAvailable,
+  });
+
+  final String plan;
+  final int priceCents;
+  final Map<String, UsageMeter> usage;
+  final List<PlanOffer> upgrades;
+
+  /// Whether tapping Upgrade can actually start a checkout (Stripe configured
+  /// server-side). False renders the buttons with an honest "coming soon".
+  final bool checkoutAvailable;
+
+  factory SubscriptionOverview.fromJson(Map<String, dynamic> j) =>
+      SubscriptionOverview(
+        plan: j['plan'] as String? ?? 'free',
+        priceCents: (j['price_cents'] as num?)?.toInt() ?? 0,
+        usage: {
+          for (final e in (j['usage'] as Map<String, dynamic>? ?? {}).entries)
+            e.key: UsageMeter.fromJson(e.value as Map<String, dynamic>),
+        },
+        upgrades: [
+          for (final p in (j['upgrades'] as List<dynamic>? ?? []))
+            PlanOffer.fromJson(p as Map<String, dynamic>),
+        ],
+        checkoutAvailable: j['checkout_available'] as bool? ?? false,
+      );
+}
+
 /// The server says this session is over: the token expired, was revoked, or the
 /// account was suspended or deleted.
 ///
@@ -194,6 +256,18 @@ class DataApi {
           .delete(_uri('/tasks/$id'), headers: _headers)
           .timeout(_timeout),
     );
+  }
+
+  /// My plan, today's usage against its caps, and what I could upgrade to.
+  Future<SubscriptionOverview> subscription() async {
+    final r = _check(
+      await _client
+          .get(_uri('/api/v1/billing/me'), headers: _headers)
+          .timeout(_timeout),
+    );
+    final body = jsonDecode(r.body) as Map<String, dynamic>;
+    return SubscriptionOverview.fromJson(
+        (body['data'] as Map<String, dynamic>?) ?? const {});
   }
 
   /// Start a Stripe Checkout for [plan] and return the hosted URL to open.

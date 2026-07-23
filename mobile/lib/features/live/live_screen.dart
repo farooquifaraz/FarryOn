@@ -779,6 +779,7 @@ class _MicButton extends StatelessWidget {
 /// to start a new live session (voice can't restart it — the mic is off).
 class ReconnectOverlay extends StatelessWidget {
   const ReconnectOverlay({
+    super.key,
     required this.onReconnect,
     this.capReached = false,
     this.onUpgrade,

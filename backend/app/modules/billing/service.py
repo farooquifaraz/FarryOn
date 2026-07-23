@@ -82,6 +82,65 @@ async def active_plan_name(db: AsyncSession, user_id: int | None) -> str:
     return row or default
 
 
+# ---- The signed-in user's own view ----------------------------------------
+
+
+async def subscription_overview(db: AsyncSession, *, user: User) -> dict:
+    """What the app's Subscription screen shows: my plan, today's usage, and
+    what I could upgrade to.
+
+    One call rather than three because the screen paints from it directly —
+    plan identity, each metered resource as ``{used, cap}`` (cap ``-1`` =
+    unlimited, ``0`` = not included), and the sellable catalog so the upgrade
+    buttons can show real prices. ``checkout_available`` tells the app whether
+    tapping Upgrade can work at all (Stripe keys configured) — a button that
+    silently can't work is worse than one that says so.
+    """
+    from datetime import datetime, timezone
+
+    from app.config import get_settings
+    from app.tools.quota import user_key_for
+
+    settings = get_settings()
+    plan_name = await active_plan_name(db, user.id)
+    plan_row = (
+        await db.execute(select(Plan).where(Plan.name == plan_name))
+    ).scalar_one_or_none()
+
+    from app.db import repo
+
+    usage_row = await repo.get_daily_usage(
+        db,
+        user_key=user_key_for(user.id, None),
+        day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    )
+    caps = settings.plan_limits.get(plan_name, {})
+    usage = {
+        metric: {
+            "used": int(getattr(usage_row, metric, 0) or 0) if usage_row else 0,
+            "cap": cap,
+        }
+        for metric, cap in caps.items()
+    }
+
+    sellable = [
+        p
+        for p in await list_plans(db)
+        if p["is_active"] and p["name"] != plan_name
+    ]
+    return {
+        "plan": plan_name,
+        "price_cents": plan_row.price_cents if plan_row else 0,
+        "currency": plan_row.currency if plan_row else "USD",
+        "interval": plan_row.interval if plan_row else "month",
+        "usage": usage,
+        "upgrades": sellable,
+        "checkout_available": bool(
+            settings.stripe_secret_key and settings.stripe_price_ids
+        ),
+    }
+
+
 # ---- Checkout ------------------------------------------------------------
 
 

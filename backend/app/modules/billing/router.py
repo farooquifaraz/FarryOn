@@ -33,6 +33,16 @@ webhook_router = APIRouter(prefix="/webhooks", tags=["billing"])
 me_router = APIRouter(prefix="/billing", tags=["billing"])
 
 
+@me_router.get("/me")
+async def subscription_overview_endpoint(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """The caller's plan, today's usage against its caps, and what they could
+    upgrade to. Backs the app's Settings → Subscription screen."""
+    return ok(await service.subscription_overview(db, user=user))
+
+
 @me_router.post("/checkout")
 async def create_checkout_endpoint(
     body: CheckoutRequest,
