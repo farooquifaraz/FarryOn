@@ -787,9 +787,11 @@ class Session:
                 )
                 plan = self._plan_name or get_settings().default_plan
                 upsell = "" if plan == "pro" else " Upgrade for more."
+                # A sub-minute cap (tests, demos) must not read "0 minutes".
+                budget = f"{cap // 60} minutes" if cap >= 60 else f"{cap} seconds"
                 await self._send_error(
                     "quota_exceeded",
-                    f"You've used today's {cap // 60} minutes of voice on the "
+                    f"You've used today's {budget} of voice on the "
                     f"{plan} plan.{upsell}",
                     fatal=True,
                 )
