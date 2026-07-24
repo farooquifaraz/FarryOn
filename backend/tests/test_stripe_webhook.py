@@ -192,3 +192,34 @@ class TestSecretRolling:
         header = f"t={t},v1={'0' * 64},v1={'f' * 64}"
         with pytest.raises(SignatureError):
             stripe_webhook.verify_signature(body, header, SECRET)
+
+
+class TestNewInvoiceShape:
+    def test_2025_api_nests_metadata_under_parent(self) -> None:
+        # The shape a REAL test payment produced on API 2025-12-15.clover: the
+        # subscription's metadata moved to invoice.parent.subscription_details.
+        # The first live payment activated the subscription but recorded no
+        # payment row because we only knew the two older shapes.
+        events = stripe_webhook.to_events(
+            _event(
+                "invoice.payment_succeeded",
+                {
+                    "id": "in_new",
+                    "amount_paid": 999,
+                    "currency": "usd",
+                    "parent": {
+                        "type": "subscription_details",
+                        "subscription_details": {
+                            "metadata": {"user_id": "9", "plan": "plus"},
+                            "subscription": "sub_new",
+                        },
+                    },
+                },
+            )
+        )
+        assert len(events) == 1
+        e = events[0]
+        assert e.user_id == 9
+        assert e.amount_cents == 999
+        assert e.provider_subscription_id == "sub_new"
+        assert e.provider_payment_id == "in_new"

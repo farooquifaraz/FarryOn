@@ -150,20 +150,32 @@ def to_events(event: dict[str, Any]) -> list[WebhookEvent]:
         ]
 
     if kind in ("invoice.payment_succeeded", "invoice.payment_failed"):
-        meta = obj.get("subscription_details", {}).get("metadata") or obj.get("metadata") or {}
+        # Where the subscription's metadata lives has MOVED across Stripe API
+        # versions: 2025+ nests it under invoice.parent.subscription_details,
+        # older versions had subscription_details at the top level, and the
+        # oldest just the invoice's own metadata. Check newest-first — caught
+        # live on the first real test payment (API 2025-12-15.clover): the
+        # subscription activated but the payment was "invoice_without_user"
+        # because we only knew the two older shapes.
+        parent_details = (obj.get("parent") or {}).get("subscription_details") or {}
+        meta = (
+            parent_details.get("metadata")
+            or obj.get("subscription_details", {}).get("metadata")
+            or obj.get("metadata")
+            or {}
+        )
         uid = _user_id(meta)
         if uid is None:
             logger.warning("stripe.invoice_without_user", invoice=obj.get("id"))
             return []
+        sub_id = parent_details.get("subscription") or obj.get("subscription")
         succeeded = kind == "invoice.payment_succeeded"
         amount = obj.get("amount_paid") if succeeded else obj.get("amount_due")
         return [
             WebhookEvent(
                 event_type="payment.succeeded" if succeeded else "payment.failed",
                 user_id=uid,
-                provider_subscription_id=str(obj.get("subscription"))
-                if obj.get("subscription")
-                else None,
+                provider_subscription_id=str(sub_id) if sub_id else None,
                 provider_payment_id=str(obj.get("id")) if obj.get("id") else None,
                 amount_cents=int(amount) if amount is not None else 0,
                 currency=(obj.get("currency") or "usd").upper(),
