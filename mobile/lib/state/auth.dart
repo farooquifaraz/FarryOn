@@ -279,11 +279,19 @@ class AuthNotifier extends Notifier<AuthState> {
 
   /// Sign out: best-effort server revoke, then always clear locally.
   Future<void> signOut() async {
+    // Signing out is a LOCAL act, and it has to FEEL like one: the person
+    // tapped "Sign out" and the screen must change now. This used to await the
+    // backend logout (a network round-trip) and then a disconnect with a 2 s
+    // timeout guard BEFORE touching any local state — the button sat there for
+    // seconds, longer if the backend was slow. Now the tokens drop and the UI
+    // flips first; the server-side revocation is fired after, best-effort
+    // (logout() already swallows its own failures). The refresh token is
+    // captured before _clearLocal wipes it.
     final session = ConfigStore.authSession();
-    if (session != null) {
-      await ref.read(authApiProvider).logout(session.refresh);
-    }
     await _clearLocal();
+    if (session != null) {
+      unawaited(ref.read(authApiProvider).logout(session.refresh));
+    }
   }
 
   Future<void> _clearLocal() async {
@@ -292,16 +300,17 @@ class AuthNotifier extends Notifier<AuthState> {
     // live session in the keystore that signs them in again next launch.
     _sessionEpoch++;
 
-    // Stop the live session before dropping the token. It outlives the home
-    // screen (LiveController is a plain Provider), so a revoked-session
-    // sign-out would otherwise leave the mic and a tokenless reconnect loop
-    // running behind the login screen. Timeout-guarded for the same reason as
-    // the Settings sign-out: a session stuck in connect-retry never resolves
-    // disconnect().
-    await ref
+    // Stop the live session — it outlives the home screen (LiveController is a
+    // plain Provider), so sign-out would otherwise leave the mic and a
+    // tokenless reconnect loop running behind the login screen. NOT awaited:
+    // the teardown (gateway close, mic release) takes real time and can hang in
+    // connect-retry, and none of it needs to hold up the screen change — the
+    // session it's tearing down belongs to nobody now. The timeout guard keeps
+    // the background cleanup itself from running forever.
+    unawaited(ref
         .read(liveProvider.notifier)
         .disconnect()
-        .timeout(const Duration(seconds: 2), onTimeout: () {});
+        .timeout(const Duration(seconds: 2), onTimeout: () {}));
 
     await _persist(ConfigStore.clearAuthSession, 'Clearing the stored session');
     // Drop the cached notes/tasks with the session. They're the leaving user's,
