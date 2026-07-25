@@ -70,3 +70,40 @@ async def test_no_db_session_allows_rather_than_crashes(monkeypatch) -> None:
     ctx = ToolContext(session=None, session_id="no-db")
     for _ in range(5):
         assert await quota.check_quota(ctx, "web_searches") is None
+
+
+async def test_a_plan_config_does_not_know_is_not_unlimited(monkeypatch) -> None:
+    # The hole this closes: `premium` was retired from plan_limits but stayed in
+    # the plans table, so anyone still subscribed to it resolved to a cap of -1
+    # — unlimited voice, unlimited scans, unbounded bill. An unknown plan must
+    # fall back to the default tier's caps, never to "no limit".
+    settings = SimpleNamespace(
+        quota_enforcement_enabled=True,
+        default_plan="free",
+        plan_limits={"free": {"voice_seconds": 180, "image_scans": 2}},
+    )
+    monkeypatch.setattr(quota, "get_settings", lambda: settings)
+
+    assert quota.plan_cap("voice_seconds", "premium") == 180
+    assert quota.plan_cap("image_scans", "some-operator-plan") == 2
+    # A known plan is untouched.
+    assert quota.plan_cap("voice_seconds", "free") == 180
+
+
+async def test_an_unknown_plan_still_blocks_at_the_default_cap(
+    db_session, monkeypatch
+) -> None:
+    settings = SimpleNamespace(
+        quota_enforcement_enabled=True,
+        default_plan="free",
+        plan_limits={"free": {"image_scans": 1}},
+    )
+    monkeypatch.setattr(quota, "get_settings", lambda: settings)
+
+    ctx = ToolContext(session=db_session, session_id="s-unknown")
+    ctx.resolved_plan = "premium"  # retired plan, no caps in config
+
+    assert await quota.check_quota(ctx, "image_scans") is None  # 1/1
+    blocked = await quota.check_quota(ctx, "image_scans")
+    assert blocked is not None, "an unknown plan must not mean unlimited"
+    assert blocked["status"] == "quota_exceeded"

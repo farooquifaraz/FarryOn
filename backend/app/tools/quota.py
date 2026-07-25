@@ -40,9 +40,20 @@ def plan_cap(metric: str, plan: str | None = None) -> int:
     ``plan=None`` falls back to the global default for callers that have no user.
     """
     settings = get_settings()
-    return settings.plan_limits.get(
-        plan or settings.default_plan, {}
-    ).get(metric, -1)
+    limits = settings.plan_limits
+    name = plan or settings.default_plan
+    # A plan the DB knows but config doesn't must NOT mean "unlimited". That is
+    # what happened with the retired `premium` seed plan: plan_limits has no
+    # entry, the lookup fell through to -1, and anyone still on it got unlimited
+    # everything — a cost hole that opens exactly when a plan is retired or an
+    # operator adds one through the admin panel. Fall back to the default tier's
+    # caps instead: the wrong-but-safe answer, and visible in the logs.
+    if name not in limits:
+        logger.warning(
+            "quota.unknown_plan", plan=name, falling_back_to=settings.default_plan
+        )
+        name = settings.default_plan
+    return limits.get(name, {}).get(metric, -1)
 
 
 async def _plan_for(ctx: ToolContext) -> str:
@@ -99,7 +110,7 @@ async def check_quota(
         # production a metered tool always has a session; this is the edge.
         return None
     plan = await _plan_for(ctx)
-    cap = settings.plan_limits.get(plan, {}).get(metric, -1)
+    cap = plan_cap(metric, plan)
     if cap < 0:  # unlimited on this plan — still record for visibility
         if ctx.session is not None:
             await repo.bump_daily_usage(
