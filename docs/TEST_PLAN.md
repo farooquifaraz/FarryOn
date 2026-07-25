@@ -49,6 +49,13 @@ Legend: ☐ not done · ☑ done+verified (date) · ⚠ blocked · ✗ dropped
 
 ### A. Auth on the device
 
+> **Sign-out speed, measured on the S23 (2026-07-25).** Same phone, same steps,
+> backend deliberately stopped (the case that actually hurt): the pre-fix build
+> left the screen frozen for **~20 s** — the 20 s HTTP timeout on the logout
+> call — while the fixed build reached the welcome screen in **~2.4 s**. On a
+> healthy LAN both are ~1.7 s, which is why this only showed up in real use.
+
+
 The auth code is the newest and the most load-bearing: everything else hangs off
 who you are.
 
