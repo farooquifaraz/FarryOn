@@ -187,6 +187,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         (app.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)
             ?.adapter?.isEnabled == true
 
+    /** Last successfully-connected device MAC, persisted at connect time
+     *  (survives process death — unlike [pendingMac]). Mirrors HeyCyan's
+     *  UserConfig.deviceAddress used for auto-reconnect. */
+    private fun savedMac(): String? =
+        app.getSharedPreferences("glasses_lab", Context.MODE_PRIVATE)
+            .getString("last_mac", null)
+            ?.takeIf { it.isNotEmpty() }
+
     /**
      * Glasses already paired in Android's Bluetooth settings (classic-BT, for
      * audio). Verified 2026-07-10: a unit the user pairs there holds an A2DP
@@ -334,8 +342,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     } catch (e: Exception) {
                         Log.i(TAG, "setBluetoothTurnOff(true): $e")
                     }
-                    val mac = pendingMac
+                    // Cold start: pendingMac is null after a process restart,
+                    // but the last device survives in SharedPreferences — use
+                    // it so a BT toggle reconnects even after an app restart.
+                    val mac = pendingMac ?: savedMac()
                     if (autoReconnectEnabled && !userDisconnected && mac != null) {
+                        // Seed the in-memory target (watchdog/events need it);
+                        // guarded by !userDisconnected above.
+                        pendingMac = mac
                         // NOT immediately: the BLE stack is still booting and
                         // the glasses' A2DP reattach contends with the LE
                         // radio — an instant connectDirectly wedges (see
@@ -355,6 +369,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                                 return@postDelayed
                             }
                             connectAttempt = 1
+                            try {
+                                BleOperateManager.getInstance().setReConnectMac(mac)
+                            } catch (e: Throwable) {
+                                Log.i(TAG, "setReConnectMac(bt-on): $e")
+                            }
                             BleOperateManager.getInstance().connectDirectly(mac)
                             armConnectWatchdog()
                         }, BT_ON_RECONNECT_DELAY_MS)
@@ -688,6 +707,15 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         lastConnectionState = null
         userDisconnected = false
         pendingMac = mac
+        // HeyCyan parity: hand the vendor SDK its auto-reconnect target. Without
+        // this, setNeedConnect(true) alone has no MAC to reattach to after a
+        // cold start (the official app sets it on every connect).
+        try {
+            BleOperateManager.getInstance().setReConnectMac(mac)
+            Log.i(TAG, "setReConnectMac → $mac")
+        } catch (e: Throwable) {
+            Log.i(TAG, "setReConnectMac: $e") // method absent/changed → app still works
+        }
         connectAttempt = 1
         // Clean slate (unbind → pause → connect): recovers a wedged pending
         // attempt, and also covers the silent-reconnect case where the SDK
@@ -705,6 +733,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         // teardown.
         userDisconnected = true
         BleOperateManager.getInstance().setNeedConnect(false)
+        // Empty target = the vendor SDK's own background reconnect stands down
+        // (HeyCyan skips reconnect when the address is empty) — a user's
+        // Disconnect/Unpair must stay disconnected.
+        try {
+            BleOperateManager.getInstance().setReConnectMac("")
+        } catch (e: Throwable) {
+            Log.i(TAG, "clear setReConnectMac: $e")
+        }
         BleOperateManager.getInstance().unBindDevice()
         pendingMac = null
     }
