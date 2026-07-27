@@ -1883,6 +1883,27 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         // the WiFi P2P path AND the live glasses-mic PCM stream.
         GlassesControl.getInstance(app)?.initGlasses(albumDir.absolutePath)
         GlassesControl.getInstance(app)?.setWifiDownloadListener(wifiListener)
+        // HeyCyan-style: if we have a remembered device and auto-reconnect is on,
+        // start connecting on boot (no scan, no user tap). Delayed so the BLE
+        // stack and receivers are fully up first.
+        val boot = savedMac()
+        if (autoReconnectEnabled && boot != null) {
+            main.postDelayed({
+                if (!userDisconnected && lastConnectionState != "connected" &&
+                    !isConnecting && bluetoothEnabled()
+                ) {
+                    Log.i(TAG, "boot auto-connect → $boot")
+                    pendingMac = boot
+                    connectAttempt = 1
+                    try {
+                        BleOperateManager.getInstance().setReConnectMac(boot)
+                    } catch (e: Throwable) {
+                        Log.i(TAG, "setReConnectMac(boot): $e")
+                    }
+                    cleanSlateConnect(boot)
+                }
+            }, BT_ON_RECONNECT_DELAY_MS)
+        }
     }
 
     override fun dispose() {

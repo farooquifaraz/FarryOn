@@ -112,6 +112,50 @@ class SettingsScreen extends ConsumerWidget {
           const SectionLabel('Devices'),
           SettingsGroup(children: [
             SettingsRow(
+              icon: Icons.visibility_rounded,
+              gradient: Aurora.gradTeal,
+              title: 'Glasses',
+              subtitle: glassesConnected
+                  ? (live.glassesBattery != null
+                      ? 'Connected · ${live.glassesBattery}% battery'
+                      : 'Connected')
+                  : 'Disconnected · tap to connect',
+              subtitleColor: glassesConnected ? Aurora.mint : null,
+              onTap: () async {
+                final notifier = ref.read(liveProvider.notifier);
+                if (glassesConnected) {
+                  final sure = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Disconnect glasses?'),
+                      content: const Text(
+                          'They will stay disconnected until you connect again.'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Disconnect'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (sure == true) await notifier.disconnectGlasses();
+                } else {
+                  await notifier.connectGlasses();
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                          content: Text(
+                              'Connecting to glasses… (scans if the saved pair is off)')),
+                    );
+                  }
+                }
+              },
+            ),
+            SettingsRow(
               icon: Icons.devices_other_rounded,
               gradient: Aurora.gradBlue,
               title: 'Capture devices',

@@ -283,6 +283,42 @@ class LiveController {
     await bridge.connect(mac);
   }
 
+  /// Settings "Glasses" card: user-initiated, so prefer TRUTH over speed —
+  /// cancel any wedged/stale attempt, scan, and connect whichever glasses is
+  /// actually present now (classic-BT-connected unit wins). This is what makes
+  /// the card recover from a stale saved MAC (two-glasses case): the saved-MAC
+  /// fast path would retry the dead unit for ~60 s and the native serialization
+  /// guard blocks the scan fallback the whole time.
+  Future<void> connectGlasses() async {
+    final bridge = _glassesBridge;
+    if (bridge == null) return;
+    if (_state.glassesConnected || _connectingGlasses) return;
+    _connectingGlasses = true;
+    try {
+      // Clean slate: aborts an in-flight attempt to a dead unit so the scan
+      // below isn't skipped by the native connect-serialization guard. The
+      // connect() that follows clears the user-disconnected latch.
+      await bridge.disconnect();
+      await _scanAndConnectBest(bridge, null);
+    } catch (e) {
+      _log.warn('connectGlasses (card) failed: $e');
+    } finally {
+      Future<void>.delayed(const Duration(seconds: 24), () {
+        _connectingGlasses = false;
+      });
+    }
+  }
+
+  /// Settings "Glasses" card: user-initiated disconnect — the bridge marks it
+  /// user-intended, so no auto-reconnect fights it.
+  Future<void> disconnectGlasses() async {
+    try {
+      await _glassesBridge?.disconnect();
+    } catch (e) {
+      _log.warn('disconnect_glasses failed: $e');
+    }
+  }
+
   bool _connectingGlasses = false;
 
   /// Tracks the last glasses connection state so the camera auto-switches only
