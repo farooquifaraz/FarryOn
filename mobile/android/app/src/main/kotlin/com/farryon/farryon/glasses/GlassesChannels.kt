@@ -2,6 +2,7 @@ package com.farryon.farryon.glasses
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -57,8 +58,10 @@ class GlassesChannels private constructor(
                     return HeyCyanGlassesSdk(app)
                 } catch (e: ClassNotFoundException) {
                     // No vendor .aar in this build — stub mode.
+                    Log.w("GlassesFactory", "vendor SDK class absent — stub mode", e)
                 } catch (e: Throwable) {
                     // Vendor SDK present but failed to boot — stub mode.
+                    Log.w("GlassesFactory", "vendor SDK boot failed — stub mode", e)
                 }
             }
             return StubGlassesSdk()
