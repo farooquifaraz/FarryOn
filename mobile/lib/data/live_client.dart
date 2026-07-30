@@ -223,6 +223,7 @@ class WebSocketLiveClient {
       resumeId: _resumeId,
       provider: _config.provider,
       clientTime: _localTimeIso(),
+      languages: [_config.primaryLanguage, _config.secondaryLanguage],
       // Only send web-search config when the user supplied a primary key,
       // otherwise let the backend use its own env settings.
       webSearch: (wsKey != null && wsKey.isNotEmpty)

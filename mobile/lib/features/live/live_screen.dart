@@ -16,6 +16,7 @@ import '../../state/providers.dart';
 import '../data/your_stuff_screen.dart';
 import '../finder/finder_result_view.dart';
 import '../finder/finder_screen.dart';
+import '../glasses/glasses_connect_flow.dart';
 import '../glasses_lab/glasses_lab_screen.dart';
 import '../settings/settings_screen.dart';
 import 'widgets/aurora_orb.dart';
@@ -301,11 +302,16 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                     _MicChip(state: state),
                     const SizedBox(width: 8),
                     _CamChip(state: state),
-                    if (state.audioKind == 'glasses' || state.glassesConnected)
-                      ...[
-                      const SizedBox(width: 8),
-                      _GlassesPill(state: state),
-                    ],
+                    const SizedBox(width: 8),
+                    // HeyCyan-style: the glasses card is ALWAYS on the
+                    // dashboard — an honest Disconnected when they're off,
+                    // and tapping it connects (with a chooser when several
+                    // pairs are found) / disconnects.
+                    _GlassesPill(
+                      state: state,
+                      onConnect: () => runGlassesConnectFlow(context, ref),
+                      onDisconnect: notifier.disconnectGlasses,
+                    ),
                   ],
                 ),
               ),
@@ -484,54 +490,152 @@ class _CamChip extends StatelessWidget {
   }
 }
 
-/// Compact glasses status pill — sits side-by-side with the mic chip. Shows
-/// ONLY a bluetooth-connection icon and the battery %, no prose (the user
-/// asked for a clean, professional indicator, not a sentence).
-class _GlassesPill extends StatelessWidget {
-  const _GlassesPill({required this.state});
+/// HeyCyan-style glasses connection card — always on the dashboard, next to
+/// the mic chip. Connected: bluetooth icon + battery %. Disconnected: an
+/// honest grey "Glasses off" that connects on tap (scan picks whichever unit
+/// is actually powered). While a tap-initiated connect runs it shows an amber
+/// "Connecting…"; the flag clears the moment the bridge reports connected, or
+/// after the connect window if nothing was found.
+class _GlassesPill extends StatefulWidget {
+  const _GlassesPill({
+    required this.state,
+    required this.onConnect,
+    required this.onDisconnect,
+  });
 
   final LiveSessionState state;
+  final Future<void> Function() onConnect;
+  final Future<void> Function() onDisconnect;
+
+  @override
+  State<_GlassesPill> createState() => _GlassesPillState();
+}
+
+class _GlassesPillState extends State<_GlassesPill> {
+  bool _connecting = false;
+  Timer? _connectingTimeout;
+
+  /// "L802_2B1D" → "L802", "L 801_DD8A" → "L801" — the pill is tight on
+  /// space, the full name lives on the Settings card.
+  String? _shortName(String? name) {
+    if (name == null || name.isEmpty) return null;
+    final head = name.split('_').first.replaceAll(' ', '');
+    return head.isEmpty ? name : head;
+  }
+
+  @override
+  void didUpdateWidget(_GlassesPill old) {
+    super.didUpdateWidget(old);
+    if (widget.state.glassesConnected && _connecting) {
+      _connectingTimeout?.cancel();
+      _connecting = false; // build is imminent; no setState mid-update
+    }
+  }
+
+  @override
+  void dispose() {
+    _connectingTimeout?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _tap() async {
+    if (widget.state.glassesConnected) {
+      final sure = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Disconnect glasses?'),
+          content:
+              const Text('They will stay disconnected until you connect again.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Disconnect'),
+            ),
+          ],
+        ),
+      );
+      if (sure == true) await widget.onDisconnect();
+      return;
+    }
+    if (_connecting) return;
+    setState(() => _connecting = true);
+    // Scan (6s) + connect + watchdog can take ~25s worst case; if nothing
+    // connected by then, fall back to the honest Disconnected state.
+    _connectingTimeout?.cancel();
+    _connectingTimeout = Timer(const Duration(seconds: 25), () {
+      if (mounted && !widget.state.glassesConnected) {
+        setState(() => _connecting = false);
+      }
+    });
+    await widget.onConnect();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final connected = state.glassesConnected;
-    final battery = state.glassesBattery;
+    final connected = widget.state.glassesConnected;
+    final battery = widget.state.glassesBattery;
     final low = battery != null && battery <= 20;
-    // Amber while connecting, red on low battery, teal when healthy.
-    final color = !connected
-        ? Aurora.amber
-        : low
-            ? Aurora.danger
-            : Aurora.teal;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.5)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            connected
-                ? Icons.bluetooth_connected
-                : Icons.bluetooth_searching,
-            size: 14,
-            color: color,
-          ),
-          if (connected && battery != null) ...[
-            const SizedBox(width: 6),
-            Icon(low ? Icons.battery_alert : Icons.battery_full,
-                size: 13, color: color),
-            const SizedBox(width: 2),
-            Text('$battery%',
-                style: TextStyle(
-                    color: color,
-                    fontSize: 12,
-                    fontWeight: low ? FontWeight.w700 : FontWeight.w600)),
+    final connecting = !connected && _connecting;
+    final color = connected
+        ? (low ? Aurora.danger : Aurora.teal)
+        : connecting
+            ? Aurora.amber
+            : Aurora.textMuted;
+    return GestureDetector(
+      onTap: _tap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              connected
+                  ? Icons.bluetooth_connected
+                  : connecting
+                      ? Icons.bluetooth_searching
+                      : Icons.bluetooth_disabled,
+              size: 14,
+              color: color,
+            ),
+            if (connected) ...[
+              if (_shortName(widget.state.glassesName) != null) ...[
+                const SizedBox(width: 6),
+                Text(_shortName(widget.state.glassesName)!,
+                    style: TextStyle(
+                        color: color,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600)),
+              ],
+              if (battery != null) ...[
+                const SizedBox(width: 6),
+                Icon(low ? Icons.battery_alert : Icons.battery_full,
+                    size: 13, color: color),
+                const SizedBox(width: 2),
+                Text('$battery%',
+                    style: TextStyle(
+                        color: color,
+                        fontSize: 12,
+                        fontWeight: low ? FontWeight.w700 : FontWeight.w600)),
+              ],
+            ] else ...[
+              const SizedBox(width: 6),
+              Text(connecting ? 'Connecting…' : 'Disconnected',
+                  style: TextStyle(
+                      color: color,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

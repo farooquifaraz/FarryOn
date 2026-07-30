@@ -294,13 +294,22 @@ spoken language. If a tool fails, apologize briefly and suggest an alternative.
 """
 
 
-def build_system_prompt(client_time: str | None = None) -> str:
+def build_system_prompt(
+    client_time: str | None = None,
+    languages: list[str] | None = None,
+) -> str:
     """The system prompt with the current date-time appended.
 
     Giving the model "now" lets it resolve relative reminder times ("tomorrow
     at 5pm") into absolute ISO-8601 due dates. When the client sends its local
     time (with offset) we use that so reminders land in the USER's timezone;
     otherwise we fall back to the server's UTC clock.
+
+    ``languages`` is the user's preference list from ``hello.languages``,
+    primary first. The base LANGUAGE rule (mirror the user) always applies;
+    this block adds the tie-breakers, because the native-audio models drift
+    exactly on the ambiguous turns — short utterances, mixed Hindi-English,
+    noisy audio.
     """
     if client_time:
         when = (
@@ -314,4 +323,20 @@ def build_system_prompt(client_time: str | None = None) -> str:
             f"Current date-time (UTC) is {now}. Resolve reminder times "
             "against this and output due_date in ISO-8601."
         )
-    return f"{SYSTEM_PROMPT}\n{when}\n"
+    lang_block = ""
+    if languages:
+        primary = languages[0]
+        rest = ", ".join(languages[1:]) if len(languages) > 1 else None
+        preferred = primary if not rest else f"{primary} and {rest}"
+        lang_block = (
+            "\nLANGUAGE PREFERENCES (re-check on EVERY turn): the user's "
+            f"preferred languages are {preferred}, primary {primary}. "
+            "Detect the language of each user turn and reply in THAT language "
+            "— including languages outside this list. Tie-breakers only: if a "
+            "turn is too short, mixed-language, or unclear to classify, reply "
+            f"in {primary}; when YOU start the exchange (a reminder firing, a "
+            f"low-battery warning, a proactive note), speak {primary}. Never "
+            "answer in a language the user did not just use unless one of "
+            "these tie-breakers applies.\n"
+        )
+    return f"{SYSTEM_PROMPT}{lang_block}\n{when}\n"

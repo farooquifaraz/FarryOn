@@ -42,6 +42,7 @@ class HelloMessage extends ClientMessage {
     this.email,
     this.emails,
     this.clientTime,
+    this.languages,
   });
 
   /// `"android"` or `"ios"`.
@@ -78,6 +79,12 @@ class HelloMessage extends ClientMessage {
   /// times ("tomorrow at 5pm") in the user's timezone.
   final String? clientTime;
 
+  /// The user's preferred languages, primary first (e.g. `["Hindi",
+  /// "English"]`). Farry mirrors whatever language the user speaks; these
+  /// break ties on ambiguous/mixed turns and pick the voice for
+  /// Farry-initiated speech. Omitted when null → backend default behavior.
+  final List<String>? languages;
+
   @override
   String get type => MsgType.hello;
 
@@ -93,6 +100,7 @@ class HelloMessage extends ClientMessage {
         if (email != null) 'email': email,
         if (emails != null) 'emails': emails,
         if (clientTime != null) 'clientTime': clientTime,
+        if (languages != null) 'languages': languages,
       };
 }
 

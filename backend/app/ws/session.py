@@ -157,8 +157,12 @@ class Session:
             # provider (or the server default), giving the model the user's
             # local time so reminders resolve in their timezone.
             client_time = (self._hello or {}).get("clientTime")
+            languages = (self._hello or {}).get("languages")
             prompt = build_system_prompt(
-                client_time if isinstance(client_time, str) else None
+                client_time if isinstance(client_time, str) else None,
+                languages=[str(l) for l in languages]
+                if isinstance(languages, list) and languages
+                else None,
             )
             self._gateway = self._gateway_factory(
                 self._resolve_provider(), prompt

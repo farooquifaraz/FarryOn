@@ -14,6 +14,7 @@ import '../data/conversations_screen.dart';
 import '../data/notes_screen.dart';
 import '../data/reminders_screen.dart';
 import '../debug/debug_logs_screen.dart';
+import '../glasses/glasses_connect_flow.dart';
 import 'subscription_screen.dart';
 
 /// The live, cloud-hosted FarryOn backend (Render). Mirrors the constants the
@@ -104,6 +105,13 @@ class SettingsScreen extends ConsumerWidget {
                   ? 'Hands-free · always listening'
                   : 'Tap-to-talk',
               onTap: () => _push(context, const _VoiceMicPage()),
+            ),
+            SettingsRow(
+              icon: Icons.translate_rounded,
+              gradient: Aurora.gradAmber,
+              title: 'Languages',
+              subtitle: '${cfg.primaryLanguage} · ${cfg.secondaryLanguage}',
+              onTap: () => _push(context, const _LanguagesPage()),
               showDivider: false,
             ),
           ]),
@@ -114,7 +122,9 @@ class SettingsScreen extends ConsumerWidget {
             SettingsRow(
               icon: Icons.visibility_rounded,
               gradient: Aurora.gradTeal,
-              title: 'Glasses',
+              title: live.glassesName == null
+                  ? 'Glasses'
+                  : 'Glasses · ${live.glassesName}',
               subtitle: glassesConnected
                   ? (live.glassesBattery != null
                       ? 'Connected · ${live.glassesBattery}% battery'
@@ -144,14 +154,7 @@ class SettingsScreen extends ConsumerWidget {
                   );
                   if (sure == true) await notifier.disconnectGlasses();
                 } else {
-                  await notifier.connectGlasses();
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                          content: Text(
-                              'Connecting to glasses… (scans if the saved pair is off)')),
-                    );
-                  }
+                  await runGlassesConnectFlow(context, ref);
                 }
               },
             ),
@@ -534,6 +537,95 @@ class _AiModelPageState extends ConsumerState<_AiModelPage> {
         const Text(
           'Gemini & OpenAI are fast with smooth voice + vision. '
           'Gemini is the best value (cheapest); OpenAI is premium.',
+          style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
+        ),
+      ],
+    );
+  }
+}
+
+// ============================ Languages =============================
+
+/// Two preferred languages for Farry's replies. Farry always mirrors the
+/// language the user just spoke (any language); these two are the
+/// tie-breakers for ambiguous/mixed turns and for Farry-initiated speech
+/// (reminders, warnings) — the primary wins. Sent per-session in
+/// `hello.languages`, so a change applies from the next (re)connect.
+class _LanguagesPage extends ConsumerStatefulWidget {
+  const _LanguagesPage();
+  @override
+  ConsumerState<_LanguagesPage> createState() => _LanguagesPageState();
+}
+
+class _LanguagesPageState extends ConsumerState<_LanguagesPage> {
+  static const _options = [
+    'English',
+    'Hindi',
+    'Urdu',
+    'Arabic',
+    'Bengali',
+    'Punjabi',
+    'Marathi',
+    'Tamil',
+    'Telugu',
+    'Gujarati',
+    'Spanish',
+    'French',
+  ];
+
+  late String _primary = ref.read(configProvider).primaryLanguage;
+  late String _secondary = ref.read(configProvider).secondaryLanguage;
+
+  void _save() {
+    final cfg = ref.read(configProvider);
+    ref.read(configProvider.notifier).state = cfg.copyWith(
+      primaryLanguage: _primary,
+      secondaryLanguage: _secondary,
+    );
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SubPage(
+      title: 'Languages',
+      onSave: _save,
+      children: [
+        _fieldLabel('Primary'),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final l in _options)
+              _SelectPill(
+                label: l,
+                selected: _primary == l,
+                onTap: () => setState(() => _primary = l),
+              ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _fieldLabel('Secondary'),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final l in _options)
+              _SelectPill(
+                label: l,
+                selected: _secondary == l,
+                onTap: () => setState(() => _secondary = l),
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          'Farry answers in whatever language you speak — any language. '
+          'These two decide the tricky cases: mixed or very short sentences '
+          'use the primary, and reminders Farry speaks on her own come in '
+          'the primary too. Applies from the next session.',
           style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
         ),
       ],

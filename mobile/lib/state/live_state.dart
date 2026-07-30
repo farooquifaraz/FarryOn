@@ -87,6 +87,7 @@ class LiveSessionState {
     this.videoKind = 'phone',
     this.glassesConnected = false,
     this.glassesBattery,
+    this.glassesName,
     this.glassesTalking = false,
     this.glassesWorn = false,
     this.lastCapturedPhoto,
@@ -140,6 +141,10 @@ class LiveSessionState {
   final bool glassesConnected;
   final int? glassesBattery;
 
+  /// Device name of the (last) connected glasses, e.g. "L802_2B1D" — shown on
+  /// the dashboard card. Kept across a drop so the card can say WHICH pair.
+  final String? glassesName;
+
   /// True while the user is long-pressing and glasses-mic PCM is flowing.
   final bool glassesTalking;
 
@@ -181,6 +186,7 @@ class LiveSessionState {
     String? videoKind,
     bool? glassesConnected,
     int? glassesBattery,
+    String? glassesName,
     bool? glassesTalking,
     bool? glassesWorn,
     Uint8List? lastCapturedPhoto,
@@ -204,6 +210,7 @@ class LiveSessionState {
         videoKind: videoKind ?? this.videoKind,
         glassesConnected: glassesConnected ?? this.glassesConnected,
         glassesBattery: glassesBattery ?? this.glassesBattery,
+        glassesName: glassesName ?? this.glassesName,
         glassesTalking: glassesTalking ?? this.glassesTalking,
         glassesWorn: glassesWorn ?? this.glassesWorn,
         lastCapturedPhoto: lastCapturedPhoto ?? this.lastCapturedPhoto,

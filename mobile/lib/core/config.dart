@@ -29,6 +29,8 @@ class AppConfig {
     this.handsFree = true,
     this.saveCapturesToGallery = true,
     this.glassesRetentionDays = 0,
+    this.primaryLanguage = 'English',
+    this.secondaryLanguage = 'Hindi',
   });
 
   /// Backend host (IP or DNS name), without scheme or port.
@@ -84,6 +86,13 @@ class AppConfig {
   /// until the user taps it, so background noise / a TV / the assistant's own
   /// voice can never trigger a phantom turn. Best in noisy rooms.
   final bool handsFree;
+
+  /// The user's two preferred languages, sent in `hello.languages`. Farry
+  /// always mirrors the language the user just spoke; these two are the
+  /// tie-breakers — ambiguous/mixed turns and Farry-initiated speech
+  /// (reminders, warnings) use [primaryLanguage].
+  final String primaryLanguage;
+  final String secondaryLanguage;
 
   /// Save every live capture (phone camera / glasses still) into the phone
   /// gallery (`Pictures/Farry`). Default on.
@@ -152,6 +161,8 @@ class AppConfig {
     bool? handsFree,
     bool? saveCapturesToGallery,
     int? glassesRetentionDays,
+    String? primaryLanguage,
+    String? secondaryLanguage,
   }) =>
       AppConfig(
         host: host ?? this.host,
@@ -172,6 +183,8 @@ class AppConfig {
             saveCapturesToGallery ?? this.saveCapturesToGallery,
         glassesRetentionDays:
             glassesRetentionDays ?? this.glassesRetentionDays,
+        primaryLanguage: primaryLanguage ?? this.primaryLanguage,
+        secondaryLanguage: secondaryLanguage ?? this.secondaryLanguage,
       );
 
   @override

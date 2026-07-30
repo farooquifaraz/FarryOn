@@ -399,11 +399,18 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             return
         }
         lastConnectionState = state
-        emit(
-            "connectionState",
-            if (mac != null) mapOf("state" to state, "mac" to mac)
-            else mapOf("state" to state),
-        )
+        // Device name for the dashboard card (vendor SDK tracks it once bound).
+        val name = if (state == "connected") {
+            try {
+                DeviceManager.getInstance().deviceName
+            } catch (e: Throwable) {
+                null
+            }
+        } else null
+        val payload = mutableMapOf<String, Any>("state" to state)
+        if (mac != null) payload["mac"] = mac
+        if (!name.isNullOrEmpty()) payload["name"] = name
+        emit("connectionState", payload)
         // Task 2.6b: the BLE link must survive backgrounding while connected.
         try {
             when (state) {

@@ -124,6 +124,8 @@ class ConfigStore {
       handsFree: p.getBool('cfg.handsFree'),
       saveCapturesToGallery: p.getBool('cfg.saveCapturesToGallery'),
       glassesRetentionDays: p.getInt('cfg.glassesRetentionDays'),
+      primaryLanguage: p.getString('cfg.lang.primary'),
+      secondaryLanguage: p.getString('cfg.lang.secondary'),
     );
   }
 
@@ -142,6 +144,8 @@ class ConfigStore {
     await p.setBool('cfg.handsFree', c.handsFree);
     await p.setBool('cfg.saveCapturesToGallery', c.saveCapturesToGallery);
     await p.setInt('cfg.glassesRetentionDays', c.glassesRetentionDays);
+    await p.setString('cfg.lang.primary', c.primaryLanguage);
+    await p.setString('cfg.lang.secondary', c.secondaryLanguage);
   }
 
   // ---- Email accounts ----------------------------------------------------

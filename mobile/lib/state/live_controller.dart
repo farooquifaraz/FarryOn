@@ -283,25 +283,41 @@ class LiveController {
     await bridge.connect(mac);
   }
 
-  /// Settings "Glasses" card: user-initiated, so prefer TRUTH over speed —
-  /// cancel any wedged/stale attempt, scan, and connect whichever glasses is
-  /// actually present now (classic-BT-connected unit wins). This is what makes
-  /// the card recover from a stale saved MAC (two-glasses case): the saved-MAC
-  /// fast path would retry the dead unit for ~60 s and the native serialization
-  /// guard blocks the scan fallback the whole time.
-  Future<void> connectGlasses() async {
+  /// Glasses-card connect flow, step 1: clean slate + scan. The disconnect
+  /// first aborts any wedged attempt to a dead unit so the scan isn't skipped
+  /// by the native connect-serialization guard (the saved-MAC fast path would
+  /// otherwise hold it for the full ~60 s watchdog window). Returns everything
+  /// found, best-first (classic-BT-connected unit, then live advertisers), so
+  /// the card can offer a chooser when more than one pair is out there.
+  Future<List<GlassesDeviceHit>> scanGlassesForPicker() async {
+    final bridge = _glassesBridge;
+    if (bridge == null || _connectingGlasses) return const [];
+    try {
+      await bridge.disconnect();
+      final hits = await bridge.scan(timeout: const Duration(seconds: 6));
+      final sorted = [...hits]..sort((a, b) {
+          if (a.connected != b.connected) return a.connected ? -1 : 1;
+          return b.rssi.compareTo(a.rssi);
+        });
+      return sorted;
+    } catch (e) {
+      _log.warn('glasses scan (card) failed: $e');
+      return const [];
+    }
+  }
+
+  /// Glasses-card connect flow, step 2: connect the unit the user picked (or
+  /// the only one found). Whoever connects becomes the persisted auto-connect
+  /// target (last_mac + setReConnectMac, native side).
+  Future<void> connectGlassesTo(String mac) async {
     final bridge = _glassesBridge;
     if (bridge == null) return;
     if (_state.glassesConnected || _connectingGlasses) return;
     _connectingGlasses = true;
     try {
-      // Clean slate: aborts an in-flight attempt to a dead unit so the scan
-      // below isn't skipped by the native connect-serialization guard. The
-      // connect() that follows clears the user-disconnected latch.
-      await bridge.disconnect();
-      await _scanAndConnectBest(bridge, null);
+      await bridge.connect(mac);
     } catch (e) {
-      _log.warn('connectGlasses (card) failed: $e');
+      _log.warn('connectGlassesTo failed: $e');
     } finally {
       Future<void>.delayed(const Duration(seconds: 24), () {
         _connectingGlasses = false;
@@ -345,7 +361,10 @@ class LiveController {
     switch (event.type) {
       case 'connectionState':
         final connected = event.data['state'] == 'connected';
-        _emit(_state.copyWith(glassesConnected: connected));
+        _emit(_state.copyWith(
+          glassesConnected: connected,
+          glassesName: event.data['name'] as String?,
+        ));
         // The connect attempt has resolved (either way) — release the in-flight
         // guard so a later reconnect (new session, or after a drop) can proceed.
         _connectingGlasses = false;
