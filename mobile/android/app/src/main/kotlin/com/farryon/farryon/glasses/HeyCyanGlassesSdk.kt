@@ -1565,14 +1565,31 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
         main.postDelayed({
             if (!proceeded) {
+                // A silent probe = the BLE control channel isn't up yet (fresh
+                // reconnect) or the firmware is wedged. "Try import anyway"
+                // used to force the glasses into WiFi-P2P pairing for nothing
+                // — and in P2P mode every capture fails "busy" (device-seen
+                // 2026-07-30 22:57: auto-sync 3 s after a reconnect wedged the
+                // freshly power-cycled L802). Skip instead; the next connect
+                // or a manual Start sync retries with a live channel.
+                proceeded = true
+                syncActive = false
                 emit(
                     "deviceEvent",
                     mapOf(
                         "hex" to "media-count probe: no reply in " +
-                            "${MEDIA_COUNT_PROBE_TIMEOUT_MS} ms — trying import anyway"
+                            "${MEDIA_COUNT_PROBE_TIMEOUT_MS} ms — skipping sync " +
+                            "(glasses not ready; captures stay available)"
                     )
                 )
-                proceed()
+                emit(
+                    "syncProgress",
+                    mapOf(
+                        "file" to "sync skipped — glasses not ready",
+                        "pct" to 100,
+                        "speedKbps" to 0.0,
+                    )
+                )
             }
         }, MEDIA_COUNT_PROBE_TIMEOUT_MS)
     }

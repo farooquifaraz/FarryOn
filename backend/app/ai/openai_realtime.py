@@ -183,8 +183,12 @@ class OpenAIRealtimeGateway(AIGateway):
         # identifies the language from text far more reliably than from audio
         # history. _last_user_words also rides along on post-tool
         # continuations so they can't drift either.
-        self._turn_transcript = ""
-        self._transcript_evt: asyncio.Event = asyncio.Event()
+        # item_id → final transcript. The commit and its transcription both
+        # carry the audio item's id, so the response task pins ONLY its own
+        # turn's words — a global "latest transcript" slot raced: a
+        # late-arriving transcript pinned the NEXT turn to the PREVIOUS
+        # turn's language (the exact bug this exists to fix).
+        self._item_transcripts: dict[str, str] = {}
         self._pending_response_task: asyncio.Task[None] | None = None
         self._last_user_words = ""
 
@@ -426,7 +430,9 @@ class OpenAIRealtimeGateway(AIGateway):
             ):
                 self._pending_response_task.cancel()
             self._pending_response_task = asyncio.create_task(
-                self._respond_after_transcript()
+                self._respond_after_transcript(
+                    str(getattr(event, "item_id", "") or "")
+                )
             )
 
         elif etype == (
@@ -450,15 +456,17 @@ class OpenAIRealtimeGateway(AIGateway):
                 getattr(event, "transcript", "") or self._user_buf or ""
             )
             self._user_buf = ""
+            item_id = str(getattr(event, "item_id", "") or "")
+            if item_id:
+                # Bound the map: entries are popped by the response task; a
+                # cancelled task can leak one, so don't let it grow forever.
+                if len(self._item_transcripts) > 8:
+                    self._item_transcripts.clear()
+                self._item_transcripts[item_id] = transcript
             if transcript:
-                self._turn_transcript = transcript
                 await self._queue.put(
                     TranscriptEvent(role="user", text=transcript, final=True)
                 )
-            # Wake the pending response task even on an empty transcript —
-            # better to answer promptly without the language pin than to sit
-            # out the full wait.
-            self._transcript_evt.set()
 
         elif etype == "response.function_call_arguments.done":
             raw_args = getattr(event, "arguments", "") or "{}"
@@ -568,23 +576,30 @@ class OpenAIRealtimeGateway(AIGateway):
         except Exception as exc:  # noqa: BLE001 - vision is best-effort
             logger.warning("openai.attach_frame_failed", error=repr(exc))
 
-    async def _respond_after_transcript(self, timeout: float = 0.9) -> None:
-        """Wait (bounded) for the turn's transcript, then create the reply.
+    async def _respond_after_transcript(
+        self, item_id: str, timeout: float = 0.9
+    ) -> None:
+        """Wait (bounded) for THIS turn's transcript, then create the reply.
 
         Whisper transcribes asynchronously and usually lands within a few
         hundred ms of the commit; the wait costs that much latency and buys a
-        reply whose language is pinned to the user's actual words. On timeout
-        we answer without the pin rather than stall the conversation.
+        reply whose language is pinned to the user's actual words. Keyed by
+        the audio item's id so a late transcript from an earlier turn can
+        never pin this one. On timeout we answer without the pin rather than
+        stall the conversation.
         """
-        try:
-            await asyncio.wait_for(self._transcript_evt.wait(), timeout)
-        except (TimeoutError, asyncio.TimeoutError):
-            logger.info("openai.language_pin_timeout")
-        words = self._turn_transcript
-        self._turn_transcript = ""
-        self._transcript_evt = asyncio.Event()
+        words = ""
+        if item_id:
+            for _ in range(int(timeout / 0.05)):
+                if item_id in self._item_transcripts:
+                    break
+                await asyncio.sleep(0.05)
+            words = self._item_transcripts.pop(item_id, "")
         if words:
             self._last_user_words = words
+            logger.info("openai.language_pin_applied", chars=len(words))
+        else:
+            logger.info("openai.language_pin_timeout", item_id=item_id)
         await self._create_response_with_frame(user_words=words or None)
 
     def _language_pinned_instructions(self, user_words: str) -> str:
