@@ -648,7 +648,11 @@ class OpenAIRealtimeGateway(AIGateway):
                     await self._conn.response.create()
             else:
                 await self._conn.response.create()
-        except Exception:
+        except BaseException:
+            # BaseException, not Exception: the pending-response task gets
+            # CANCELLED when a new user turn lands mid-create, and leaving
+            # _response_active=True on that path mutes the session forever
+            # (no response may be created while one is "active").
             self._response_active = False
             raise
 
