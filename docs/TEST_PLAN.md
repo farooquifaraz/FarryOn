@@ -178,16 +178,21 @@ Feature: `setReConnectMac` + persisted MAC (steps 1-4), boot auto-connect
 | EA4 | BT toggle → auto-reconnect | While connected: BT off, 5 s, BT on | OFF → `state=disconnected`; ON → `auto-reconnecting to <mac> in 2500 ms` → connected | ☑ 2026-07-27 (~7 s) |
 | EA5 | **The original bug**: cold process + BT off | Force-stop app AND BT off → open app (stays idle, boot kick skipped) → BT on | `auto-reconnecting…` fires from the **persisted** MAC (pendingMac is null) → connected | ☑ 2026-07-27 (5 s) |
 | EA6 | Card disconnect is final | Card → Disconnect → confirm → wait 30 s → BT off/on | `disconnect (unBindDevice)` → disconnected, **no** auto-reconnect line even after the BT toggle | ☑ 2026-07-27 |
-| EA7 | Glasses power-cycle | While connected, hold the glasses' button to power OFF → 10 s → power ON | App shows Disconnected on the drop; on power-on the SDK's own reconnect (setNeedConnect + target MAC) rejoins without a tap | ☐ needs hands on the glasses |
-| EA8 | Walk out of range and back | Take the glasses ~15 m away (or phone), wait for drop, come back | Same as EA7: drop is honest, return reconnects by itself | ☐ |
-| EA9 | Phone reboot | Reboot phone (BT restores on) → open the app | Same as EA3 — the MAC lives in SharedPreferences, a reboot must not lose it | ☐ |
+| EA7 | Glasses power-cycle | While connected, hold the glasses' button to power OFF → 10 s → power ON | App shows Disconnected on the drop; on power-on the SDK's own reconnect (setNeedConnect + target MAC) rejoins without a tap | ☑ 2026-07-30 (Faraz's hands; both directions) |
+| EA8 | Walk out of range and back | Take the glasses ~15 m away (or phone), wait for drop, come back | Same as EA7: drop is honest, return reconnects by itself | ☑ 2026-07-30 — drop 20:27:43, auto-rejoin 11 s later |
+| EA9 | Phone reboot | Reboot phone (BT restores on) → open the app | Same as EA3 — the MAC lives in SharedPreferences, a reboot must not lose it | ☐ (also re-enable Wireless debugging after) |
 | EA10 | Disconnect, then app restart | Card → Disconnect → kill app → reopen | **Known behavior:** boot auto-connect RECONNECTS — the "stay disconnected" latch is in-memory only. Decide if that's wanted; persisting the latch is a one-line follow-up if not | ☐ decision |
-| EA11 | Two glasses, both ON | L801 + L802 both powered → card connect | Connects ONE (classic-connected unit wins), no flapping between them | ☐ |
-| EA12 | End-to-end after auto-connect | After EA3, say "what is this" / tap 📷 | Photo lands via the auto-connected link — proves the session wiring, not just BLE | ☐ |
+| EA11 | Two glasses, both ON | L801 + L802 both powered → card connect | Connects ONE (classic-connected unit wins), no flapping between them | ☑ 2026-07-30 — auto path touches ONLY the saved unit; manual scan picked the classic-connected one (L802) |
+| EA12 | End-to-end after auto-connect | After EA3, say "what is this" / tap 📷 | Photo lands via the auto-connected link — proves the session wiring, not just BLE | ☑ 2026-07-30 — shutter → 20.5 KB thumbnail in 3.8 s |
+| EA13 | Device SWITCH persists | Old unit off, new on → card connect → app restart | The picked unit is the new boot auto-connect target | ☑ 2026-07-30 — L802→L801: boot auto-connect → CD:F3, 4 s |
+| EA14 | Chooser sheet, 2+ units | Both glasses findable → card tap | "Choose glasses" sheet lists both BY NAME with presence hints (Nearby dBm / bare = bonded only); pick connects; picking an absent unit times out honestly | ☑ 2026-07-30 (both paths, incl. the absent-unit timeout) |
+| EA15 | Device name on the cards | Connect any unit | Dashboard pill "L801 · 88%", Settings "Glasses · L 801_DD8A · Connected · 88% battery" | ☑ 2026-07-30 |
+| EA16 | Reply-language mirror (text) | Hindi-history session → ask in English; then ask in Roman-Hindi | Reply mirrors the QUESTION's language/script both times, no drift back | ☑ 2026-07-30 — English→English, Hinglish→Hinglish (Settings > Languages = English·Hindi) |
+| EA17 | Reply-language mirror (voice) | Speak Hindi, then English, then a third language | Same mirroring on the audio path | ☐ needs a human voice |
 
 EA1-EA6 were driven over wireless ADB (svc bluetooth + force-stop + logcat),
-zero FATALs across ~15 connect cycles. EA7-EA12 need a human with the
-hardware or a decision (EA10).
+zero FATALs across ~20 connect cycles. Still open: EA9 (reboot), EA10
+(decision), EA17 (spoken-language drift).
 
 ### F. Email
 
