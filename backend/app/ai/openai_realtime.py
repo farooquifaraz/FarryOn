@@ -174,6 +174,19 @@ class OpenAIRealtimeGateway(AIGateway):
         # create_response=false / input_image, so it stays on auto-response and
         # its voice path is left exactly as-is (no regression).
         self._vision_items = self.provider == "openai"
+        # Reply-language pinning. gpt-realtime picks the reply language from
+        # the AUDIO conversation context and gets sticky — an English question
+        # after Arabic turns got an Arabic answer (device-seen 2026-07-30),
+        # despite the system prompt's mirror rule. The fix: wait a beat for
+        # Whisper's transcript of the just-committed turn, then embed the
+        # user's ACTUAL WORDS in that response's instructions — the model
+        # identifies the language from text far more reliably than from audio
+        # history. _last_user_words also rides along on post-tool
+        # continuations so they can't drift either.
+        self._turn_transcript = ""
+        self._transcript_evt: asyncio.Event = asyncio.Event()
+        self._pending_response_task: asyncio.Task[None] | None = None
+        self._last_user_words = ""
 
     def set_camera_kind(self, kind: str | None) -> None:
         """Size the frame-freshness window to the active camera.
@@ -403,7 +416,18 @@ class OpenAIRealtimeGateway(AIGateway):
             # The user finished an audio turn (server VAD). Auto-response is
             # off (OpenAI only), so we attach the current frame and create the
             # reply here — giving the model live vision on every spoken turn.
-            await self._create_response_with_frame()
+            # Run via a task: it first waits (bounded) for this turn's Whisper
+            # transcript so the reply language can be pinned to the user's
+            # actual words, and that transcript arrives through THIS receive
+            # loop — awaiting inline would deadlock into the timeout.
+            if (
+                self._pending_response_task is not None
+                and not self._pending_response_task.done()
+            ):
+                self._pending_response_task.cancel()
+            self._pending_response_task = asyncio.create_task(
+                self._respond_after_transcript()
+            )
 
         elif etype == (
             "conversation.item.input_audio_transcription.delta"
@@ -427,9 +451,14 @@ class OpenAIRealtimeGateway(AIGateway):
             )
             self._user_buf = ""
             if transcript:
+                self._turn_transcript = transcript
                 await self._queue.put(
                     TranscriptEvent(role="user", text=transcript, final=True)
                 )
+            # Wake the pending response task even on an empty transcript —
+            # better to answer promptly without the language pin than to sit
+            # out the full wait.
+            self._transcript_evt.set()
 
         elif etype == "response.function_call_arguments.done":
             raw_args = getattr(event, "arguments", "") or "{}"
@@ -539,29 +568,83 @@ class OpenAIRealtimeGateway(AIGateway):
         except Exception as exc:  # noqa: BLE001 - vision is best-effort
             logger.warning("openai.attach_frame_failed", error=repr(exc))
 
-    async def _safe_response_create(self) -> None:
+    async def _respond_after_transcript(self, timeout: float = 0.9) -> None:
+        """Wait (bounded) for the turn's transcript, then create the reply.
+
+        Whisper transcribes asynchronously and usually lands within a few
+        hundred ms of the commit; the wait costs that much latency and buys a
+        reply whose language is pinned to the user's actual words. On timeout
+        we answer without the pin rather than stall the conversation.
+        """
+        try:
+            await asyncio.wait_for(self._transcript_evt.wait(), timeout)
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.info("openai.language_pin_timeout")
+        words = self._turn_transcript
+        self._turn_transcript = ""
+        self._transcript_evt = asyncio.Event()
+        if words:
+            self._last_user_words = words
+        await self._create_response_with_frame(user_words=words or None)
+
+    def _language_pinned_instructions(self, user_words: str) -> str:
+        """The session prompt plus a hard per-response language pin.
+
+        Response-level instructions REPLACE the session instructions for that
+        response, so the full system prompt must ride along.
+        """
+        return (
+            f"{self.system_prompt}\n\nRIGHT NOW the user's just-spoken words "
+            f"were: «{user_words}». Reply in EXACTLY the language "
+            "of those words, even if every earlier turn used a different "
+            "language."
+        )
+
+    async def _safe_response_create(self, user_words: str | None = None) -> None:
         """Ask the model to respond, unless a response is already in flight.
 
         The GA API rejects a second ``response.create`` while one is active. We
         set the flag optimistically (before the call) so two near-simultaneous
         triggers — e.g. a server-VAD commit racing our manual create — can't
         both fire and produce the "active response in progress" error.
+
+        When ``user_words`` is given the response carries language-pinned
+        instructions (see :meth:`_language_pinned_instructions`); if the API
+        rejects that shape we fall back to a plain create so the turn is never
+        silently lost.
         """
         if self._conn is None or self._response_active:
             return
         self._response_active = True
         try:
-            await self._conn.response.create()
+            if user_words:
+                try:
+                    await self._conn.response.create(
+                        response={
+                            "instructions": self._language_pinned_instructions(
+                                user_words
+                            )
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - degrade, don't drop
+                    logger.warning(
+                        "openai.language_pin_failed", error=repr(exc)
+                    )
+                    await self._conn.response.create()
+            else:
+                await self._conn.response.create()
         except Exception:
             self._response_active = False
             raise
 
-    async def _create_response_with_frame(self) -> None:
+    async def _create_response_with_frame(
+        self, user_words: str | None = None
+    ) -> None:
         """Attach the current frame (if any) then ask the model to respond."""
         if self._conn is None or self._response_active:
             return
         await self._attach_latest_frame()
-        await self._safe_response_create()
+        await self._safe_response_create(user_words)
 
     async def send_text(self, text: str) -> None:
         """Create a user message item and request a response."""
@@ -594,7 +677,9 @@ class OpenAIRealtimeGateway(AIGateway):
                 "output": json.dumps(payload, default=str),
             }
         )
-        await self._safe_response_create()
+        # Carry the turn's language pin into the post-tool continuation —
+        # without it the wrap-up after a tool call could drift languages.
+        await self._safe_response_create(self._last_user_words or None)
 
     async def events(self) -> AsyncIterator[GatewayEvent]:
         """Yield normalized gateway events until the session closes."""
