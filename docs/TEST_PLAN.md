@@ -164,6 +164,31 @@ longer how it works: `isMinifyEnabled = true` is back, held safe by
 **E5 is new and untested** — the scoping change touched every live session,
 glasses included.
 
+### E-auto. HeyCyan-style auto-connect + Glasses card (2026-07-27)
+
+Feature: `setReConnectMac` + persisted MAC (steps 1-4), boot auto-connect
+(step 5), Settings → Devices → **Glasses** card. Watch every run with
+`adb logcat -s GlassesLab` — the proof lines are quoted per case.
+
+| # | Case | How | Expected (and the logcat line that proves it) | State |
+|---|---|---|---|---|
+| EA1 | Card connect, stale saved MAC | Saved unit OFF, other unit ON → Settings → Glasses → tap | Scan finds the present unit, connects. `setReConnectMac → <mac>` then `connectionState {state=connected}` | ☑ 2026-07-27 — L801 stale, L802 connected in 4.7 s |
+| EA2 | Card shows truth | Look at Settings → Devices after EA1 | "Connected · NN% battery" in mint; Capture devices row shows "· Glasses NN%" | ☑ 2026-07-27 (51%) |
+| EA3 | App restart → auto-connect | Kill the app (recents swipe / force-stop) → reopen → **touch nothing** | `boot auto-connect → <mac>` at ~3 s, connected ≤ ~15 s | ☑ 2026-07-27 (~10 s) |
+| EA4 | BT toggle → auto-reconnect | While connected: BT off, 5 s, BT on | OFF → `state=disconnected`; ON → `auto-reconnecting to <mac> in 2500 ms` → connected | ☑ 2026-07-27 (~7 s) |
+| EA5 | **The original bug**: cold process + BT off | Force-stop app AND BT off → open app (stays idle, boot kick skipped) → BT on | `auto-reconnecting…` fires from the **persisted** MAC (pendingMac is null) → connected | ☑ 2026-07-27 (5 s) |
+| EA6 | Card disconnect is final | Card → Disconnect → confirm → wait 30 s → BT off/on | `disconnect (unBindDevice)` → disconnected, **no** auto-reconnect line even after the BT toggle | ☑ 2026-07-27 |
+| EA7 | Glasses power-cycle | While connected, hold the glasses' button to power OFF → 10 s → power ON | App shows Disconnected on the drop; on power-on the SDK's own reconnect (setNeedConnect + target MAC) rejoins without a tap | ☐ needs hands on the glasses |
+| EA8 | Walk out of range and back | Take the glasses ~15 m away (or phone), wait for drop, come back | Same as EA7: drop is honest, return reconnects by itself | ☐ |
+| EA9 | Phone reboot | Reboot phone (BT restores on) → open the app | Same as EA3 — the MAC lives in SharedPreferences, a reboot must not lose it | ☐ |
+| EA10 | Disconnect, then app restart | Card → Disconnect → kill app → reopen | **Known behavior:** boot auto-connect RECONNECTS — the "stay disconnected" latch is in-memory only. Decide if that's wanted; persisting the latch is a one-line follow-up if not | ☐ decision |
+| EA11 | Two glasses, both ON | L801 + L802 both powered → card connect | Connects ONE (classic-connected unit wins), no flapping between them | ☐ |
+| EA12 | End-to-end after auto-connect | After EA3, say "what is this" / tap 📷 | Photo lands via the auto-connected link — proves the session wiring, not just BLE | ☐ |
+
+EA1-EA6 were driven over wireless ADB (svc bluetooth + force-stop + logcat),
+zero FATALs across ~15 connect cycles. EA7-EA12 need a human with the
+hardware or a decision (EA10).
+
 ### F. Email
 
 | # | Case | Expected | State |
