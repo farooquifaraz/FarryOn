@@ -577,16 +577,18 @@ class OpenAIRealtimeGateway(AIGateway):
             logger.warning("openai.attach_frame_failed", error=repr(exc))
 
     async def _respond_after_transcript(
-        self, item_id: str, timeout: float = 0.9
+        self, item_id: str, timeout: float = 1.4
     ) -> None:
         """Wait (bounded) for THIS turn's transcript, then create the reply.
 
-        Whisper transcribes asynchronously and usually lands within a few
-        hundred ms of the commit; the wait costs that much latency and buys a
-        reply whose language is pinned to the user's actual words. Keyed by
-        the audio item's id so a late transcript from an earlier turn can
-        never pin this one. On timeout we answer without the pin rather than
-        stall the conversation.
+        Whisper transcribes asynchronously; the wait costs that much latency
+        and buys a reply whose language is pinned to the user's actual words.
+        Keyed by the audio item's id so a late transcript from an earlier
+        turn can never pin this one. 1.4 s because a field run (2026-08-03)
+        showed ~14/22 turns missing the old 0.9 s window. On timeout the
+        PARTIAL transcript (streaming deltas in ``_user_buf``) still pins —
+        half a sentence identifies a language just fine; only with nothing
+        at all do we answer unpinned rather than stall.
         """
         words = ""
         if item_id:
@@ -595,9 +597,15 @@ class OpenAIRealtimeGateway(AIGateway):
                     break
                 await asyncio.sleep(0.05)
             words = self._item_transcripts.pop(item_id, "")
+        partial = False
+        if not words and self._user_buf:
+            words = self._user_buf
+            partial = True
         if words:
             self._last_user_words = words
-            logger.info("openai.language_pin_applied", chars=len(words))
+            logger.info(
+                "openai.language_pin_applied", chars=len(words), partial=partial
+            )
         else:
             logger.info("openai.language_pin_timeout", item_id=item_id)
         await self._create_response_with_frame(user_words=words or None)
