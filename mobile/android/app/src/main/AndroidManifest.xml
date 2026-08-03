@@ -81,6 +81,16 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Impeller on Vulkan intermittently resumes to a BLACK app surface
+             on this device (S23 Ultra: AHardwareBuffer alloc error -7 +
+             "surface is not valid" churn on wake, app renders black until a
+             fresh launch — seen repeatedly 2026-07-27/30). ImpellerBackend=
+             opengles is IGNORED by this Flutter (log still said Vulkan), so
+             Impeller is disabled outright; logcat must say a non-Vulkan
+             backend on boot for this to be in effect. -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
 
         <!-- Glasses Lab: BLE link survives backgrounding (Task 2.6b). -->
         <service
