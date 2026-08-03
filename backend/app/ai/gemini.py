@@ -38,6 +38,39 @@ logger = get_logger(__name__)
 _INPUT_MIME = "audio/pcm;rate=16000"
 _VIDEO_MIME = "image/jpeg"
 
+# Unicode blocks for the reply-language guard. Coarse on purpose: it only has
+# to catch cross-SCRIPT drift (an Arabic answer to an English question — the
+# device-seen 2026-07-30 bug), not distinguish Latin-script languages.
+_SCRIPT_RANGES = (
+    ("arabic", 0x0600, 0x06FF),
+    ("arabic", 0x0750, 0x077F),
+    ("arabic", 0x08A0, 0x08FF),
+    ("devanagari", 0x0900, 0x097F),
+    ("latin", 0x0041, 0x005A),
+    ("latin", 0x0061, 0x007A),
+    ("latin", 0x00C0, 0x024F),
+)
+
+
+def _dominant_script(text: str) -> str | None:
+    """Best-effort script of a transcript, or ``None`` when too short/mixed.
+
+    ≥70% of the letters must agree, and at least 4 of them — a "ok!" or an
+    emoji-only line must never trigger a correction.
+    """
+    counts: dict[str, int] = {}
+    for ch in text:
+        cp = ord(ch)
+        for name, lo, hi in _SCRIPT_RANGES:
+            if lo <= cp <= hi:
+                counts[name] = counts.get(name, 0) + 1
+                break
+    total = sum(counts.values())
+    if total < 4:
+        return None
+    name, n = max(counts.items(), key=lambda kv: kv[1])
+    return name if n / total >= 0.7 else None
+
 
 class GeminiGateway(AIGateway):
     """Adapter over Gemini Live realtime sessions."""
@@ -371,6 +404,8 @@ class GeminiGateway(AIGateway):
                 ``False`` for a server-side interruption, where the model
                 immediately begins a fresh turn.
         """
+        user_text = self._user_buf
+        assistant_text = self._assistant_buf
         if self._audio_open:
             self._audio_open = False
             await self._queue.put(AudioEndEvent())
@@ -388,6 +423,50 @@ class GeminiGateway(AIGateway):
             self._assistant_buf = ""
         if turn_complete:
             await self._queue.put(TurnCompleteEvent())
+            await self._maybe_correct_language(user_text, assistant_text)
+
+    async def _maybe_correct_language(
+        self, user_text: str, assistant_text: str
+    ) -> None:
+        """Self-heal cross-script language drift, one turn late at worst.
+
+        Gemini Live auto-generates the reply the moment the user stops
+        speaking, so there is no per-response instruction hook like OpenAI's
+        ``response.create`` — the earliest reliable lever is AFTER a wrong
+        turn. When the user's transcript and the model's reply disagree on
+        script (Arabic question → Latin answer, etc.), inject a silent
+        context note (``turn_complete=False`` → no generation, nothing
+        spoken) so the NEXT reply mirrors the user again. Latin↔Latin drift
+        (English vs Hinglish) is left to the system prompt — scripts can't
+        tell those apart.
+        """
+        if self._session is None or not user_text or not assistant_text:
+            return
+        user_script = _dominant_script(user_text)
+        reply_script = _dominant_script(assistant_text)
+        if not user_script or not reply_script or user_script == reply_script:
+            return
+        note = (
+            "(System note: the user's last words were "
+            f"«{user_text.strip()[:200]}», but your reply was in a different "
+            "language. ALWAYS reply in the language of the user's most "
+            "recent message — their next message alone decides your next "
+            "reply's language and script. Do not respond to this note.)"
+        )
+        try:
+            await self._session.send_client_content(
+                turns={"role": "user", "parts": [{"text": note}]},
+                turn_complete=False,
+            )
+            logger.info(
+                "gemini.language_correction_sent",
+                user_script=user_script,
+                reply_script=reply_script,
+            )
+        except Exception as exc:  # noqa: BLE001 - advisory only, never fatal
+            logger.warning(
+                "gemini.language_correction_failed", error=repr(exc)
+            )
 
     async def send_audio(self, pcm: bytes, ts_ms: int | None = None) -> None:
         """Stream input audio to the live session."""
