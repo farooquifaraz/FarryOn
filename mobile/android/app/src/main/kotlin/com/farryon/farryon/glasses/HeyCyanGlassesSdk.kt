@@ -422,6 +422,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     // were away. Delayed so the BLE MTU is negotiated first (the
                     // delete command rides the same file-transfer channel).
                     main.postDelayed({ sweepRetention() }, RETENTION_SWEEP_DELAY_MS)
+                    // Re-apply the user's saved speaker volume (same delay
+                    // rationale — the volume block rides the BLE control
+                    // channel that needs the link fully up).
+                    main.postDelayed({ applySavedVolume() }, RETENTION_SWEEP_DELAY_MS)
                 }
                 "disconnected" -> GlassesForegroundService.stop(app)
             }
@@ -1833,8 +1837,25 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
     }
 
+    /** Push the persisted music volume to freshly-connected glasses (no-op
+     *  when none was ever saved, or the link dropped meanwhile). */
+    private fun applySavedVolume() {
+        if (lastConnectionState != "connected") return
+        val saved = retentionPrefs().getInt("music_volume", -1)
+        if (saved >= 0) setVolume("music", saved)
+    }
+
     override fun setVolume(type: String, level: Int) {
         Log.i(TAG, "setVolume $type=$level")
+        // Persist the music (A2DP/TTS) volume so every future connect can
+        // re-apply it — the firmware boots at its own default, which can be
+        // near-silent (suspected in the "no voice from the glasses" report,
+        // 2026-08-03). Saved even while disconnected: it applies next connect.
+        if (type == "music") {
+            retentionPrefs().edit()
+                .putInt("music_volume", level.coerceIn(0, 100))
+                .apply()
+        }
         val cached = volCache
         if (cached != null) {
             writeVolume(type, level, cached.copyOf())

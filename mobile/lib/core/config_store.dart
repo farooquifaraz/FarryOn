@@ -126,6 +126,7 @@ class ConfigStore {
       glassesRetentionDays: p.getInt('cfg.glassesRetentionDays'),
       primaryLanguage: p.getString('cfg.lang.primary'),
       secondaryLanguage: p.getString('cfg.lang.secondary'),
+      glassesVolume: p.getInt('cfg.glassesVolume'),
     );
   }
 
@@ -146,6 +147,7 @@ class ConfigStore {
     await p.setInt('cfg.glassesRetentionDays', c.glassesRetentionDays);
     await p.setString('cfg.lang.primary', c.primaryLanguage);
     await p.setString('cfg.lang.secondary', c.secondaryLanguage);
+    await p.setInt('cfg.glassesVolume', c.glassesVolume);
   }
 
   // ---- Email accounts ----------------------------------------------------

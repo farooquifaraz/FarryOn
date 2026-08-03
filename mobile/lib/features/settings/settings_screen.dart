@@ -158,6 +158,7 @@ class SettingsScreen extends ConsumerWidget {
                 }
               },
             ),
+            const _GlassesVolumeRow(),
             SettingsRow(
               icon: Icons.devices_other_rounded,
               gradient: Aurora.gradBlue,
@@ -539,6 +540,88 @@ class _AiModelPageState extends ConsumerState<_AiModelPage> {
           'Gemini is the best value (cheapest); OpenAI is premium.',
           style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
         ),
+      ],
+    );
+  }
+}
+
+// ======================== Glasses volume row ========================
+
+/// Slider for the glasses' OWN speaker volume (the firmware's music/A2DP
+/// level — separate from the phone's media volume). The native bridge
+/// persists the level and re-applies it on every connect, so dragging this
+/// works even while the glasses are disconnected: it takes effect the next
+/// time they connect.
+class _GlassesVolumeRow extends ConsumerStatefulWidget {
+  const _GlassesVolumeRow();
+  @override
+  ConsumerState<_GlassesVolumeRow> createState() => _GlassesVolumeRowState();
+}
+
+class _GlassesVolumeRowState extends ConsumerState<_GlassesVolumeRow> {
+  late double _level = ref.read(configProvider).glassesVolume.toDouble();
+
+  void _apply(double v) {
+    final level = v.round();
+    final cfg = ref.read(configProvider);
+    ref.read(configProvider.notifier).state =
+        cfg.copyWith(glassesVolume: level);
+    ref.read(liveProvider.notifier).setGlassesVolume(level);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          child: Row(
+            children: [
+              const GradientIconTile(Icons.volume_up_rounded,
+                  gradient: Aurora.gradTeal, tileSize: 40, iconSize: 22),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text('Glasses volume',
+                              style: TextStyle(
+                                  color: Aurora.textPrimary, fontSize: 14)),
+                        ),
+                        Text('${_level.round()}%',
+                            style: const TextStyle(
+                                color: Aurora.textMuted, fontSize: 12)),
+                      ],
+                    ),
+                    SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 3,
+                        thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 7),
+                        overlayShape:
+                            const RoundSliderOverlayShape(overlayRadius: 14),
+                      ),
+                      child: Slider(
+                        value: _level,
+                        min: 0,
+                        max: 100,
+                        activeColor: Aurora.teal,
+                        inactiveColor: Aurora.glassBorder,
+                        onChanged: (v) => setState(() => _level = v),
+                        onChangeEnd: _apply,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1, color: Aurora.glassBorder, indent: 64),
       ],
     );
   }

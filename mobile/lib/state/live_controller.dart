@@ -352,6 +352,17 @@ class LiveController {
     }
   }
 
+  /// Settings volume slider → the glasses' own speaker (music/A2DP) volume.
+  /// The native side persists the level and re-applies it on every connect,
+  /// so this works even while disconnected (takes effect next connect).
+  Future<void> setGlassesVolume(int level) async {
+    try {
+      await _glassesBridge?.setVolume('music', level.clamp(0, 100));
+    } catch (e) {
+      _log.warn('setGlassesVolume failed: $e');
+    }
+  }
+
   /// Settings "Glasses" card: user-initiated disconnect — the bridge marks it
   /// user-intended, so no auto-reconnect fights it.
   Future<void> disconnectGlasses() async {

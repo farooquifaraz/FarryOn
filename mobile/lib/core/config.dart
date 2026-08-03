@@ -31,6 +31,7 @@ class AppConfig {
     this.glassesRetentionDays = 0,
     this.primaryLanguage = 'English',
     this.secondaryLanguage = 'Hindi',
+    this.glassesVolume = 70,
   });
 
   /// Backend host (IP or DNS name), without scheme or port.
@@ -93,6 +94,11 @@ class AppConfig {
   /// (reminders, warnings) use [primaryLanguage].
   final String primaryLanguage;
   final String secondaryLanguage;
+
+  /// The glasses' own speaker (music/A2DP) volume, 0–100 — the slider
+  /// position in Settings. The native bridge persists and re-applies it on
+  /// every connect; this copy just keeps the UI in sync.
+  final int glassesVolume;
 
   /// Save every live capture (phone camera / glasses still) into the phone
   /// gallery (`Pictures/Farry`). Default on.
@@ -163,6 +169,7 @@ class AppConfig {
     int? glassesRetentionDays,
     String? primaryLanguage,
     String? secondaryLanguage,
+    int? glassesVolume,
   }) =>
       AppConfig(
         host: host ?? this.host,
@@ -185,6 +192,7 @@ class AppConfig {
             glassesRetentionDays ?? this.glassesRetentionDays,
         primaryLanguage: primaryLanguage ?? this.primaryLanguage,
         secondaryLanguage: secondaryLanguage ?? this.secondaryLanguage,
+        glassesVolume: glassesVolume ?? this.glassesVolume,
       );
 
   @override
