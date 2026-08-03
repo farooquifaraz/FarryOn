@@ -318,9 +318,13 @@ class LiveController {
     try {
       await bridge.disconnect();
       final hits = await bridge.scan(timeout: const Duration(seconds: 6));
+      // rssi == 0 means "never heard" (bonded fold-in), not "excellent
+      // signal" — rank those LAST or the sheet lists a powered-off unit
+      // above the live one (device-seen 2026-08-03).
+      int eff(GlassesDeviceHit h) => h.rssi == 0 ? -1000 : h.rssi;
       final sorted = [...hits]..sort((a, b) {
           if (a.connected != b.connected) return a.connected ? -1 : 1;
-          return b.rssi.compareTo(a.rssi);
+          return eff(b).compareTo(eff(a));
         });
       return sorted;
     } catch (e) {
