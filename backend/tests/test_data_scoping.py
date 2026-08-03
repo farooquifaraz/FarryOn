@@ -12,12 +12,25 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.db import repo
 from app.db.base import get_sessionmaker
 from app.main import create_app
 from tests.test_ws_live import _handshake
+
+
+@pytest.fixture
+def dev_auth_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the DEFAULT jwt secret for tests that assert the dev-mode
+    anonymous fallback. The dev .env now carries a real secret (auth
+    enforced on the WS handshake), so these tests must not inherit the
+    developer's environment."""
+    monkeypatch.setattr(
+        get_settings(), "jwt_secret", "dev-insecure-change-me"
+    )
 
 
 def _client() -> TestClient:
@@ -113,9 +126,11 @@ def test_ws_session_belongs_to_the_token_holder() -> None:
         assert asyncio.run(_owner_of_session()) == alice_id
 
 
-def test_ws_session_without_a_token_falls_back_to_anonymous() -> None:
+def test_ws_session_without_a_token_falls_back_to_anonymous(
+    dev_auth_mode: None,
+) -> None:
     # Local runs connect with no token and must still work. Production closes
-    # this door instead (settings.auth_enabled), which is not on in tests.
+    # this door instead (settings.auth_enabled).
     with _client() as client:
         with client.websocket_connect("/ws/live") as ws:
             session_id = _handshake(ws)["sessionId"]
@@ -129,7 +144,9 @@ def test_ws_session_without_a_token_falls_back_to_anonymous() -> None:
         assert asyncio.run(_is_anon())
 
 
-def test_ws_ignores_a_refresh_token_used_as_an_access_token() -> None:
+def test_ws_ignores_a_refresh_token_used_as_an_access_token(
+    dev_auth_mode: None,
+) -> None:
     # The old hand-rolled check only verified the signature, so a refresh token
     # — which we sign with the same secret — passed as proof of identity.
     with _client() as client:
@@ -233,7 +250,9 @@ def test_each_user_sees_only_their_own_tasks() -> None:
         assert [t["title"] for t in r.json()] == ["alice's task"]
 
 
-def test_signed_out_caller_sees_neither_users_data() -> None:
+def test_signed_out_caller_sees_neither_users_data(
+    dev_auth_mode: None,
+) -> None:
     # No header resolves to the anonymous user (auth is not enforced in tests,
     # matching a local run). That user owns nothing, so the reply is empty
     # rather than everybody's rows.

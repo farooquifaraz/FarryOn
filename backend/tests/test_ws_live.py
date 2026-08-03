@@ -9,10 +9,23 @@ from __future__ import annotations
 
 import struct
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import create_app
 from app.ws.frames import HEADER_SIZE, FrameTag, decode_frame, encode_frame
+
+
+@pytest.fixture(autouse=True)
+def _dev_auth_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test here connects token-less and expects the dev-mode anonymous
+    fallback. The dev .env now carries a real secret (WS auth enforced), so
+    pin the DEFAULT secret for this module instead of inheriting the
+    developer's environment."""
+    monkeypatch.setattr(
+        get_settings(), "jwt_secret", "dev-insecure-change-me"
+    )
 
 
 def _collect_until(ws, predicate, *, limit: int = 60):
