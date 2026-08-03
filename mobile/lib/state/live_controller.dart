@@ -257,19 +257,41 @@ class LiveController {
     Future<void>.delayed(const Duration(seconds: 12), () async {
       if (_state.glassesConnected) return; // direct connect worked
       _log.info('connect_glasses: $triedMac did not connect — scan fallback');
-      await _scanAndConnectBest(bridge, triedMac);
+      // The native connect-serialization guard holds isConnecting for the
+      // whole ~60 s watchdog window and SKIPS scans while it does — so this
+      // fallback silently never scanned (broken since the guard landed
+      // 2026-07-11). Disconnect first to free the guard; connect() re-arms
+      // the auto-reconnect latch afterwards.
+      try {
+        await bridge.disconnect();
+      } catch (e) {
+        _log.warn('scan fallback disconnect failed: $e');
+      }
+      final attempted = await _scanAndConnectBest(bridge, triedMac);
+      if (!attempted) {
+        // Nothing found: re-issue the saved-MAC connect so the vendor SDK's
+        // own reconnect (setReConnectMac + setNeedConnect) stays armed —
+        // the disconnect above would otherwise leave auto-reconnect latched
+        // off until the next manual connect.
+        try {
+          await bridge.connect(triedMac);
+        } catch (e) {
+          _log.warn('scan fallback re-arm failed: $e');
+        }
+      }
     });
   }
 
   /// Scan and connect the best-available glasses: powered-on-now wins, then a
   /// live BLE advertiser, then anything we saw. [skipMac] is the unit we just
-  /// failed to reach (avoid retrying the dead one first).
-  Future<void> _scanAndConnectBest(
+  /// failed to reach (avoid retrying the dead one first). Returns whether a
+  /// connect was actually issued (false = nothing found).
+  Future<bool> _scanAndConnectBest(
       GlassesBridgeApi bridge, String? skipMac) async {
     final hits = await bridge.scan(timeout: const Duration(seconds: 6));
     if (hits.isEmpty) {
       _log.warn('connect_glasses: no glasses found — turn them on');
-      return;
+      return false;
     }
     final live = hits.where((h) => h.connected && h.mac != skipMac).toList();
     final advertising =
@@ -281,6 +303,7 @@ class LiveController {
             : hits.first.mac;
     _log.info('connect_glasses → $mac (from scan)');
     await bridge.connect(mac);
+    return true;
   }
 
   /// Glasses-card connect flow, step 1: clean slate + scan. The disconnect

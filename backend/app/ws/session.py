@@ -158,11 +158,17 @@ class Session:
             # local time so reminders resolve in their timezone.
             client_time = (self._hello or {}).get("clientTime")
             languages = (self._hello or {}).get("languages")
+            # Cap what goes into the prompt: two names, short, non-empty —
+            # hello is client-supplied and this string lands verbatim in the
+            # system instruction.
+            langs = None
+            if isinstance(languages, list):
+                langs = [
+                    str(l).strip()[:30] for l in languages[:2] if str(l).strip()
+                ] or None
             prompt = build_system_prompt(
                 client_time if isinstance(client_time, str) else None,
-                languages=[str(l) for l in languages]
-                if isinstance(languages, list) and languages
-                else None,
+                languages=langs,
             )
             self._gateway = self._gateway_factory(
                 self._resolve_provider(), prompt

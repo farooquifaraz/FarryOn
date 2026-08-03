@@ -309,7 +309,8 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                     // pairs are found) / disconnects.
                     _GlassesPill(
                       state: state,
-                      onConnect: () => runGlassesConnectFlow(context, ref),
+                      onConnect: () async =>
+                          runGlassesConnectFlow(context, ref),
                       onDisconnect: notifier.disconnectGlasses,
                     ),
                   ],
@@ -504,7 +505,10 @@ class _GlassesPill extends StatefulWidget {
   });
 
   final LiveSessionState state;
-  final Future<void> Function() onConnect;
+
+  /// Runs the connect flow; resolves true when a connect was issued, false
+  /// when the user cancelled / nothing was found (drop "Connecting…" now).
+  final Future<bool> Function() onConnect;
   final Future<void> Function() onDisconnect;
 
   @override
@@ -571,7 +575,13 @@ class _GlassesPillState extends State<_GlassesPill> {
         setState(() => _connecting = false);
       }
     });
-    await widget.onConnect();
+    final issued = await widget.onConnect();
+    // Cancelled sheet / nothing found: don't show a 25s phantom
+    // "Connecting…" — nothing is connecting.
+    if (!issued && mounted && !widget.state.glassesConnected) {
+      _connectingTimeout?.cancel();
+      setState(() => _connecting = false);
+    }
   }
 
   @override

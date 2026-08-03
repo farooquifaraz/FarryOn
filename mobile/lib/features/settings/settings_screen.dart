@@ -601,7 +601,12 @@ class _LanguagesPageState extends ConsumerState<_LanguagesPage> {
               _SelectPill(
                 label: l,
                 selected: _primary == l,
-                onTap: () => setState(() => _primary = l),
+                // Picking the language the OTHER slot holds swaps them —
+                // primary == secondary would make the tie-breakers circular.
+                onTap: () => setState(() {
+                  if (_secondary == l) _secondary = _primary;
+                  _primary = l;
+                }),
               ),
           ],
         ),
@@ -616,7 +621,10 @@ class _LanguagesPageState extends ConsumerState<_LanguagesPage> {
               _SelectPill(
                 label: l,
                 selected: _secondary == l,
-                onTap: () => setState(() => _secondary = l),
+                onTap: () => setState(() {
+                  if (_primary == l) _primary = _secondary;
+                  _secondary = l;
+                }),
               ),
           ],
         ),
