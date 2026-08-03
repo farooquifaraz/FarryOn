@@ -191,6 +191,10 @@ class OpenAIRealtimeGateway(AIGateway):
         self._item_transcripts: dict[str, str] = {}
         self._pending_response_task: asyncio.Task[None] | None = None
         self._last_user_words = ""
+        # TTFA instrumentation: when the user's audio turn was committed, and
+        # how long the language-pin wait consumed of the response delay.
+        self._turn_committed_at = 0.0
+        self._pin_wait_ms = 0
 
     def set_camera_kind(self, kind: str | None) -> None:
         """Size the frame-freshness window to the active camera.
@@ -389,6 +393,18 @@ class OpenAIRealtimeGateway(AIGateway):
         if etype in ("response.output_audio.delta", "response.audio.delta"):
             if not self._audio_open:
                 self._audio_open = True
+                # TTFA: mic-commit → first audible byte, the number the user
+                # feels. pin_wait is how much of it the language-pin wait
+                # spent — the knob to tune if TTFA creeps.
+                if self._turn_committed_at > 0:
+                    logger.info(
+                        "openai.ttfa",
+                        ttfa_ms=int(
+                            (time.monotonic() - self._turn_committed_at) * 1000
+                        ),
+                        pin_wait_ms=self._pin_wait_ms,
+                    )
+                    self._turn_committed_at = 0.0
                 await self._queue.put(AudioStartEvent())
             pcm = base64.b64decode(getattr(event, "delta", "") or "")
             if pcm:
@@ -424,6 +440,7 @@ class OpenAIRealtimeGateway(AIGateway):
             # transcript so the reply language can be pinned to the user's
             # actual words, and that transcript arrives through THIS receive
             # loop — awaiting inline would deadlock into the timeout.
+            self._turn_committed_at = time.monotonic()
             if (
                 self._pending_response_task is not None
                 and not self._pending_response_task.done()
@@ -590,6 +607,7 @@ class OpenAIRealtimeGateway(AIGateway):
         half a sentence identifies a language just fine; only with nothing
         at all do we answer unpinned rather than stall.
         """
+        wait_started = time.monotonic()
         words = ""
         if item_id:
             for _ in range(int(timeout / 0.05)):
@@ -597,6 +615,7 @@ class OpenAIRealtimeGateway(AIGateway):
                     break
                 await asyncio.sleep(0.05)
             words = self._item_transcripts.pop(item_id, "")
+        self._pin_wait_ms = int((time.monotonic() - wait_started) * 1000)
         partial = False
         if not words and self._user_buf:
             words = self._user_buf

@@ -14,6 +14,7 @@ fields (``server_content`` for audio/text, ``tool_call`` for function calls).
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -104,6 +105,11 @@ class GeminiGateway(AIGateway):
         # Cumulative billed tokens this session (from usage_metadata), for the
         # cost-visibility log.
         self._tokens_total = 0
+        # TTFA approximation: Gemini exposes no commit/VAD event, so measure
+        # from the LAST input-transcription delta (≈ end of user speech) to
+        # the first audio byte of the reply. Slightly optimistic, but stable
+        # enough to compare tuning changes against.
+        self._last_user_tx_at = 0.0
 
     def _build_config(self) -> Any:
         """Construct the ``LiveConnectConfig`` with tools + system prompt."""
@@ -326,6 +332,18 @@ class GeminiGateway(AIGateway):
                     if inline is not None and getattr(inline, "data", None):
                         if not self._audio_open:
                             self._audio_open = True
+                            if self._last_user_tx_at > 0:
+                                logger.info(
+                                    "gemini.ttfa_approx",
+                                    ttfa_ms=int(
+                                        (
+                                            time.monotonic()
+                                            - self._last_user_tx_at
+                                        )
+                                        * 1000
+                                    ),
+                                )
+                                self._last_user_tx_at = 0.0
                             await self._queue.put(AudioStartEvent())
                         await self._queue.put(AudioChunkEvent(pcm=inline.data))
                     # ``part.text`` here is the model's private reasoning, not
@@ -336,6 +354,7 @@ class GeminiGateway(AIGateway):
             in_tx = getattr(server_content, "input_transcription", None)
             in_text = getattr(in_tx, "text", None) if in_tx else None
             if in_text:
+                self._last_user_tx_at = time.monotonic()
                 self._user_buf += in_text
                 await self._queue.put(
                     TranscriptEvent(
