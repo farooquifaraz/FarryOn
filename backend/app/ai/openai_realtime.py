@@ -174,6 +174,9 @@ class OpenAIRealtimeGateway(AIGateway):
         # create_response=false / input_image, so it stays on auto-response and
         # its voice path is left exactly as-is (no regression).
         self._vision_items = self.provider == "openai"
+        # With vision items we attach the frame per turn ourselves, so the
+        # session's frame heartbeat is pure waste (see base.AIGateway).
+        self.attaches_frame_per_turn = self._vision_items
         # Reply-language pinning. gpt-realtime picks the reply language from
         # the AUDIO conversation context and gets sticky — an English question
         # after Arabic turns got an Arabic answer (device-seen 2026-07-30),

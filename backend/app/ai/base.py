@@ -76,6 +76,14 @@ class AIGateway(abc.ABC):
     #: field hints and logs. Subclasses should set this.
     provider: str = "abstract"
 
+    #: True when the adapter attaches the latest camera frame ITSELF on each
+    #: real user turn (OpenAI Realtime). The session then skips its periodic
+    #: frame heartbeat entirely: the heartbeat exists only for streaming
+    #: adapters that cannot pull a frame at turn time, and on this path it
+    #: merely re-bills images and hands the model a live view of the user it
+    #: was never asked about ("resting your hand near your face", 2026-08-05).
+    attaches_frame_per_turn: bool = False
+
     def __init__(
         self,
         *,

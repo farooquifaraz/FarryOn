@@ -7,7 +7,12 @@ import 'logger.dart';
 
 /// One saved conversation: when it happened and its transcript lines.
 class ChatSession {
-  const ChatSession({required this.startedAt, required this.lines});
+  ChatSession({String? id, required this.startedAt, required this.lines})
+      : id = id ?? startedAt.microsecondsSinceEpoch.toString();
+
+  /// Stable id, so the periodic autosaves of a LIVE session update this same
+  /// entry instead of piling up copies.
+  final String id;
 
   /// Local time the conversation was saved.
   final DateTime startedAt;
@@ -23,6 +28,7 @@ class ChatSession {
   }
 
   Map<String, dynamic> toJson() => {
+        'id': id,
         'startedAt': startedAt.toIso8601String(),
         'lines': [
           for (final l in lines) {'role': l.role, 'text': l.text},
@@ -30,6 +36,7 @@ class ChatSession {
       };
 
   static ChatSession fromJson(Map<String, dynamic> j) => ChatSession(
+        id: j['id'] as String?,
         startedAt:
             DateTime.tryParse(j['startedAt'] as String? ?? '') ?? DateTime.now(),
         lines: [
@@ -51,8 +58,22 @@ class ChatHistoryStore {
   static const _key = 'chat.history.v1';
   static const _maxSessions = 30;
 
+  /// Id of the conversation currently being written, so repeated saves of a
+  /// LIVE session replace its entry instead of appending duplicates.
+  static String? _openId;
+
+  /// Start a new conversation entry. Call when a live session begins; the
+  /// autosaves that follow all fold into this one entry.
+  static void beginSession() => _openId = null;
+
   /// Save the given transcript as a conversation. No-op for trivial chats
   /// (fewer than 2 lines) so accidental taps don't clutter history.
+  ///
+  /// Called both periodically DURING a session and at teardown: saving only
+  /// on a clean disconnect lost every conversation where the app was killed,
+  /// the network dropped, or the session expired (user-reported 2026-08-05:
+  /// "this conversation is not in the conversation cards"). Re-saving updates
+  /// the same entry via [_openId].
   static Future<void> saveSession(List<TranscriptEntry> transcripts) async {
     final lines = [
       for (final t in transcripts)
@@ -61,8 +82,23 @@ class ChatHistoryStore {
     if (lines.length < 2) return;
     try {
       final p = await SharedPreferences.getInstance();
-      final sessions = _read(p)
-        ..insert(0, ChatSession(startedAt: DateTime.now(), lines: lines));
+      final sessions = _read(p);
+      final openId = _openId;
+      final existing =
+          openId == null ? -1 : sessions.indexWhere((s) => s.id == openId);
+      if (existing >= 0) {
+        // Same live session: replace in place, keeping its original start time
+        // (and its position, so an updating chat doesn't jump around).
+        sessions[existing] = ChatSession(
+          id: openId!,
+          startedAt: sessions[existing].startedAt,
+          lines: lines,
+        );
+      } else {
+        final entry = ChatSession(startedAt: DateTime.now(), lines: lines);
+        _openId = entry.id;
+        sessions.insert(0, entry);
+      }
       while (sessions.length > _maxSessions) {
         sessions.removeLast();
       }

@@ -605,6 +605,12 @@ class Session:
 
     def _should_forward_frame(self, now: float) -> bool:
         """Whether the cost gate lets this video frame through to the model."""
+        # Adapters that attach the frame themselves on each real turn need no
+        # heartbeat — see AIGateway.attaches_frame_per_turn.
+        if self._gateway is not None and getattr(
+            self._gateway, "attaches_frame_per_turn", False
+        ):
+            return False
         mode = self._settings.vision_frame_mode
         if mode == "off":
             return False

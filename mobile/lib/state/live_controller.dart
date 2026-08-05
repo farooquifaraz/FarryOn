@@ -613,8 +613,11 @@ class LiveController {
 
   /// Tear down capture, playback, and the socket (keeps objects reusable).
   Future<void> disconnect() async {
-    // Persist the conversation before tearing down so the user can revisit it.
-    unawaited(ChatHistoryStore.saveSession(_state.transcripts));
+    // Final save (autosaves already ran during the session), then let the
+    // NEXT session open its own history entry.
+    _historySaveTimer?.cancel();
+    unawaited(ChatHistoryStore.saveSession(_state.transcripts)
+        .then((_) => ChatHistoryStore.beginSession()));
     // Drop any resolved numbers held for this session (privacy hygiene).
     _contactNumbers.clear();
     await _stopAudio();
@@ -808,6 +811,22 @@ class LiveController {
       list.removeRange(0, list.length - _maxTranscripts);
     }
     _emit(_state.copyWith(transcripts: list));
+    // Autosave on every FINAL line: saving only at disconnect() lost the whole
+    // conversation whenever the app was killed, the network dropped, or the
+    // session expired (user-reported 2026-08-05). Debounced, and folded into
+    // one history entry per live session by ChatHistoryStore.
+    if (msg.isFinal) _scheduleHistorySave();
+  }
+
+  Timer? _historySaveTimer;
+
+  /// Persist the running conversation shortly after the last final line —
+  /// debounced so a fast exchange writes prefs once, not per line.
+  void _scheduleHistorySave() {
+    _historySaveTimer?.cancel();
+    _historySaveTimer = Timer(const Duration(seconds: 3), () {
+      unawaited(ChatHistoryStore.saveSession(_state.transcripts));
+    });
   }
 
   // ---- Global transcript guard (provider-agnostic) -----------------------
@@ -1625,6 +1644,7 @@ class LiveController {
   // ---- Disposal ----------------------------------------------------------
 
   Future<void> dispose() async {
+    _historySaveTimer?.cancel();
     await ChatHistoryStore.saveSession(_state.transcripts);
     _ttsClear?.cancel();
     _userLogTimer?.cancel();
