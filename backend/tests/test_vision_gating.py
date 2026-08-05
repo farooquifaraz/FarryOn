@@ -133,7 +133,11 @@ async def test_frame_counters_track_received_and_sent(monkeypatch):
 
 
 async def test_typed_turn_attaches_fresh_frame(monkeypatch):
-    settings = Settings(vision_frame_mode="off")  # even with streaming off
+    # Per-turn frames only run when the operator opts out of on-demand vision;
+    # by default sight reaches the model through identify_image/capture_photo.
+    settings = Settings(
+        vision_frame_mode="off", vision_on_demand_only=False
+    )  # even with streaming off
     sess, gw = _make_session(settings)
     sess._orchestrator.last_frame = b"cam"
     sess._orchestrator.last_frame_at = 1000.0
@@ -143,10 +147,25 @@ async def test_typed_turn_attaches_fresh_frame(monkeypatch):
 
 
 async def test_typed_turn_skips_stale_frame(monkeypatch):
-    settings = Settings(vision_frame_mode="off")
+    settings = Settings(vision_frame_mode="off", vision_on_demand_only=False)
     sess, gw = _make_session(settings)
     sess._orchestrator.last_frame = b"cam"
     sess._orchestrator.last_frame_at = 1000.0
     _clock(monkeypatch, [1020.0])   # 20s later — camera likely off
+    await sess._attach_frame_if_fresh()
+    assert gw.videos == []
+
+
+async def test_on_demand_only_withholds_the_typed_turn_frame(monkeypatch):
+    """The default: a typed turn carries NO frame.
+
+    The user asked that the camera reach the model only when they ask about
+    what is seen (2026-08-05) — vision then arrives via identify_image /
+    capture_photo, which read the same cached frame.
+    """
+    sess, gw = _make_session(Settings())  # vision_on_demand_only defaults True
+    sess._orchestrator.last_frame = b"cam"
+    sess._orchestrator.last_frame_at = 1000.0
+    _clock(monkeypatch, [1000.0, 1000.0])
     await sess._attach_frame_if_fresh()
     assert gw.videos == []

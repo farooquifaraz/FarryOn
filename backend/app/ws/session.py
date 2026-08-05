@@ -652,6 +652,10 @@ class Session:
         """
         if self._gateway is None or self._orchestrator is None:
             return
+        if self._settings.vision_on_demand_only:
+            # Same rule as spoken turns: sight arrives via identify_image /
+            # capture_photo when the user asks about it, never by default.
+            return
         frame = self._orchestrator.last_frame
         if frame is None:
             return

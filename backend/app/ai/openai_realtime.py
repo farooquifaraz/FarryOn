@@ -564,6 +564,14 @@ class OpenAIRealtimeGateway(AIGateway):
     async def _attach_latest_frame(self) -> None:
         """Add the most recent camera frame to the conversation, if fresh.
 
+        DISABLED by default (``vision_on_demand_only``): the user asked that
+        the camera reach the model only when they actually ask about what is
+        seen. Attaching on every spoken turn meant a ~70 KB image per "hmm"
+        and a model that volunteered descriptions of the user
+        ("resting your hand near your face", 2026-08-05). With this on, sight
+        arrives through the identify_image / capture_photo tools — which the
+        model calls when the request is about seeing.
+
         "Fresh" is ``self._frame_max_age`` — short for a streaming phone camera
         (a stale image from before the camera was lowered is never sent) and
         widened for photo-trigger glasses whose still arrives seconds late.
@@ -574,6 +582,8 @@ class OpenAIRealtimeGateway(AIGateway):
         vision goes through the capture_photo / identify_image tool instead,
         which fetches a live still (and reports "glasses not connected" on fail).
         """
+        if get_settings().vision_on_demand_only:
+            return
         if self._camera_is_glasses:
             return
         if self._conn is None or not self._latest_frame_b64:

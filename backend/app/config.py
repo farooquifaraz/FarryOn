@@ -83,6 +83,14 @@ class Settings(BaseSettings):
     vision_frame_mode: Literal["continuous", "on_turn", "off"] = Field(
         default="on_turn"
     )
+    # ON-DEMAND VISION (user's rule, 2026-08-05): the camera reaches the model
+    # ONLY when the user asks about what is seen — i.e. through the
+    # identify_image / capture_photo tools. No frame rides along with an
+    # ordinary spoken or typed turn. Costs ~1 s on "what is this?" (the tool
+    # round-trip) and buys: no image per "hmm", and no unprompted commentary
+    # about the user ("resting your hand near your face"). Set false to go
+    # back to attaching the latest frame on every turn.
+    vision_on_demand_only: bool = Field(default=True)
     # Minimum seconds between two frames forwarded in "continuous" mode.
     vision_frame_min_interval_s: float = Field(default=2.0)
     # Minimum seconds between two frames forwarded in "on_turn" mode — larger,

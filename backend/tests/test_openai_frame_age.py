@@ -28,6 +28,17 @@ def _gateway() -> OpenAIRealtimeGateway:
     )
 
 
+@pytest.fixture
+def per_turn_frames(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt this module's attach tests back into per-turn frame attaching.
+
+    Vision is on-demand-only by default now (frames reach the model through
+    identify_image / capture_photo), but the freshness-window and purge logic
+    below is what still runs when an operator turns per-turn frames back on.
+    """
+    monkeypatch.setattr(get_settings(), "vision_on_demand_only", False)
+
+
 class _RecordingConn:
     """Minimal stand-in for the Realtime connection that records item events."""
 
@@ -69,7 +80,7 @@ def test_set_camera_kind_widens_for_glasses() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fresh_phone_frame_is_attached(monkeypatch) -> None:
+async def test_fresh_phone_frame_is_attached(monkeypatch, per_turn_frames) -> None:
     """A fresh phone-camera frame is attached inline (streaming live vision)."""
     now = [1000.0]
     monkeypatch.setattr(openai_realtime.time, "monotonic", lambda: now[0])
@@ -109,7 +120,7 @@ async def test_glasses_frame_is_not_attached_inline(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_switch_to_glasses_purges_stale_frames(monkeypatch) -> None:
+async def test_switch_to_glasses_purges_stale_frames(monkeypatch, per_turn_frames) -> None:
     """Switching to glasses deletes already-attached phone frames + the cache,
     so the model can't keep 'seeing' a stale streamed image from history."""
     now = [1000.0]
