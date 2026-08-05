@@ -301,6 +301,12 @@ class OpenAIRealtimeGateway(AIGateway):
                     # reply — we create it after attaching the current camera
                     # frame (vision parity with Gemini). Other providers keep
                     # the default server auto-response.
+                    # Server-side denoising BEFORE the VAD/transcriber sees the
+                    # audio. Phantom turns survived the client-side AEC switch
+                    # (2026-08-05: five noise turns in 95 s, Whisper minting
+                    # 3-17-char junk from room sound) — near_field matches a
+                    # phone held/worn close.
+                    "noise_reduction": {"type": "near_field"},
                     "turn_detection": (
                         {
                             "type": "server_vad",
@@ -308,11 +314,13 @@ class OpenAIRealtimeGateway(AIGateway):
                             # room noise, or the assistant's own echo tail
                             # doesn't get committed as a phantom user turn (seen
                             # in real logs: AI answering itself / Whisper
-                            # hallucinating "subscribe…" on non-speech). Needs a
-                            # slightly clearer pause to end a turn, too.
-                            "threshold": 0.6,
+                            # hallucinating "subscribe…" on non-speech). Raised
+                            # 0.6 → 0.7 after the 2026-08-05 phantom run; the
+                            # VOICE_COMMUNICATION mic + noise_reduction feed it
+                            # cleaner audio, so real speech still clears it.
+                            "threshold": 0.7,
                             "prefix_padding_ms": 300,
-                            "silence_duration_ms": 600,
+                            "silence_duration_ms": 700,
                             "create_response": False,
                             "interrupt_response": True,
                         }
