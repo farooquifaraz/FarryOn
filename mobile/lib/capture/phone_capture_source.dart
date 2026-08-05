@@ -144,9 +144,14 @@ class PhoneCaptureSource implements CaptureSource {
       codec: Codec.pcm16,
       numChannels: AudioFormat.channels,
       sampleRate: AudioFormat.micSampleRate, // 16 kHz
-      // OS-level voice processing (acoustic echo cancellation + noise
-      // suppression) so the mic doesn't pick up the assistant's own TTS —
-      // essential for the hands-free, always-listening experience.
+      // Hardware echo cancellation + noise suppression, per platform:
+      // - Android: `enableVoiceProcessing` is a NO-OP — the lever is the
+      //   VOICE_COMMUNICATION audio source (below). Without it the default
+      //   MIC source fed the assistant's own speaker audio back into the
+      //   turn detector, and the AI answered itself/room noise (phantom
+      //   turns, device-confirmed 2026-08-05).
+      // - iOS: `enableVoiceProcessing` engages VoiceProcessingIO.
+      audioSource: AudioSource.voice_communication,
       enableVoiceProcessing: true,
     );
     _audioRunning = true;

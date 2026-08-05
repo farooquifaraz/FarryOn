@@ -608,14 +608,26 @@ class OpenAIRealtimeGateway(AIGateway):
         at all do we answer unpinned rather than stall.
         """
         wait_started = time.monotonic()
-        words = ""
+        words: str | None = None
         if item_id:
             for _ in range(int(timeout / 0.05)):
                 if item_id in self._item_transcripts:
                     break
                 await asyncio.sleep(0.05)
-            words = self._item_transcripts.pop(item_id, "")
+            words = self._item_transcripts.pop(item_id, None)
         self._pin_wait_ms = int((time.monotonic() - wait_started) * 1000)
+        if words is not None and not words.strip():
+            # Whisper HEARD the committed audio and transcribed nothing —
+            # the VAD fired on room noise or our own speaker echo. Answering
+            # would be the model talking to nobody (device-confirmed
+            # 2026-08-05: "kuch response apne aap aa rahe the"), and each
+            # phantom costs a ~70 KB frame plus tokens. Skip the response;
+            # a real utterance virtually always transcribes to SOMETHING.
+            # (words is None = transcript merely LATE → still respond.)
+            logger.info("openai.phantom_turn_skipped", item_id=item_id)
+            self._turn_committed_at = 0.0
+            return
+        words = words or ""
         partial = False
         if not words and self._user_buf:
             words = self._user_buf
