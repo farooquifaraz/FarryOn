@@ -25,6 +25,29 @@ class PcmPlayer {
   bool _opened = false;
   bool _streaming = false;
 
+  /// When the audio fed so far will have finished playing.
+  ///
+  /// The echo guard needs a lower bound on "the speaker is still talking" that
+  /// CANNOT under-run — an early unmute lets the assistant's own voice back
+  /// into the mic and it answers itself (device-proven 2026-08-05: the chat
+  /// showed 'You: I'm not afraid to ask anything, no' seconds after Farry said
+  /// 'feel free to ask me anything'). Every fed chunk pushes this deadline out
+  /// by its own duration, starting from whichever is later: now, or the
+  /// deadline already pending. So bursts, restarts, and multiple audio_start
+  /// events per turn all accumulate correctly instead of resetting a guess.
+  DateTime? _drainUntil;
+
+  /// Bytes per second of playback: 24 kHz × 16-bit mono.
+  static const int _bytesPerSecond = AudioFormat.ttsSampleRate * 2;
+
+  /// True while fed audio should still be coming out of the speaker, plus
+  /// [tail] for the speaker's decay and the room's ring-down.
+  bool isPlayingWithin(Duration tail) {
+    final until = _drainUntil;
+    if (until == null) return false;
+    return DateTime.now().isBefore(until.add(tail));
+  }
+
   /// Prepare the audio engine. Idempotent; call before [start].
   Future<void> initialize() async {
     if (_opened) return;
@@ -60,6 +83,14 @@ class PcmPlayer {
   /// OUTPUT_AUDIO payloads without sequencing [start] themselves.
   Future<void> feed(Uint8List pcm16) async {
     if (pcm16.isEmpty) return;
+    // Extend the drain deadline BEFORE awaiting the feed: the guard must know
+    // this audio is coming even while backpressure holds the write.
+    final now = DateTime.now();
+    final base =
+        (_drainUntil != null && _drainUntil!.isAfter(now)) ? _drainUntil! : now;
+    _drainUntil = base.add(
+      Duration(microseconds: pcm16.length * 1000000 ~/ _bytesPerSecond),
+    );
     if (!_streaming) await start();
     // `feedUint8FromStream` applies backpressure internally; awaiting it keeps
     // memory bounded if the network outruns the speaker.
@@ -73,6 +104,7 @@ class PcmPlayer {
   Future<void> flush() async {
     if (!_opened) return;
     _log.info('flush (barge-in)');
+    _drainUntil = null; // queued audio is dropped — nothing left to play out
     if (_streaming) {
       try {
         await _player.stopPlayer();
@@ -89,6 +121,7 @@ class PcmPlayer {
   /// Stop playback entirely (e.g. session ended). Keeps the engine open so it
   /// can be [start]ed again cheaply.
   Future<void> stop() async {
+    _drainUntil = null;
     if (_streaming) {
       try {
         await _player.stopPlayer();

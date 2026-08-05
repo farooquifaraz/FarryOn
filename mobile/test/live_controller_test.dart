@@ -73,10 +73,19 @@ class FakePcmPlayer implements PcmPlayer {
   final fed = <Uint8List>[];
   int flushCount = 0;
 
+  /// Drives the controller's echo guard: true = "the speaker is still busy".
+  bool playing = false;
+
+  @override
+  bool isPlayingWithin(Duration tail) => playing;
+
   @override
   Future<void> feed(Uint8List pcm16) async => fed.add(pcm16);
   @override
-  Future<void> flush() async => flushCount++;
+  Future<void> flush() async {
+    flushCount++;
+    playing = false;
+  }
   @override
   Future<void> initialize() async {}
   @override
@@ -234,6 +243,34 @@ void main() {
         .whereType<String>()
         .any((s) => s.contains('"type":"audio_start"'));
     expect(hasAudioStart, isTrue);
+  });
+
+  test('mic is muted while the speaker is still playing (echo guard)',
+      () async {
+    // The assistant's own voice reaching the mic gets transcribed as a user
+    // turn and answered — a self-talk loop the user hit on 2026-08-05. The
+    // player's drain clock, not a timer, decides when it is safe to listen.
+    await controller.connect();
+    await tick();
+    await controller.startListening();
+    await tick();
+
+    List<Uint8List> micFrames() => fake.sentLog
+        .whereType<Uint8List>()
+        .map(MediaFrame.decode)
+        .where((f) => f.tag == FrameTag.inputAudio)
+        .map((f) => f.payload)
+        .toList();
+
+    player.playing = true; // speaker busy (or still draining)
+    source.audioCtl.add(Uint8List.fromList([9, 9]));
+    await tick();
+    expect(micFrames(), isEmpty, reason: 'mic must stay shut while speaking');
+
+    player.playing = false; // drained + tail elapsed
+    source.audioCtl.add(Uint8List.fromList([7, 7]));
+    await tick();
+    expect(micFrames().last, equals(Uint8List.fromList([7, 7])));
   });
 
   test('OUTPUT_AUDIO frames are fed to the player', () async {

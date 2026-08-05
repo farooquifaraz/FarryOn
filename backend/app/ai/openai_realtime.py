@@ -25,6 +25,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from app.ai.base import AIGateway, ToolSpec
+from app.ai.echo_guard import looks_like_echo
 from app.ai.events import (
     AudioChunkEvent,
     AudioEndEvent,
@@ -198,6 +199,9 @@ class OpenAIRealtimeGateway(AIGateway):
         # how long the language-pin wait consumed of the response delay.
         self._turn_committed_at = 0.0
         self._pin_wait_ms = 0
+        # The assistant's last few spoken lines, newest first — the reference
+        # the echo guard compares an incoming 'user' turn against.
+        self._recent_assistant_texts: list[str] = []
 
     def set_camera_kind(self, kind: str | None) -> None:
         """Size the frame-freshness window to the active camera.
@@ -523,6 +527,10 @@ class OpenAIRealtimeGateway(AIGateway):
                         final=True,
                     )
                 )
+                # Keep the last few lines as the echo guard's reference. Two
+                # is enough: an echo arrives within seconds of being spoken.
+                self._recent_assistant_texts.insert(0, self._assistant_buf)
+                del self._recent_assistant_texts[2:]
                 self._assistant_buf = ""
             await self._queue.put(TurnCompleteEvent())
 
@@ -649,6 +657,13 @@ class OpenAIRealtimeGateway(AIGateway):
             self._turn_committed_at = 0.0
             return
         words = words or ""
+        if words and looks_like_echo(words, self._recent_assistant_texts):
+            # The assistant's own voice came back through the mic (see
+            # echo_guard). Answering it starts a self-talk loop — the exact
+            # spiral the user reported on 2026-08-05.
+            logger.info("openai.echo_turn_skipped", chars=len(words))
+            self._turn_committed_at = 0.0
+            return
         # Tiny fragments ("Oh", "Eva.", a lone "haan") are usually Whisper
         # minting words from a noise blip — but they can also be a REAL
         # confirmation ("yes" to send an email), so they must still get a

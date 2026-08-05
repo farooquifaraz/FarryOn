@@ -147,6 +147,9 @@ class LiveController {
   // gone, while staying far snappier than the old 1.2 s.
   static const int _ttsTailMarginMs = 800;
 
+  /// [_ttsTailMarginMs] as a Duration, for the player's drain check.
+  static const Duration _ttsTail = Duration(milliseconds: _ttsTailMarginMs);
+
   // ---- Observable state --------------------------------------------------
 
   final _stateController =
@@ -1382,10 +1385,16 @@ class LiveController {
     await _audioSource.startAudio();
     await _audioSub?.cancel();
     _audioSub = _audioSource.audio16k.listen((pcm) {
-      // Half-duplex: never feed the mic while the assistant's TTS is still
-      // playing out (covers the player's buffer drain after audio_end), so
-      // automatic VAD can't re-trigger on its own voice.
-      if (_ttsActive) return;
+      // Half-duplex echo guard. Two independent conditions, either of which
+      // keeps the mic shut:
+      //   * _ttsActive — the server says this turn is still speaking;
+      //   * the player's own drain clock — audio fed but not yet played out,
+      //     plus a tail for speaker decay / room ring-down.
+      // The clock is authoritative: the old timer-only version under-ran
+      // whenever playback started later than the first byte or a turn emitted
+      // several audio_starts, and the assistant's voice leaked back in as a
+      // bogus user turn (device-proven 2026-08-05).
+      if (_ttsActive || _player.isPlayingWithin(_ttsTail)) return;
       _client.sendAudio(pcm);
     });
   }
