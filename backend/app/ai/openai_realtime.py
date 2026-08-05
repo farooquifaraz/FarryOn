@@ -657,7 +657,16 @@ class OpenAIRealtimeGateway(AIGateway):
             self._turn_committed_at = 0.0
             return
         words = words or ""
-        if words and looks_like_echo(words, self._recent_assistant_texts):
+        # The line still being spoken counts too: its echo arrives BEFORE
+        # response.done files it into _recent_assistant_texts (device-proven
+        # 2026-08-05 — "Write what you need and help." slipped through while
+        # Farry was still saying "Let me know if you need any help").
+        recent = (
+            [self._assistant_buf, *self._recent_assistant_texts]
+            if self._assistant_buf
+            else self._recent_assistant_texts
+        )
+        if words and looks_like_echo(words, recent):
             # The assistant's own voice came back through the mic (see
             # echo_guard). Answering it starts a self-talk loop — the exact
             # spiral the user reported on 2026-08-05.

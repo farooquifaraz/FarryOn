@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../capture/capture_source.dart';
 import '../capture/device_registry.dart';
 import '../capture/glasses_capture_source.dart';
+import '../capture/mic_gate.dart';
 import '../core/cache_patch.dart';
 import '../core/chat_history.dart';
 import '../core/config.dart';
@@ -126,6 +127,10 @@ class LiveController {
   // *playing* — not just while `speaking` state is set. The player keeps
   // draining buffered audio after the server's audio_end, so we mute until that
   // audio has finished (its byte-count tells us its duration) plus a margin.
+  /// Holds back non-speech audio so the provider never scores room noise as a
+  /// turn (and the transcriber never invents words for it).
+  final MicGate _micGate = MicGate();
+
   bool _ttsActive = false;
   int _ttsBytes = 0; // OUTPUT_AUDIO bytes fed since the turn's audio started
   DateTime? _ttsStart;
@@ -1394,8 +1399,15 @@ class LiveController {
       // whenever playback started later than the first byte or a turn emitted
       // several audio_starts, and the assistant's voice leaked back in as a
       // bogus user turn (device-proven 2026-08-05).
-      if (_ttsActive || _player.isPlayingWithin(_ttsTail)) return;
-      _client.sendAudio(pcm);
+      if (_ttsActive || _player.isPlayingWithin(_ttsTail)) {
+        _micGate.reset(); // re-learn the room after the speaker goes quiet
+        return;
+      }
+      // Energy gate: hold back non-speech so the provider's turn detector
+      // never sees it and the transcriber can't invent words for it.
+      for (final chunk in _micGate.process(pcm)) {
+        _client.sendAudio(chunk);
+      }
     });
   }
 
