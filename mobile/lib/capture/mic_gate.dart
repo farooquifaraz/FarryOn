@@ -59,6 +59,16 @@ class MicGate {
   bool _open = false;
   DateTime? _lastSpeechAt;
 
+  /// Called each time the gate opens, with the chunk's level and the bar it
+  /// had to clear. If a user ever reports "she can't hear me", this is the
+  /// number that says whether their voice reached the bar — without it the
+  /// gate would be an invisible place for speech to disappear.
+  void Function(double rms, double threshold)? onOpen;
+
+  /// Level and threshold at the most recent open. Diagnostics.
+  double lastOpenRms = 0;
+  double lastOpenThreshold = 0;
+
   /// True while the gate is passing audio (speech + hangover). Diagnostics.
   bool get isOpen => _open;
 
@@ -95,6 +105,9 @@ class MicGate {
       _lastSpeechAt = now;
       if (!_open) {
         _open = true;
+        lastOpenRms = rms;
+        lastOpenThreshold = threshold;
+        onOpen?.call(rms, threshold);
         final flush = <Uint8List>[..._ring, pcm16];
         _ring.clear();
         _ringBytes = 0;

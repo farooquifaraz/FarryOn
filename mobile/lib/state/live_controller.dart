@@ -129,7 +129,9 @@ class LiveController {
   // audio has finished (its byte-count tells us its duration) plus a margin.
   /// Holds back non-speech audio so the provider never scores room noise as a
   /// turn (and the transcriber never invents words for it).
-  final MicGate _micGate = MicGate();
+  late final MicGate _micGate = MicGate()
+    ..onOpen = (rms, threshold) => _log.info(
+        'mic gate opened (level ${rms.round()} > bar ${threshold.round()})');
 
   bool _ttsActive = false;
   int _ttsBytes = 0; // OUTPUT_AUDIO bytes fed since the turn's audio started
