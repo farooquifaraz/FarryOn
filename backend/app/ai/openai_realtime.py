@@ -636,6 +636,17 @@ class OpenAIRealtimeGateway(AIGateway):
             self._turn_committed_at = 0.0
             return
         words = words or ""
+        # Tiny fragments ("Oh", "Eva.", a lone "haan") are usually Whisper
+        # minting words from a noise blip — but they can also be a REAL
+        # confirmation ("yes" to send an email), so they must still get a
+        # response. Withhold the camera frame instead: without an image the
+        # model can't launch into narrating the room (device-seen
+        # 2026-08-05: "I can see the door and the child…" answering noise),
+        # and each withheld frame saves its ~70 KB of vision input.
+        if words and len(words.strip()) <= 5:
+            logger.info("openai.tiny_turn_no_frame", chars=len(words.strip()))
+            await self._safe_response_create(words)
+            return
         partial = False
         if not words and self._user_buf:
             words = self._user_buf
