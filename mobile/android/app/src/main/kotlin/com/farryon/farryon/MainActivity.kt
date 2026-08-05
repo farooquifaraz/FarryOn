@@ -6,6 +6,7 @@ import io.flutter.embedding.engine.FlutterEngine
 
 class MainActivity : FlutterActivity() {
     private var glasses: GlassesChannels? = null
+    private var audioMode: AudioModeChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -20,11 +21,20 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             applicationContext,
         )
+        // Voice-call audio path during a live session (speakerphone only), so
+        // the platform echo canceller has a real playback reference.
+        audioMode = AudioModeChannel.register(
+            flutterEngine.dartExecutor.binaryMessenger,
+            applicationContext,
+        )
     }
 
     override fun onDestroy() {
         glasses?.dispose()
         glasses = null
+        // Never leave the phone stuck in call mode if we're torn down mid-session.
+        audioMode?.exit()
+        audioMode = null
         super.onDestroy()
     }
 }

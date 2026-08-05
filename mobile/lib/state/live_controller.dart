@@ -22,6 +22,7 @@ import '../data/finder_api.dart';
 import '../data/live_client.dart';
 import '../features/glasses_lab/bridge/glasses_channel.dart';
 import '../playback/pcm_player.dart';
+import '../playback/voice_audio_mode.dart';
 import '../protocol/frames.dart';
 import '../protocol/messages.dart';
 import '../protocol/protocol.dart';
@@ -129,6 +130,10 @@ class LiveController {
   // audio has finished (its byte-count tells us its duration) plus a margin.
   /// Holds back non-speech audio so the provider never scores room noise as a
   /// turn (and the transcriber never invents words for it).
+  /// Voice-call audio path while a session runs (speakerphone only — the
+  /// native side skips it for glasses/earbuds).
+  final VoiceAudioMode _voiceAudioMode = VoiceAudioMode();
+
   late final MicGate _micGate = MicGate()
     ..onOpen = (rms, threshold) => _log.info(
         'mic gate opened (level ${rms.round()} > bar ${threshold.round()})');
@@ -416,6 +421,15 @@ class LiveController {
         // The connect attempt has resolved (either way) — release the in-flight
         // guard so a later reconnect (new session, or after a drop) can proceed.
         _connectingGlasses = false;
+        // Audio route just changed under us. Glasses take the voice out of the
+        // phone speaker, and communication mode would drag their Bluetooth
+        // audio down to narrowband SCO — so hand the media path back while
+        // they're connected, and reclaim the voice path when they drop.
+        if (_state.connection == ConnectionStatus.connected) {
+          unawaited(
+            connected ? _voiceAudioMode.exit() : _voiceAudioMode.enter(),
+          );
+        }
         // Push the storage-retention policy to the freshly-connected glasses so
         // synced photos are pruned per the user's Settings choice.
         if (connected) {
@@ -564,6 +578,12 @@ class LiveController {
       return outcome;
     }
 
+    // Voice-call audio path BEFORE the engines open, so playback and capture
+    // are created on it (the platform echo canceller needs both on the same
+    // path). No-op when audio is headed for glasses/earbuds — see
+    // AudioModeChannel.
+    await _voiceAudioMode.enter();
+
     await _player.initialize();
     await _audioSource.initialize();
     _watchGlassesStatus();
@@ -628,6 +648,9 @@ class LiveController {
     _historySaveTimer?.cancel();
     unawaited(ChatHistoryStore.saveSession(_state.transcripts)
         .then((_) => ChatHistoryStore.beginSession()));
+    // Hand the phone back its normal audio path (ringtone/media volume, normal
+    // routing) — never leave it in call mode after a session.
+    unawaited(_voiceAudioMode.exit());
     // Drop any resolved numbers held for this session (privacy hygiene).
     _contactNumbers.clear();
     await _stopAudio();
