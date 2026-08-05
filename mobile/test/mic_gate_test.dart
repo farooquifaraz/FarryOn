@@ -84,6 +84,30 @@ void main() {
     expect(gate.isOpen, isFalse);
   });
 
+  test('chunks that are views into a shared buffer still work', () {
+    // The capture layer hands out slices of an internal buffer, and the offset
+    // can be ODD. Reading those through asInt16List threw a RangeError on the
+    // very first chunk, which cancelled the mic subscription — Farry went
+    // completely deaf until the app restarted (device-proven 2026-08-05).
+    final backing = Uint8List(6401);
+    final loud = chunk(6000);
+    backing.setRange(1, 1 + loud.length, loud);
+    final odd = Uint8List.view(backing.buffer, 1, loud.length);
+
+    final gate = MicGate();
+    expect(() => gate.process(odd), returnsNormally);
+    expect(gate.process(chunk(6000)), isNotEmpty,
+        reason: 'the gate must still hear speech after an odd-offset chunk');
+  });
+
+  test('an unmeasurable chunk is forwarded, never swallowed', () {
+    // Fail OPEN: whatever the gate cannot judge, the model still gets. A gate
+    // that fails closed is indistinguishable from a broken microphone.
+    final gate = MicGate();
+    final weird = Uint8List.fromList([1, 2, 3]); // odd byte count
+    expect(gate.process(weird), isNotEmpty);
+  });
+
   test('empty or malformed chunks are ignored safely', () {
     final gate = MicGate();
     expect(gate.process(Uint8List(0)), isEmpty);

@@ -83,7 +83,16 @@ class MicGate {
   /// buffered pre-roll followed by [pcm16].
   List<Uint8List> process(Uint8List pcm16) {
     if (pcm16.length < 2) return const [];
-    final rms = _rms(pcm16);
+    final double rms;
+    try {
+      rms = _rms(pcm16);
+    } catch (_) {
+      // FAIL OPEN, always. The gate must never be the reason a user's voice
+      // disappears: anything it cannot measure, it forwards. (It shipped
+      // failing CLOSED once — a RangeError on the first chunk killed the whole
+      // mic stream and Farry went deaf, 2026-08-05.)
+      return [pcm16];
+    }
     final now = _now();
 
     // Learn the room only while we're NOT passing speech, so the speaker's own
@@ -145,16 +154,22 @@ class MicGate {
     }
   }
 
+  /// RMS of little-endian PCM16, read byte by byte.
+  ///
+  /// Deliberately NOT via `buffer.asInt16List`: the capture layer hands out
+  /// views into a shared buffer whose offset can be odd, and that throws
+  /// ("Offset must be a multiple of BYTES_PER_ELEMENT") — which is exactly how
+  /// this gate once killed the entire mic stream. Index arithmetic on the view
+  /// is alignment-agnostic and costs nothing at these sizes.
   double _rms(Uint8List bytes) {
-    final samples = bytes.buffer.asInt16List(
-      bytes.offsetInBytes,
-      bytes.lengthInBytes ~/ 2,
-    );
-    if (samples.isEmpty) return 0;
+    final count = bytes.length ~/ 2;
+    if (count == 0) return 0;
     var sum = 0.0;
-    for (final s in samples) {
-      sum += s * s.toDouble();
+    for (var i = 0; i < count; i++) {
+      var v = bytes[i * 2] | (bytes[i * 2 + 1] << 8);
+      if (v >= 0x8000) v -= 0x10000; // two's complement
+      sum += v * v.toDouble();
     }
-    return math.sqrt(sum / samples.length);
+    return math.sqrt(sum / count);
   }
 }

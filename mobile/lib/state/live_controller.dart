@@ -1407,10 +1407,20 @@ class LiveController {
       }
       // Energy gate: hold back non-speech so the provider's turn detector
       // never sees it and the transcriber can't invent words for it.
-      for (final chunk in _micGate.process(pcm)) {
+      List<Uint8List> toSend;
+      try {
+        toSend = _micGate.process(pcm);
+      } catch (e) {
+        // Belt and braces: an unhandled throw here once cancelled the whole
+        // mic subscription and the assistant went permanently deaf. The mic
+        // outranks the gate — on any doubt, send.
+        _log.warn('mic gate failed, sending unfiltered: $e');
+        toSend = [pcm];
+      }
+      for (final chunk in toSend) {
         _client.sendAudio(chunk);
       }
-    });
+    }, onError: (Object e) => _log.warn('mic stream error: $e'));
   }
 
   Future<void> _stopAudio() async {
