@@ -396,7 +396,14 @@ class WebSocketLiveClient {
   /// Compute the next backoff delay: `base * 2^attempt` capped at [_maxBackoff],
   /// with full jitter in `[0, capped]` (PROTOCOL.md §7: 0.5, 1, 2, 4, 8 s).
   Duration _nextBackoff() {
-    final exp = _baseBackoff.inMilliseconds * (1 << _backoffAttempt);
+    // Clamp the shift: `_backoffAttempt` is unbounded, and a sustained outage
+    // (~54+ attempts) makes `1 << _backoffAttempt` overflow 64-bit to a
+    // negative, so `min()` returns it and `nextInt(negative + 1)` throws
+    // RangeError inside the reconnect Timer — killing the reconnect loop. The
+    // `_maxBackoff` cap already bounds the delay; the exponent just needs a
+    // bound. Shift 5 (500 ms << 5 = 16 s) already exceeds the 8 s cap.
+    final shift = _backoffAttempt < 5 ? _backoffAttempt : 5;
+    final exp = _baseBackoff.inMilliseconds << shift;
     final capped = min(exp, _maxBackoff.inMilliseconds);
     final jittered = _random.nextInt(capped + 1);
     return Duration(milliseconds: jittered);

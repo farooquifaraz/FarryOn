@@ -732,6 +732,19 @@ class LiveController {
         // On a FIRST connect micOpen is still false (startListening runs
         // later), so this never double-sends audio_start. Also re-sync the
         // device kind so glasses/phone frame-wait budgets stay correct.
+        //
+        // A drop can land mid-TTS: the audio that set _ttsActive (and its 20 s
+        // safety timer) belonged to the now-dead session and will never finish
+        // playing, but the mic guard in _startAudio keeps dropping PCM while
+        // _ttsActive is true — up to ~20 s of "she can't hear me" after the
+        // reconnect. Clear the stale TTS guard and flush the player so the
+        // re-armed mic is heard immediately. No-op on a first connect (where
+        // _ttsActive is already false).
+        if (_ttsActive) {
+          _ttsClear?.cancel();
+          _ttsActive = false;
+          unawaited(_player.flush());
+        }
         if (_state.micOpen) {
           _client.send(const AudioStartMessage());
         }
