@@ -109,15 +109,35 @@ class WebSocketLiveClient {
   bool _started = false; // user wants to be connected
   bool _disposed = false;
 
+  /// Called when the server refuses our token, so the owner can mint a fresh
+  /// one. Whoever sets this is expected to push the new token through
+  /// [updateConfig] (or let the config provider do it), which reconnects.
+  /// Null in tests and wherever no auth layer is wired.
+  Future<void> Function()? onAuthRejected;
+  bool _refreshingAuth = false;
+  bool _authRefreshUsed = false;
+
   /// Update the backend target. If currently started, this forces a clean
   /// reconnect against the new endpoint.
   void updateConfig(AppConfig config) {
+    final endpointChanged = config.host != _config.host ||
+        config.port != _config.port ||
+        config.secure != _config.secure;
     _config = config;
-    if (_started && !_disposed) {
-      _log.info('config updated → reconnecting to ${config.liveUri}');
-      _teardownSocket();
-      _connect();
+    if (!_started || _disposed) return;
+    if (!endpointChanged && _currentStatus == ConnectionStatus.connected) {
+      // Only the auth token moved. This socket authenticated when it opened,
+      // so tearing it down would kill a healthy session for nothing — and the
+      // REST layer rotates the token on its own 401s, so every rotation
+      // restarted the live session (four reconnects in thirteen seconds,
+      // device-proven 2026-08-06). The fresh token is picked up the next time
+      // we actually connect.
+      _log.info('config updated (same endpoint) — keeping the live socket');
+      return;
     }
+    _log.info('config updated → reconnecting to ${config.liveUri}');
+    _teardownSocket();
+    _connect();
   }
 
   /// Begin connecting and keep the connection alive (auto-reconnect) until
@@ -178,6 +198,15 @@ class WebSocketLiveClient {
   void _connect() {
     if (_disposed || !_started) return;
     _reconnectTimer?.cancel();
+    // Never stack sockets. Two paths reach here independently — a pending
+    // backoff retry and a config-driven reconnect (a rotated auth token) — and
+    // assigning `_channel` over a live one orphaned the old socket instead of
+    // closing it: the backend saw FOUR sessions open and close for a single
+    // reconnect (device-proven 2026-08-06). Teardown nulls its fields
+    // synchronously, so the connect below still starts from a clean slate.
+    if (_channel != null) {
+      unawaited(_teardownSocket(closeCode: ws_status.normalClosure));
+    }
     _setStatus(ConnectionStatus.connecting);
 
     final uri = _config.liveUri;
@@ -325,6 +354,7 @@ class WebSocketLiveClient {
     _backoffAttempt = 0; // reset backoff on a successful handshake (§7)
     _readyTimer?.cancel(); // `ready` arrived — disarm the watchdog
     _readyTimer = null;
+    _authRefreshUsed = false; // credentials proved good; re-arm the rotation
     _setStatus(ConnectionStatus.connected);
     _startHeartbeat();
     if (msg.protocolVersion != kProtocolVersion) {
@@ -338,7 +368,37 @@ class WebSocketLiveClient {
 
   void _onSocketError(Object error, StackTrace st) {
     _log.warn('socket error: $error');
+    // An access token is short-lived. After an outage long enough to outlive
+    // it, every reconnect is refused 403 and the client retries the SAME dead
+    // token forever — the app sits in "Reconnecting" with a perfectly healthy
+    // network until it is killed and reopened (device-proven 2026-08-06: a
+    // 3-minute outage, then endless ws.auth_rejected). Ask the owner for a
+    // fresh token once per drop; the resulting config update reconnects us.
+    if (_looksLikeAuthRejection(error)) {
+      final refresh = onAuthRejected;
+      // Once per connection generation: if the FRESH token is refused too, the
+      // problem isn't staleness (suspended account, clock skew) and rotating
+      // on every backoff attempt would just hammer the auth endpoint. The
+      // flag clears on the next successful `ready`.
+      if (refresh != null && !_refreshingAuth && !_authRefreshUsed) {
+        _refreshingAuth = true;
+        _authRefreshUsed = true;
+        _log.warn('handshake refused (auth) → refreshing the token');
+        refresh().whenComplete(() => _refreshingAuth = false);
+      }
+    }
     _handleDrop();
+  }
+
+  /// Whether a socket failure was the server refusing our credentials.
+  ///
+  /// `WebSocketChannel.connect` surfaces an HTTP rejection as an exception
+  /// whose text carries the status ("was not upgraded to websocket … 403").
+  /// Matching on the code keeps a plain network blip from triggering a token
+  /// refresh loop.
+  bool _looksLikeAuthRejection(Object error) {
+    final text = error.toString();
+    return text.contains('403') || text.contains('401');
   }
 
   void _onSocketDone() {

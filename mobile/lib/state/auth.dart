@@ -155,6 +155,45 @@ class AuthNotifier extends Notifier<AuthState> {
     );
   }
 
+  /// Mint a fresh access token for a live session whose handshake was refused.
+  ///
+  /// Access tokens are short-lived, so any outage longer than their lifetime
+  /// leaves the WebSocket retrying a dead credential forever (device-proven
+  /// 2026-08-06). REST calls already rotate on 401; this is the same rotation
+  /// for the socket. Returns true when a new token was applied — the config
+  /// change is what makes the client reconnect.
+  ///
+  /// Only rotates for a session that is actually signed in, and treats a
+  /// server "invalid" as a real sign-out; an unreachable server changes
+  /// nothing, so the existing backoff simply keeps trying.
+  Future<bool> refreshForLiveSession() async {
+    final session = ConfigStore.authSession();
+    if (session == null || !state.isSignedIn) return false;
+    final epoch = _sessionEpoch;
+    final outcome = await ref
+        .read(authApiProvider)
+        .refresh(session.refresh)
+        .timeout(_restoreTimeout,
+            onTimeout: () => const AuthRefreshOutcome.unreachable());
+    if (epoch != _sessionEpoch) return false; // signed out meanwhile
+    if (outcome.invalid) {
+      await _clearLocal();
+      return false;
+    }
+    final tokens = outcome.tokens;
+    if (tokens == null) return false; // unreachable — let backoff retry
+    await _persist(
+      () => ConfigStore.saveAuthSession(
+        access: tokens.accessToken,
+        refresh: tokens.refreshToken,
+      ),
+      'Rotating the session for the live socket',
+    );
+    if (epoch != _sessionEpoch) return false;
+    _applyTokenToConfig(tokens.accessToken);
+    return true;
+  }
+
   void _applyTokenToConfig(String accessToken) {
     final cfg = ref.read(configProvider);
     if (cfg.authToken != accessToken) {

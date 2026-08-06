@@ -82,7 +82,12 @@ final liveControllerProvider = Provider<LiveController>((ref) {
         config: cfg,
         platform: LiveController.defaultPlatform,
         deviceInfoProvider: deviceInfo,
-      );
+      )
+        // A refused handshake (expired access token after a long outage) would
+        // otherwise retry the same dead token forever. Rotating it updates
+        // configProvider, and the watcher below reconnects the client with it.
+        ..onAuthRejected =
+            () => ref.read(authProvider.notifier).refreshForLiveSession();
 
   final controller = LiveController(
     config: config,
