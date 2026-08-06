@@ -90,6 +90,7 @@ class LiveSessionState {
     this.glassesName,
     this.glassesTalking = false,
     this.glassesWorn = false,
+    this.recording,
     this.lastCapturedPhoto,
     this.lastCapturedAt,
     this.lastError,
@@ -151,6 +152,10 @@ class LiveSessionState {
   /// True while the glasses are being worn (wear-to-talk auto-listen).
   final bool glassesWorn;
 
+  /// The glasses video recording in progress, or null when nothing is
+  /// recording. Purely additive: every other part of the session ignores it.
+  final GlassesRecording? recording;
+
   /// The most recent glasses photo (raw JPEG), shown as a preview in the chat
   /// so the user can visually confirm what was actually captured and sent for
   /// recognition. Null until the first glasses capture.
@@ -189,6 +194,8 @@ class LiveSessionState {
     String? glassesName,
     bool? glassesTalking,
     bool? glassesWorn,
+    GlassesRecording? recording,
+    bool clearRecording = false,
     Uint8List? lastCapturedPhoto,
     DateTime? lastCapturedAt,
     String? lastError,
@@ -213,10 +220,52 @@ class LiveSessionState {
         glassesName: glassesName ?? this.glassesName,
         glassesTalking: glassesTalking ?? this.glassesTalking,
         glassesWorn: glassesWorn ?? this.glassesWorn,
+        recording: clearRecording ? null : (recording ?? this.recording),
         lastCapturedPhoto: lastCapturedPhoto ?? this.lastCapturedPhoto,
         lastCapturedAt: lastCapturedAt ?? this.lastCapturedAt,
         lastError: clearError ? null : (lastError ?? this.lastError),
         permissionsGranted: permissionsGranted ?? this.permissionsGranted,
         capReached: capReached ?? this.capReached,
       );
+}
+
+/// A glasses video recording in progress.
+///
+/// The clock the UI shows is derived from [startedAt] rather than a counter the
+/// app increments, so a rebuild, a backgrounded app or a dropped frame can
+/// never make it drift away from the real recording.
+class GlassesRecording {
+  const GlassesRecording({
+    required this.requestId,
+    required this.seconds,
+    required this.startedAt,
+  });
+
+  /// Correlates with the `videoState` events from the native bridge.
+  final String requestId;
+
+  /// The length the user picked — what the glasses' firmware will stop at.
+  final int seconds;
+
+  final DateTime startedAt;
+
+  Duration get elapsed => DateTime.now().difference(startedAt);
+
+  /// Never past [seconds], so the label can't read "2:07 / 2:00" if a stop
+  /// event is a moment late.
+  Duration get clampedElapsed {
+    final e = elapsed;
+    final total = Duration(seconds: seconds);
+    return e > total ? total : (e.isNegative ? Duration.zero : e);
+  }
+
+  static String format(Duration d) {
+    final m = d.inMinutes;
+    final s = d.inSeconds % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  /// e.g. `0:42 / 2:00`.
+  String get label =>
+      '${format(clampedElapsed)} / ${format(Duration(seconds: seconds))}';
 }

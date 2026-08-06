@@ -53,6 +53,30 @@ interface GlassesSdk {
     fun requestDeviceInfo()
     fun takePhoto()
     fun takeAiPhoto(requestId: String)
+
+    /**
+     * Record video ON THE GLASSES for [seconds]. Lifecycle is reported as
+     * `videoState` events (`recording` / `stopped` / `failed`), never as a
+     * return value — the recording outlives the call by minutes.
+     *
+     * The duration the user picked is enforced by the FIRMWARE (see
+     * [setVideoDuration]); the app only mirrors it for the UI clock. The wire
+     * protocol and why it must work that way are in
+     * `mobile/lib/features/glasses_lab/LAB_NOTES.md` ("Video recording").
+     */
+    fun startVideoRecording(requestId: String, seconds: Int)
+
+    /** Stop a recording early. No-op (with a `videoState` report) if idle. */
+    fun stopVideoRecording()
+
+    /**
+     * Persist the recording length and push it to the glasses (now if they're
+     * connected, otherwise on the next connect). Separate from
+     * [startVideoRecording] on purpose: the firmware auto-stops at its OWN
+     * configured duration, so that value has to be correct BEFORE a recording
+     * starts — exactly how the vendor app does it.
+     */
+    fun setVideoDuration(seconds: Int)
     fun pairClassicBt()
     fun startAudioTest(mode: String)
     fun stopAudioTest()
@@ -121,6 +145,7 @@ class StubGlassesSdk : GlassesSdk {
         connected = false
         stopAudioTest()
         stopWifiSync()
+        if (videoRequestId != null) finishVideo("disconnected")
         emit("connectionState", mapOf("state" to "disconnected"))
     }
 
@@ -161,6 +186,79 @@ class StubGlassesSdk : GlassesSdk {
                 )
             )
         }, 1500L)
+    }
+
+    /** Simulated recording: one pending auto-stop, mirroring the real bridge's
+     *  single-in-flight rule so the Lab/UI exercises the same states. */
+    private var videoStop: Runnable? = null
+    private var videoRequestId: String? = null
+    private var videoSeconds = 0
+    private var videoStartedAt = 0L
+
+    override fun startVideoRecording(requestId: String, seconds: Int) {
+        if (videoRequestId != null) {
+            emit(
+                "videoState",
+                mapOf(
+                    "state" to "failed", "requestId" to requestId,
+                    "seconds" to seconds, "elapsedMs" to 0, "reason" to "busy",
+                    "detail" to "a recording ($videoRequestId) is already running",
+                )
+            )
+            return
+        }
+        if (!connected) {
+            emit(
+                "videoState",
+                mapOf(
+                    "state" to "failed", "requestId" to requestId,
+                    "seconds" to seconds, "elapsedMs" to 0,
+                    "reason" to "not_connected",
+                    "detail" to "the glasses aren't connected (simulated)",
+                )
+            )
+            return
+        }
+        videoRequestId = requestId
+        videoSeconds = seconds
+        videoStartedAt = android.os.SystemClock.elapsedRealtime()
+        emit(
+            "videoState",
+            mapOf(
+                "state" to "recording", "requestId" to requestId,
+                "seconds" to seconds, "elapsedMs" to 0,
+            )
+        )
+        val stop = Runnable { finishVideo("duration_reached") }
+        videoStop = stop
+        main.postDelayed(stop, seconds * 1000L)
+    }
+
+    override fun stopVideoRecording() {
+        if (videoRequestId == null) return
+        finishVideo("user_stopped")
+    }
+
+    private fun finishVideo(reason: String) {
+        val id = videoRequestId ?: return
+        videoStop?.let(main::removeCallbacks)
+        videoStop = null
+        videoRequestId = null
+        emit(
+            "videoState",
+            mapOf(
+                "state" to "stopped", "requestId" to id,
+                "seconds" to videoSeconds,
+                "elapsedMs" to
+                    (android.os.SystemClock.elapsedRealtime() - videoStartedAt).toInt(),
+                "reason" to reason,
+            )
+        )
+        emit("mediaCount", mapOf("img" to 0, "vid" to 1, "rec" to 0))
+    }
+
+    override fun setVideoDuration(seconds: Int) {
+        emit("deviceEvent", mapOf("hex" to "videoDuration=${seconds}s (stub)"))
     }
 
     override fun pairClassicBt() {
@@ -241,6 +339,9 @@ class StubGlassesSdk : GlassesSdk {
     override fun dispose() {
         stopAudioTest()
         stopWifiSync()
+        videoStop?.let(main::removeCallbacks)
+        videoStop = null
+        videoRequestId = null
         listener = null
     }
 

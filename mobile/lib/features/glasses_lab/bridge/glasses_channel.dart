@@ -45,6 +45,19 @@ abstract class GlassesBridgeApi {
   /// back as a `thumbnail` event carrying the same requestId + elapsedMs.
   Future<String> takeAiPhoto();
 
+  /// Record video on the glasses for [seconds]. Returns a requestId; the
+  /// lifecycle arrives as `videoState` events carrying the same id. The call
+  /// returns immediately — a recording can run for minutes.
+  Future<String> startVideoRecording(int seconds);
+
+  /// Stop the running recording early. Safe to call when nothing is recording.
+  Future<void> stopVideoRecording();
+
+  /// Persist the recording length and push it to the glasses. The FIRMWARE is
+  /// what auto-stops a recording, so this has to be in sync before one starts;
+  /// the native side re-applies it on every connect.
+  Future<void> setVideoDuration(int seconds);
+
   /// Classic Bluetooth (A2DP/HFP) bond for music/call audio routes.
   Future<void> pairClassicBt();
 
@@ -114,6 +127,8 @@ class GlassesDeviceHit {
 /// `thumbnail` {requestId, jpeg, elapsedMs},
 /// `captureFailed` {requestId, reason, detail} (typed AI-photo failure;
 /// reason codes match `GlassesCaptureFailure.wire`),
+/// `videoState` {state: recording|stopped|failed, requestId, seconds,
+/// elapsedMs, reason?, detail?} (glasses video recording lifecycle),
 /// `pcmChunk` {bytes, sampleRate},
 /// `syncProgress` {file, pct, speedKbps}, `audio` {status}, `error` {message},
 /// `deviceEvent` {hex} (raw/unmapped notifications).
@@ -211,6 +226,20 @@ class GlassesChannel implements GlassesBridgeApi {
   @override
   Future<String> takeAiPhoto() async =>
       (await _method.invokeMethod<String>('takeAiPhoto')) ?? '';
+
+  @override
+  Future<String> startVideoRecording(int seconds) async =>
+      (await _method.invokeMethod<String>(
+              'startVideoRecording', {'seconds': seconds})) ??
+      '';
+
+  @override
+  Future<void> stopVideoRecording() =>
+      _method.invokeMethod<void>('stopVideoRecording');
+
+  @override
+  Future<void> setVideoDuration(int seconds) =>
+      _method.invokeMethod<void>('setVideoDuration', {'seconds': seconds});
 
   @override
   Future<void> pairClassicBt() => _method.invokeMethod<void>('pairClassicBt');

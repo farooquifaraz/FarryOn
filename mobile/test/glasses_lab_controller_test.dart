@@ -74,6 +74,16 @@ class _FakeBridge implements GlassesBridgeApi {
 
   @override
   Future<void> pairClassicBt() => _maybeFail('pairClassicBt');
+  @override
+  Future<String> startVideoRecording(int seconds) async {
+    await _maybeFail('startVideoRecording');
+    return 'vid-req';
+  }
+
+  @override
+  Future<void> stopVideoRecording() => _maybeFail('stopVideoRecording');
+  @override
+  Future<void> setVideoDuration(int seconds) => _maybeFail('setVideoDuration');
 
   @override
   Future<void> startAudioTest(String mode) => _maybeFail('startAudioTest:$mode');

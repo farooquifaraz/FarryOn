@@ -32,6 +32,8 @@ class AppConfig {
     this.primaryLanguage = 'English',
     this.secondaryLanguage = 'Hindi',
     this.glassesVolume = 70,
+    this.videoRecordSeconds = 60,
+    this.saveRecordingsToPhone = true,
   });
 
   /// Backend host (IP or DNS name), without scheme or port.
@@ -99,6 +101,16 @@ class AppConfig {
   /// position in Settings. The native bridge persists and re-applies it on
   /// every connect; this copy just keeps the UI in sync.
   final int glassesVolume;
+
+  /// How long a glasses video recording lasts, in seconds. The Settings
+  /// chooser offers 30 / 60 / 120 / 240; 240 (4 minutes) is the maximum.
+  /// The FIRMWARE enforces this — the native bridge writes it to the glasses,
+  /// so the recording really is the length that was picked.
+  final int videoRecordSeconds;
+
+  /// Copy a finished glasses recording to the phone (`DCIM/FarryOn`) over the
+  /// existing WiFi media sync. Default on.
+  final bool saveRecordingsToPhone;
 
   /// Save every live capture (phone camera / glasses still) into the phone
   /// gallery (`Pictures/Farry`). Default on.
@@ -170,6 +182,8 @@ class AppConfig {
     String? primaryLanguage,
     String? secondaryLanguage,
     int? glassesVolume,
+    int? videoRecordSeconds,
+    bool? saveRecordingsToPhone,
   }) =>
       AppConfig(
         host: host ?? this.host,
@@ -193,6 +207,9 @@ class AppConfig {
         primaryLanguage: primaryLanguage ?? this.primaryLanguage,
         secondaryLanguage: secondaryLanguage ?? this.secondaryLanguage,
         glassesVolume: glassesVolume ?? this.glassesVolume,
+        videoRecordSeconds: videoRecordSeconds ?? this.videoRecordSeconds,
+        saveRecordingsToPhone:
+            saveRecordingsToPhone ?? this.saveRecordingsToPhone,
       );
 
   @override

@@ -11,6 +11,7 @@ import 'package:farryon/protocol/frames.dart';
 import 'package:farryon/protocol/messages.dart';
 import 'package:farryon/protocol/protocol.dart';
 import 'package:farryon/state/live_controller.dart';
+import 'package:farryon/state/live_state.dart';
 import 'package:farryon/state/permissions.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -99,6 +100,7 @@ class FakePcmPlayer implements PcmPlayer {
 /// Fake glasses bridge: records connect calls and lets the test push events.
 class FakeGlassesBridge implements GlassesBridgeApi {
   final connectCalls = <String>[];
+  final videoCalls = <String>[];
   final _events = StreamController<GlassesLabEvent>.broadcast();
   Map<String, Object?> info = const {'implementation': 'stub', 'lastMac': 'AA:BB:CC'};
 
@@ -129,6 +131,17 @@ class FakeGlassesBridge implements GlassesBridgeApi {
   Future<void> takePhoto() async {}
   @override
   Future<String> takeAiPhoto() async => 'req';
+  @override
+  Future<String> startVideoRecording(int seconds) async {
+    videoCalls.add('start:$seconds');
+    return 'vid-req';
+  }
+
+  @override
+  Future<void> stopVideoRecording() async => videoCalls.add('stop');
+  @override
+  Future<void> setVideoDuration(int seconds) async =>
+      videoCalls.add('duration:$seconds');
   @override
   Future<void> pairClassicBt() async {}
   @override
@@ -458,5 +471,167 @@ void main() {
     await tick();
     expect(glasses.connectCalls, hasLength(2),
         reason: 'reconnect after a drop must not be blocked by a stuck guard');
+  });
+
+  // ---- Glasses video recording ------------------------------------------
+  //
+  // The feature is deliberately isolated from the rest of the session, so
+  // these drive it end to end through the controller and pin the two ways it
+  // could mislead someone: a "recording" badge for a recording that never
+  // started, and a badge that outlives one that ended.
+
+  LiveController newGlassesController(FakeGlassesBridge glasses,
+      {AppConfig? config}) {
+    final ctl = LiveController(
+      config: config ?? const AppConfig(host: 'h', port: 8000, secure: false),
+      registry: DeviceRegistry(factory: (_) => FakeCaptureSource()),
+      player: FakePcmPlayer(),
+      permissions: GrantingPermissions(),
+      clientFactory: (cfg, deviceInfo) => WebSocketLiveClient(
+        config: cfg,
+        platform: 'android',
+        deviceInfoProvider: deviceInfo,
+        channelFactory: (_) => fake,
+      ),
+      platform: 'android',
+      glassesBridge: glasses,
+    );
+    addTearDown(ctl.dispose);
+    return ctl;
+  }
+
+  test('recording starts only once the glasses confirm it', () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+
+    await ctl.startGlassesRecording();
+    await tick();
+    expect(glasses.videoCalls, ['start:60'],
+        reason: 'the configured duration is what gets sent');
+    expect(ctl.state.recording, isNull,
+        reason: 'the badge must wait for the device, not for our own request');
+
+    glasses.emit('videoState',
+        {'state': 'recording', 'requestId': 'v1', 'seconds': 60});
+    await tick();
+    expect(ctl.state.recording?.requestId, 'v1');
+    expect(ctl.state.recording?.seconds, 60);
+  });
+
+  test('a refused start clears the badge and says why', () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+    glasses.emit('videoState',
+        {'state': 'recording', 'requestId': 'v1', 'seconds': 60});
+    await tick();
+
+    glasses.emit('videoState', {
+      'state': 'failed',
+      'requestId': 'v1',
+      'seconds': 60,
+      'reason': 'low_battery',
+      'detail': 'the glasses are at 9%',
+    });
+    await tick();
+    expect(ctl.state.recording, isNull);
+    expect(ctl.state.lastError, contains('9%'),
+        reason: 'a failure must reach the user, never be swallowed');
+  });
+
+  test('stopping is refused while disconnected, with a reason', () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+
+    await ctl.startGlassesRecording();
+    await tick();
+    expect(glasses.videoCalls, isEmpty,
+        reason: 'no BLE command may be sent to glasses that are not connected');
+    expect(ctl.state.lastError, contains('Connect the glasses'));
+  });
+
+  test('a stop ends the recording and asks for a sync when saving is on',
+      () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+    glasses.emit('videoState',
+        {'state': 'recording', 'requestId': 'v1', 'seconds': 30});
+    await tick();
+
+    await ctl.stopGlassesRecording();
+    await tick();
+    expect(glasses.videoCalls, contains('stop'));
+
+    glasses.emit('videoState', {
+      'state': 'stopped',
+      'requestId': 'v1',
+      'seconds': 30,
+      'reason': 'user_stopped',
+    });
+    await tick();
+    expect(ctl.state.recording, isNull);
+  });
+
+  test('voice tools drive the same recording path as the button', () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+
+    fake.pushJson({
+      'type': 'tool_call',
+      'id': 'r1',
+      'name': 'record_video',
+      'args': <String, dynamic>{},
+      'needsPermission': false,
+    });
+    await tick();
+    expect(glasses.videoCalls, ['start:60']);
+
+    glasses.emit('videoState',
+        {'state': 'recording', 'requestId': 'v1', 'seconds': 60});
+    await tick();
+    fake.pushJson({
+      'type': 'tool_call',
+      'id': 'r2',
+      'name': 'stop_recording',
+      'args': <String, dynamic>{},
+      'needsPermission': false,
+    });
+    await tick();
+    expect(glasses.videoCalls, ['start:60', 'stop']);
+  });
+
+  test('the settings chooser pushes the duration to the glasses', () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.setVideoRecordSeconds(240);
+    await tick();
+    expect(glasses.videoCalls, ['duration:240']);
+  });
+
+  test('the on-screen clock never runs past the chosen length', () {
+    final rec = GlassesRecording(
+      requestId: 'v1',
+      seconds: 30,
+      startedAt: DateTime.now().subtract(const Duration(seconds: 47)),
+    );
+    expect(rec.clampedElapsed, const Duration(seconds: 30));
+    expect(rec.label, '0:30 / 0:30');
   });
 }

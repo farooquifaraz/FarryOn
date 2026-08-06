@@ -160,6 +160,13 @@ class SettingsScreen extends ConsumerWidget {
             ),
             const _GlassesVolumeRow(),
             SettingsRow(
+              icon: Icons.videocam_rounded,
+              gradient: Aurora.gradCoral,
+              title: 'Video recording',
+              subtitle: _VideoRecordingPage.describe(cfg),
+              onTap: () => _push(context, const _VideoRecordingPage()),
+            ),
+            SettingsRow(
               icon: Icons.devices_other_rounded,
               gradient: Aurora.gradBlue,
               title: 'Capture devices',
@@ -837,6 +844,96 @@ class _DevicesPage extends ConsumerWidget {
             showDivider: false,
           ),
         ]),
+      ],
+    );
+  }
+}
+
+/// How long a glasses recording runs, and whether it lands on the phone.
+///
+/// The length is enforced by the glasses' firmware — the native bridge writes
+/// it to the device when it changes and again on every connect — so picking
+/// "2 minutes" really does give a two-minute file, not the device's own
+/// default.
+class _VideoRecordingPage extends ConsumerWidget {
+  const _VideoRecordingPage();
+
+  /// The four lengths offered. 4 minutes is the ceiling.
+  static const options = <(String, int)>[
+    ('30 seconds', 30),
+    ('1 minute', 60),
+    ('2 minutes', 120),
+    ('4 minutes', 240),
+  ];
+
+  static String label(int seconds) =>
+      options
+          .where((o) => o.$2 == seconds)
+          .map((o) => o.$1)
+          .firstOrNull ??
+      '$seconds seconds';
+
+  static String describe(AppConfig cfg) => cfg.saveRecordingsToPhone
+      ? '${label(cfg.videoRecordSeconds)} · saved to phone'
+      : '${label(cfg.videoRecordSeconds)} · kept on glasses';
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cfg = ref.watch(configProvider);
+    final notifier = ref.read(liveProvider.notifier);
+
+    return _SubPage(
+      title: 'Video recording',
+      children: [
+        const Text(
+          'Record video on the glasses — with the 📹 button, or just say '
+          '"record a video". The glasses stop themselves after the length you '
+          'pick here.',
+          style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
+        ),
+        const SizedBox(height: 18),
+        _fieldLabel('Length'),
+        const SizedBox(height: 10),
+        SettingsGroup(children: [
+          for (final o in options)
+            _OptionRow(
+              icon: Icons.timer_rounded,
+              gradient: Aurora.gradCoral,
+              title: o.$1,
+              selected: cfg.videoRecordSeconds == o.$2,
+              showDivider: o != options.last,
+              onTap: () {
+                ref.read(configProvider.notifier).state =
+                    cfg.copyWith(videoRecordSeconds: o.$2);
+                notifier.setVideoRecordSeconds(o.$2);
+              },
+            ),
+        ]),
+        const SizedBox(height: 18),
+        _fieldLabel('After recording'),
+        const SizedBox(height: 10),
+        SettingsGroup(children: [
+          SettingsRow(
+            icon: Icons.save_alt_rounded,
+            gradient: Aurora.gradGreen,
+            title: 'Save to phone',
+            subtitle: 'Copies the video into DCIM/FarryOn over WiFi',
+            showDivider: false,
+            trailing: Switch(
+              value: cfg.saveRecordingsToPhone,
+              activeThumbColor: Aurora.mint,
+              onChanged: (v) => ref.read(configProvider.notifier).state =
+                  cfg.copyWith(saveRecordingsToPhone: v),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        const Text(
+          'The glasses need to be off the charger for the WiFi transfer. '
+          'Recordings always stay on the glasses either way, and sync the next '
+          'time they can.',
+          style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
+        ),
       ],
     );
   }

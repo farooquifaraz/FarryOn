@@ -379,6 +379,9 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                         notifier.setCameraFront(!state.cameraFront),
                     onScan: _scanCurrentView,
                     onCapturePhoto: notifier.captureGlassesPhoto,
+                    onToggleRecording: () => state.recording == null
+                        ? notifier.startGlassesRecording()
+                        : notifier.stopGlassesRecording(),
                   ),
                   ],
                 ),
@@ -664,6 +667,7 @@ class _Controls extends StatelessWidget {
     required this.onFlipCamera,
     required this.onScan,
     required this.onCapturePhoto,
+    required this.onToggleRecording,
   });
 
   final LiveSessionState state;
@@ -676,9 +680,13 @@ class _Controls extends StatelessWidget {
   final VoidCallback onScan;
   final VoidCallback onCapturePhoto;
 
+  /// Start or stop a glasses video recording (the same button does both).
+  final VoidCallback onToggleRecording;
+
   @override
   Widget build(BuildContext context) {
     final speaking = state.liveState == LiveState.speaking;
+    final recording = state.recording;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
@@ -688,6 +696,7 @@ class _Controls extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (recording != null) _RecordingBar(recording: recording),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
@@ -717,7 +726,25 @@ class _Controls extends StatelessWidget {
                   icon: Icons.photo_camera,
                   tooltip: 'Take a photo through the glasses',
                   gradient: Aurora.gradGreen,
-                  onPressed: state.glassesConnected ? onCapturePhoto : null,
+                  // A still can't be taken mid-recording — the glasses are in
+                  // video work mode — so grey it out rather than fail on tap.
+                  onPressed: state.glassesConnected && recording == null
+                      ? onCapturePhoto
+                      : null,
+                ),
+              // Video recording on the glasses. Same button starts and stops;
+              // the red state plus the clock above make it obvious which.
+              if (state.videoKind == 'glasses')
+                _CircleButton(
+                  icon: recording == null
+                      ? Icons.fiber_manual_record
+                      : Icons.stop_circle,
+                  tooltip: recording == null
+                      ? 'Record video on the glasses'
+                      : 'Stop recording',
+                  gradient: Aurora.gradCoral,
+                  danger: recording != null,
+                  onPressed: state.glassesConnected ? onToggleRecording : null,
                 ),
               _CircleButton(
                 icon: Icons.center_focus_strong,
@@ -1549,6 +1576,76 @@ class _FinderSheet extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// The red REC strip above the controls while the glasses are recording.
+///
+/// The clock is read from [GlassesRecording], which derives it from the real
+/// start time — so it stays honest across rebuilds and a backgrounded app.
+class _RecordingBar extends StatelessWidget {
+  const _RecordingBar({required this.recording});
+
+  final GlassesRecording recording;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = Duration(seconds: recording.seconds);
+    final progress = total.inMilliseconds == 0
+        ? 0.0
+        : (recording.clampedElapsed.inMilliseconds / total.inMilliseconds)
+            .clamp(0.0, 1.0);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFF5A5F),
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                'REC',
+                style: TextStyle(
+                  color: Color(0xFFFF5A5F),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                recording.label,
+                style: const TextStyle(
+                  color: Aurora.textPrimary,
+                  fontSize: 13,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 3,
+              backgroundColor: Aurora.glassBorder,
+              valueColor:
+                  const AlwaysStoppedAnimation<Color>(Color(0xFFFF5A5F)),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

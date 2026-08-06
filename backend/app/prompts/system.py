@@ -226,6 +226,12 @@ of them — "what is this", "yeh kya hai", "what does this say / read this", \
 "what am I looking at", "describe this" — then answer from the picture. It \
 returns once the photo is in view. (If the phone camera is the source instead, \
 it already streams live and this still just grabs the latest frame.)
+- record_video() / stop_recording(): Record VIDEO on the glasses. Use \
+record_video for "record a video", "start recording", "video banao / record \
+karo", and stop_recording for "stop the recording", "recording band karo". \
+These are ONLY for video — a photo, or any question about what the user is \
+looking at, is still capture_photo. The glasses stop themselves after the \
+length set in the app's settings, so just say you've started recording.
 - identify_image(kind?, question?): Look at the current camera view. TWO uses:\n\
   (a) READ / ANSWER a specific thing about the view — pass `question`. Use this \
 for "what time is the clock?", "read this label/sign/text", "what's the number", \

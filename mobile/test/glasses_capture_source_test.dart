@@ -54,6 +54,12 @@ class _FakeBridge implements GlassesBridgeApi {
     return 'req';
   }
   @override
+  Future<String> startVideoRecording(int seconds) async => 'vid-req';
+  @override
+  Future<void> stopVideoRecording() async {}
+  @override
+  Future<void> setVideoDuration(int seconds) async {}
+  @override
   Future<void> pairClassicBt() async {}
   @override
   Future<void> startWifiSync() async {}

@@ -378,6 +378,102 @@ class LiveController {
     }
   }
 
+  // ---- Glasses video recording -------------------------------------------
+  //
+  // Self-contained: the only state it owns is [_state.recording] plus one
+  // ticker, and every path clears both. Nothing else in the session reads it,
+  // so a fault here cannot reach the mic, the socket or a capture.
+
+  /// Repaints the on-screen clock. The elapsed time itself comes from
+  /// [GlassesRecording.startedAt], so a missed tick is cosmetic.
+  Timer? _recordingTicker;
+
+  /// Start recording on the glasses for the configured duration. Reports
+  /// problems through [_state.lastError] — never silently does nothing.
+  Future<void> startGlassesRecording() async {
+    final bridge = _glassesBridge;
+    if (bridge == null) return;
+    if (_state.recording != null) return;
+    if (!_state.glassesConnected) {
+      _emit(_state.copyWith(
+          lastError: 'Connect the glasses first to record video.'));
+      return;
+    }
+    try {
+      await bridge.startVideoRecording(_config.videoRecordSeconds);
+      // The `recording` state is set by the videoState event, not here: only
+      // the glasses can confirm they actually started.
+    } catch (e) {
+      _log.warn('startGlassesRecording failed: $e');
+      _emit(_state.copyWith(lastError: "Couldn't start the recording."));
+    }
+  }
+
+  /// Stop early. The UI flips as soon as the glasses confirm.
+  Future<void> stopGlassesRecording() async {
+    final bridge = _glassesBridge;
+    if (bridge == null || _state.recording == null) return;
+    try {
+      await bridge.stopVideoRecording();
+    } catch (e) {
+      _log.warn('stopGlassesRecording failed: $e');
+    }
+  }
+
+  /// Settings chooser → persist and push to the glasses.
+  Future<void> setVideoRecordSeconds(int seconds) async {
+    try {
+      await _glassesBridge?.setVideoDuration(seconds);
+    } catch (e) {
+      _log.warn('setVideoDuration failed: $e');
+    }
+  }
+
+  void _onVideoStateEvent(GlassesLabEvent event) {
+    final state = event.data['state'] as String?;
+    final requestId = (event.data['requestId'] as String?) ?? '';
+    switch (state) {
+      case 'recording':
+        final seconds = (event.data['seconds'] as num?)?.toInt() ??
+            _config.videoRecordSeconds;
+        _recordingTicker?.cancel();
+        _recordingTicker = Timer.periodic(
+          const Duration(seconds: 1),
+          (_) => _emit(_state.copyWith()),
+        );
+        _emit(_state.copyWith(
+          recording: GlassesRecording(
+            requestId: requestId,
+            seconds: seconds,
+            startedAt: DateTime.now(),
+          ),
+        ));
+      case 'stopped':
+        _endRecording();
+        // Pull it onto the phone if the user asked for that. The debounce also
+        // gives the glasses a moment to finalise the file.
+        if (_config.saveRecordingsToPhone) {
+          _scheduleAutoGlassesSync(const Duration(seconds: 6));
+        }
+      case 'failed':
+        _endRecording();
+        final detail = event.data['detail'] as String?;
+        _emit(_state.copyWith(
+          lastError: detail == null
+              ? "The recording couldn't start."
+              : 'Recording: $detail',
+        ));
+    }
+  }
+
+  void _endRecording() {
+    _recordingTicker?.cancel();
+    _recordingTicker = null;
+    if (_state.recording != null) {
+      _emit(_state.copyWith(clearRecording: true));
+    }
+  }
+
   /// Settings "Glasses" card: user-initiated disconnect — the bridge marks it
   /// user-intended, so no auto-reconnect fights it.
   Future<void> disconnectGlasses() async {
@@ -479,6 +575,8 @@ class LiveController {
         if (hex != null && hex.startsWith('photoStored')) {
           _scheduleAutoGlassesSync(const Duration(seconds: 8));
         }
+      case 'videoState':
+        _onVideoStateEvent(event);
       case 'syncProgress':
         // A sync run reaching 100% (files done / nothing to sync) frees the
         // in-flight guard so the next photo can trigger a fresh sync.
@@ -966,6 +1064,10 @@ class LiveController {
         // the backend tool waits for it. No-op if the phone camera is active
         // (it already streams frames).
         unawaited(captureGlassesPhoto());
+      case 'record_video':
+        unawaited(startGlassesRecording());
+      case 'stop_recording':
+        unawaited(stopGlassesRecording());
       case 'rotate_camera':
         unawaited(setCameraPortrait(!_state.cameraPortrait));
       case 'enable_bluetooth':
@@ -1717,6 +1819,7 @@ class LiveController {
     _userLogTimer?.cancel();
     _autoSyncTimer?.cancel();
     _autoSyncWatchdog?.cancel();
+    _recordingTicker?.cancel();
     await _audioSub?.cancel();
     await _videoSub?.cancel();
     await _glassesSub?.cancel();

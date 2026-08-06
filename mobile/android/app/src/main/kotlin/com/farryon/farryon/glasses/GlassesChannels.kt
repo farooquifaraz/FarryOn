@@ -320,6 +320,22 @@ class GlassesChannels private constructor(
                     sdk.takeAiPhoto(requestId)
                     result.success(requestId)
                 }
+                "startVideoRecording" -> {
+                    // The recording outlives this call by up to four minutes,
+                    // so the reply is just the correlation id; everything else
+                    // arrives as `videoState` events.
+                    val requestId = UUID.randomUUID().toString()
+                    sdk.startVideoRecording(
+                        requestId,
+                        (call.argument<Number>("seconds") ?: 60).toInt(),
+                    )
+                    result.success(requestId)
+                }
+                "stopVideoRecording" -> { sdk.stopVideoRecording(); result.success(null) }
+                "setVideoDuration" -> {
+                    sdk.setVideoDuration((call.argument<Number>("seconds") ?: 60).toInt())
+                    result.success(null)
+                }
                 "pairClassicBt" -> { sdk.pairClassicBt(); result.success(null) }
                 "startAudioTest" -> {
                     sdk.startAudioTest(call.argument<String>("mode") ?: "hfp")

@@ -261,3 +261,46 @@ blocks Stage B; glasses-as-dumb-I/O architecture validated end-to-end.
     - The SDK can reconnect silently (glasses woke on charger) with NO
       service-discovered broadcast — only battery callbacks betray the live
       link. The bridge now infers "connected" from battery traffic.
+
+---
+
+## Video recording — the `glassesControl` wire protocol (2026-08-06)
+
+Derived by decompiling BOTH the vendor `.aar` (`javap -c`, LIB_GLASSES_SDK-release_3)
+and the official HeyCyan app (`dexdump -d classes*.dex`), so these are the vendor's
+own byte sequences, not guesses. Photo (`0x02 0x01 0x01`) matches our long-standing
+hardware-verified command exactly, which validates the whole reading.
+
+**Command shape:** `byte[0]` = 0x01 READ / 0x02 WRITE-or-EXECUTE, `byte[1]` = dataType,
+then arguments. Multi-byte ints are little-endian (`ByteUtil.loword` = `x & 0xFF`
+after `int-to-byte`, `hiword` = `(x >>> 8) & 0xFF`).
+
+| Command | Meaning | Source |
+|---|---|---|
+| `02 01 01` | take photo | `MyChatGptCallback.takePicture` (= ours) |
+| `02 01 02` | **start/stop video — a TOGGLE** | `MyChatGptCallback.startVideo`, `HomeFragment$loadDataData$5$2` |
+| `02 01 08` | start audio recording | `AiChatViewModel.startRecord` |
+| `02 01 05` | SoC OTA | `OTAActivity.startSocOta` |
+| `02 04` | media counts | `PictureFragment.readAlbumCounts` (= ours) |
+| `01 02` | READ video config | `RecordSettingActivity.initView` |
+| `02 02 <angle> <durLo> <durHi>` | **WRITE video angle + recording duration (seconds)** | `RecordSettingActivity$initView$1$2$1.invoke` |
+| `01 0a` | read glasses work type | `DeviceCmdInit.getGlassesWorkType` — **UNUSABLE for us**: its reply needs `GlassModelControlResponse.getGlassesCurrentType()`, which does NOT exist in our .aar. HeyCyan ships a newer SDK. |
+
+**Response parsing** (`GlassModelControlResponse.acceptData`, byte offsets into the
+full packet): `dataType = b[7]`.
+* `dataType == 1` → `glassWorkType = b[8]`; only when `glassWorkType ∈ {1,2,4,6,7,8,11,12,18}`
+  **and** `errorCode (b[9]) == 0` is `workTypeIng = b[10]` parsed. So a response with
+  `errorCode == -1` carries **no** work type — that is the neutral "command sent" ack
+  we already documented for photos. `workTypeIng == 2` = recording video.
+* `dataType == 2` → `videoAngle = b[8]`, `videoDuration = b[9..10]` (LE, seconds).
+* `dataType == 4` → image/video/record counts.
+
+**Consequences for our implementation**
+1. Start and stop are the SAME command. The only authoritative "did it start?" signal
+   is `workTypeIng` on a `dataType == 1, errorCode == 0` reply — never toggle blind.
+2. Writing the duration to the device is what makes "the length the user picked" real:
+   the firmware auto-stops itself. An app-side timer alone cannot be trusted (the
+   device would stop at ITS configured duration first), and a blind app-side stop
+   toggle AFTER the device already stopped would start a NEW recording.
+3. HeyCyan refuses to start a video below **15 %** battery (`HomeFragment` checks
+   `UserConfig.battery <= 15` and toasts `g_glasses_low_battery`). We mirror that.

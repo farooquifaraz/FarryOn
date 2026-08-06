@@ -16,8 +16,10 @@ from app.tools.device import (
     EnableBluetoothTool,
     EndSessionTool,
     MuteMicTool,
+    RecordVideoTool,
     RotateCameraTool,
     SetCameraTool,
+    StopRecordingTool,
 )
 from app.tools.email_read import ReadEmailsTool, ReadEmailTool
 from app.tools.email_send import SendEmailTool
@@ -46,6 +48,8 @@ __all__ = [
     "ConnectGlassesTool",
     "CreateNoteTool",
     "DisconnectGlassesTool",
+    "RecordVideoTool",
+    "StopRecordingTool",
     "CreateTaskTool",
     "DeleteNoteTool",
     "DeleteTaskTool",
@@ -102,6 +106,8 @@ def build_default_tools() -> list[Tool]:
         EnableBluetoothTool(),
         ConnectGlassesTool(),
         DisconnectGlassesTool(),
+        RecordVideoTool(),
+        StopRecordingTool(),
         EndSessionTool(),
         ReadEmailsTool(),
         ReadEmailTool(),

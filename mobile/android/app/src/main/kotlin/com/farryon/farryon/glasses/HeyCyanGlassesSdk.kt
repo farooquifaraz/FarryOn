@@ -118,6 +118,45 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         /** Delay after connect before sweeping aged retention files, so the BLE
          *  MTU (which the delete command needs) is negotiated first. */
         private const val RETENTION_SWEEP_DELAY_MS = 5_000L
+
+        // -- Video recording (see LAB_NOTES.md "Video recording") -------------
+
+        /** Longest recording offered. The bridge REJECTS anything longer
+         *  instead of silently shortening it — a recording that quietly runs
+         *  for a different length than the user picked is the exact failure
+         *  this feature exists to avoid. */
+        private const val VIDEO_MAX_SECONDS = 240
+
+        /** Ack budget for the start/stop toggle. Same shape as the photo
+         *  watchdog: busy glasses ignore control commands silently, and the UI
+         *  must never sit on "recording…" forever because of it. */
+        private const val VIDEO_ACK_TIMEOUT_MS = 8_000L
+
+        /** Budget for reading the glasses' current video config before we
+         *  rewrite the duration. Fail-open: a silent read just means we skip
+         *  the write and say so. */
+        private const val VIDEO_CONFIG_READ_TIMEOUT_MS = 3_000L
+
+        /** Settle time between writing the duration and starting a recording,
+         *  so the two control writes don't share one callback slot. */
+        private const val VIDEO_CONFIG_SETTLE_MS = 500L
+
+        /** Stagger after [RETENTION_SWEEP_DELAY_MS] for the post-connect
+         *  duration push, so it doesn't collide with the volume write. */
+        private const val VIDEO_CONFIG_CONNECT_DELAY_MS = 6_500L
+
+        /** After the firmware's own auto-stop, how long before we ask the
+         *  glasses what they actually stored. */
+        private const val VIDEO_VERIFY_DELAY_MS = 4_000L
+
+        /** The vendor app refuses to start a video below this level
+         *  (HomeFragment: `battery <= 15` → g_glasses_low_battery). A recording
+         *  that dies with the battery leaves a corrupt file, so mirror it. */
+        private const val VIDEO_MIN_BATTERY_PCT = 15
+
+        /** `workTypeIng` value meaning "recording video" (see
+         *  [describeWorkType]) — the only authoritative start/stop signal. */
+        private const val WORK_TYPE_RECORDING_VIDEO = 2
     }
 
     override val implementationName = "heycyan"
@@ -158,6 +197,31 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         photoWatchdog?.let(main::removeCallbacks)
         photoWatchdog = null
     }
+
+    // -- Video recording state (all new; nothing above is reused) -------------
+
+    /** The in-flight recording, or null when idle. Deliberately NOT sharing
+     *  [photoRequestId]: the two features must never be able to clear each
+     *  other's state. */
+    @Volatile private var videoRequestId: String? = null
+    private var videoSeconds = 0
+    private var videoStartMs = 0L
+    private var videoAckWatchdog: Runnable? = null
+    private var videoExpiryTimer: Runnable? = null
+    private var videoVerifyTimer: Runnable? = null
+
+    /** True once the toggle's reply confirmed `workTypeIng == 2`. Until then a
+     *  "stop" must not be sent — a toggle against an idle device STARTS one. */
+    @Volatile private var videoConfirmed = false
+
+    /** The duration we last confirmed writing to this device (-1 = unknown,
+     *  e.g. after a reconnect). When it already matches the user's choice the
+     *  start path is a single BLE write. */
+    @Volatile private var videoDurationOnDevice = -1
+
+    /** Last battery percentage the glasses reported, for the low-battery
+     *  refusal. -1 = never reported, which is treated as "allow". */
+    @Volatile private var lastBatteryPct = -1
 
     // -- Audio test state (Task 2.5) ------------------------------------------
     /** null | hfp | pcm | tts — which lab audio mode is armed. */
@@ -426,8 +490,16 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     // rationale — the volume block rides the BLE control
                     // channel that needs the link fully up).
                     main.postDelayed({ applySavedVolume() }, RETENTION_SWEEP_DELAY_MS)
+                    // And the recording length, staggered so the two control
+                    // writes don't contend for the SDK's single callback slot.
+                    main.postDelayed(
+                        { applySavedVideoDuration() }, VIDEO_CONFIG_CONNECT_DELAY_MS
+                    )
                 }
-                "disconnected" -> GlassesForegroundService.stop(app)
+                "disconnected" -> {
+                    onVideoLinkLost()
+                    GlassesForegroundService.stop(app)
+                }
             }
         } catch (e: Exception) {
             Log.i(TAG, "foreground service: $e")
@@ -800,13 +872,16 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     return
                 }
                 when (load[6].toInt()) {
-                    0x05 -> emit(
-                        "battery",
-                        mapOf(
-                            "pct" to load.getOrNull(7)?.toInt(),
-                            "charging" to (load.getOrNull(8)?.toInt() == 1),
+                    0x05 -> {
+                        load.getOrNull(7)?.toInt()?.let { lastBatteryPct = it }
+                        emit(
+                            "battery",
+                            mapOf(
+                                "pct" to load.getOrNull(7)?.toInt(),
+                                "charging" to (load.getOrNull(8)?.toInt() == 1),
+                            )
                         )
-                    )
+                    }
                     0x02 -> {
                         // AI photo captured on the glasses → pull thumbnail.
                         emit(
@@ -1321,6 +1396,13 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
     override fun takePhoto() {
         Log.i(TAG, "takePhoto")
+        // A control command mid-recording is answered on the same single
+        // callback slot the recording is waiting on, and 0x02 0x01 0x01 would
+        // pull the glasses out of video mode. Refuse loudly instead.
+        videoRequestId?.let {
+            emit("deviceEvent", mapOf("hex" to "takePhoto skipped — recording video"))
+            return
+        }
         LargeDataHandler.getInstance().glassesControl(
             byteArrayOf(0x02, 0x01, 0x01)
         ) { _, rsp ->
@@ -1369,6 +1451,15 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             )
             return
         }
+        // Same single-callback-slot reason as takePhoto, plus: the glasses
+        // can't be in photo and video work mode at once.
+        videoRequestId?.let {
+            emitCaptureFailed(
+                requestId, "busy",
+                "the glasses are recording video ($it)"
+            )
+            return
+        }
         photoRequestId = requestId
         photoStartMs = SystemClock.elapsedRealtime()
         // Busy glasses (e.g. stuck in WiFi/transfer mode) silently ignore the
@@ -1403,6 +1494,361 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 )
             }
         }
+    }
+
+    // -- Video recording (Task: glasses video) --------------------------------
+    //
+    // Wire protocol, and the evidence behind every byte, is in
+    // mobile/lib/features/glasses_lab/LAB_NOTES.md — "Video recording".
+    // Three facts drive this whole section:
+    //   1. Start and stop are the SAME command (0x02 0x01 0x02). Sending it
+    //      blind against an idle device starts a recording nobody asked for,
+    //      so every send checks the reply's `workTypeIng` before believing
+    //      anything.
+    //   2. The FIRMWARE auto-stops at its own configured duration. That is why
+    //      the user's choice is written to the device (setVideoDuration) rather
+    //      than enforced by an app-side timer — an app timer would fight a
+    //      firmware that already stopped.
+    //   3. A reply carrying errorCode == -1 is the SDK's neutral "command sent"
+    //      ack and carries NO work type (hardware-verified for photos, and the
+    //      vendor's own parser skips workTypeIng unless errorCode == 0).
+
+    private fun cancelVideoTimers() {
+        videoAckWatchdog?.let(main::removeCallbacks)
+        videoAckWatchdog = null
+        videoExpiryTimer?.let(main::removeCallbacks)
+        videoExpiryTimer = null
+        videoVerifyTimer?.let(main::removeCallbacks)
+        videoVerifyTimer = null
+    }
+
+    private fun emitVideoState(
+        state: String,
+        requestId: String,
+        seconds: Int,
+        reason: String? = null,
+        detail: String? = null,
+    ) {
+        val elapsed =
+            if (videoStartMs > 0) (SystemClock.elapsedRealtime() - videoStartMs).toInt()
+            else 0
+        val payload = mutableMapOf<String, Any?>(
+            "state" to state,
+            "requestId" to requestId,
+            "seconds" to seconds,
+            "elapsedMs" to elapsed,
+        )
+        if (reason != null) payload["reason"] = reason
+        if (detail != null) payload["detail"] = detail
+        emit("videoState", payload)
+    }
+
+    /** Terminal failure: clear everything and tell Dart WHY. */
+    private fun failVideo(
+        requestId: String,
+        seconds: Int,
+        reason: String,
+        detail: String,
+    ) {
+        Log.i(TAG, "video failed ($reason): $detail")
+        cancelVideoTimers()
+        if (videoRequestId == requestId) {
+            videoRequestId = null
+            videoConfirmed = false
+        }
+        emitVideoState("failed", requestId, seconds, reason, detail)
+        videoStartMs = 0
+    }
+
+    /** Terminal success: the recording is over and lives on the glasses. */
+    private fun finishVideo(requestId: String, seconds: Int, reason: String) {
+        Log.i(TAG, "video stopped ($reason) $requestId")
+        cancelVideoTimers()
+        videoRequestId = null
+        videoConfirmed = false
+        emitVideoState("stopped", requestId, seconds, reason)
+        videoStartMs = 0
+        // Ask the glasses what they actually stored. This is the only evidence
+        // available that a file landed, and it doubles as the trigger for the
+        // Dart side's "save to phone" sync.
+        videoVerifyTimer = Runnable { refreshMediaCount() }.also {
+            main.postDelayed(it, VIDEO_VERIFY_DELAY_MS)
+        }
+    }
+
+    override fun startVideoRecording(requestId: String, seconds: Int) {
+        Log.i(TAG, "startVideoRecording $requestId ${seconds}s")
+        if (lastConnectionState != "connected") {
+            failVideo(requestId, seconds, "not_connected", "the glasses aren't connected")
+            return
+        }
+        videoRequestId?.let {
+            failVideo(requestId, seconds, "busy", "a recording ($it) is already running")
+            return
+        }
+        photoRequestId?.let {
+            failVideo(requestId, seconds, "busy", "a photo capture ($it) is in flight")
+            return
+        }
+        if (syncActive) {
+            failVideo(
+                requestId, seconds, "busy",
+                "a WiFi media sync is running — the glasses can't record in transfer mode"
+            )
+            return
+        }
+        if (seconds < 1 || seconds > VIDEO_MAX_SECONDS) {
+            failVideo(
+                requestId, seconds, "bad_duration",
+                "${seconds}s is outside the supported 1..${VIDEO_MAX_SECONDS}s"
+            )
+            return
+        }
+        val battery = lastBatteryPct
+        if (battery in 0 until VIDEO_MIN_BATTERY_PCT) {
+            failVideo(
+                requestId, seconds, "low_battery",
+                "the glasses are at $battery% (video needs at least $VIDEO_MIN_BATTERY_PCT%)"
+            )
+            return
+        }
+        videoRequestId = requestId
+        videoSeconds = seconds
+        videoConfirmed = false
+        videoStartMs = 0
+        if (videoDurationOnDevice == seconds) {
+            // Already in sync (Settings pushed it, or a previous recording did)
+            // — start on a single write, which is what makes the button feel
+            // instant.
+            sendVideoToggle(requestId, seconds, starting = true)
+        } else {
+            writeVideoDurationThen(seconds) { note ->
+                if (videoRequestId != requestId) return@writeVideoDurationThen
+                if (note != null) emit("deviceEvent", mapOf("hex" to note))
+                sendVideoToggle(requestId, seconds, starting = true)
+            }
+        }
+    }
+
+    override fun stopVideoRecording() {
+        val requestId = videoRequestId
+        if (requestId == null) {
+            Log.i(TAG, "stopVideoRecording: nothing is recording")
+            return
+        }
+        if (!videoConfirmed) {
+            // The start was never confirmed, so we don't know whether the
+            // glasses are recording. Toggling now could START one. Let the ack
+            // watchdog resolve it instead.
+            Log.i(TAG, "stopVideoRecording: start not confirmed yet — waiting")
+            return
+        }
+        sendVideoToggle(requestId, videoSeconds, starting = false)
+    }
+
+    /**
+     * Send the start/stop toggle and interpret the reply.
+     *
+     * [starting] is what we INTENDED; `workTypeIng` says what actually
+     * happened, and they can disagree — e.g. the wearer already started a
+     * recording from the glasses themselves. When a stop accidentally starts a
+     * recording, one corrective toggle is sent ([correcting] guards against
+     * looping on a device that keeps disagreeing).
+     */
+    private fun sendVideoToggle(
+        requestId: String,
+        seconds: Int,
+        starting: Boolean,
+        correcting: Boolean = false,
+    ) {
+        cancelVideoTimers()
+        val watchdog = Runnable {
+            if (videoRequestId != requestId) return@Runnable
+            if (starting) {
+                failVideo(
+                    requestId, seconds, "capture_timeout",
+                    "no recording ack within $VIDEO_ACK_TIMEOUT_MS ms — " +
+                        "glasses busy (WiFi/transfer/AI mode?)"
+                )
+            } else {
+                // Never strand the UI on "recording" because a stop went
+                // unanswered: report it stopped and say the ack was missing.
+                finishVideo(requestId, seconds, "stopped_unacknowledged")
+            }
+        }
+        videoAckWatchdog = watchdog
+        main.postDelayed(watchdog, VIDEO_ACK_TIMEOUT_MS)
+
+        LargeDataHandler.getInstance().glassesControl(
+            byteArrayOf(0x02, 0x01, 0x02)
+        ) { _, rsp ->
+            if (rsp == null) return@glassesControl
+            // Marshal onto main before touching any of the state above: this
+            // callback arrives on a binder thread.
+            main.post {
+                if (videoRequestId != requestId) return@post
+                if (rsp.dataType != 1) return@post
+                if (rsp.errorCode > 0) {
+                    val why = "refused err=${rsp.errorCode} ${describeWorkType(rsp.workTypeIng)}"
+                    if (starting) {
+                        failVideo(requestId, seconds, "busy", why)
+                    } else {
+                        finishVideo(requestId, seconds, "stop_refused")
+                    }
+                    return@post
+                }
+                // errorCode 0 or -1 both mean ACCEPTED (the vendor app treats
+                // 0 and 0xFF the same way). Only errorCode == 0 carries a
+                // parsed workTypeIng; on the neutral ack we have to trust what
+                // we asked for, exactly as HeyCyan does.
+                onVideoAccepted(
+                    requestId, seconds, starting, correcting,
+                    workTypeKnown = rsp.errorCode == 0,
+                    workTypeIng = rsp.workTypeIng,
+                )
+            }
+        }
+    }
+
+    /**
+     * The glasses accepted the toggle. [workTypeKnown] says whether they also
+     * told us the resulting mode: when they did it is authoritative and can
+     * contradict [starting] (someone started a recording on the glasses
+     * themselves); when they didn't — the neutral ack — the intent stands,
+     * which is what the vendor app does too.
+     */
+    private fun onVideoAccepted(
+        requestId: String,
+        seconds: Int,
+        starting: Boolean,
+        correcting: Boolean,
+        workTypeKnown: Boolean,
+        workTypeIng: Int,
+    ) {
+        val recording =
+            if (workTypeKnown) workTypeIng == WORK_TYPE_RECORDING_VIDEO else starting
+        cancelVideoTimers()
+        if (starting) {
+            if (!recording) {
+                // The toggle turned recording OFF, which means the glasses were
+                // ALREADY recording (started on the device itself). Report the
+                // truth rather than pretending we started something.
+                failVideo(
+                    requestId, seconds, "already_recording",
+                    "the glasses were already recording; that recording has been " +
+                        "stopped — tap again to start a fresh one"
+                )
+                return
+            }
+            videoConfirmed = true
+            videoStartMs = SystemClock.elapsedRealtime()
+            emitVideoState("recording", requestId, seconds)
+            // The firmware auto-stops at the duration we wrote; this timer only
+            // closes the UI out at the same moment. It deliberately does NOT
+            // send a stop toggle — that would start a new recording.
+            videoExpiryTimer = Runnable {
+                if (videoRequestId == requestId) {
+                    finishVideo(requestId, seconds, "duration_reached")
+                }
+            }.also { main.postDelayed(it, seconds * 1000L) }
+            return
+        }
+        // Intended a stop.
+        if (recording) {
+            if (correcting) {
+                failVideo(
+                    requestId, seconds, "stop_failed",
+                    "the glasses stayed in recording mode after two stop commands"
+                )
+                return
+            }
+            // We toggled an already-stopped device back ON — undo it at once.
+            Log.i(TAG, "stop started a new recording — correcting")
+            sendVideoToggle(requestId, seconds, starting = false, correcting = true)
+            return
+        }
+        finishVideo(requestId, seconds, "user_stopped")
+    }
+
+    /**
+     * Read the glasses' current video config, keep the angle, write our
+     * duration. [then] runs on the main thread either way — with a note to log
+     * when something was skipped, or null when the write went through cleanly.
+     */
+    private fun writeVideoDurationThen(seconds: Int, then: (String?) -> Unit) {
+        var done = false
+        fun finish(note: String?) {
+            if (done) return
+            done = true
+            then(note)
+        }
+        LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x01, 0x02)) { _, rsp ->
+            if (rsp == null || rsp.dataType != 2) return@glassesControl
+            val angle = rsp.videoAngle
+            val current = rsp.videoDuration
+            main.post {
+                if (done) return@post
+                if (current == seconds) {
+                    videoDurationOnDevice = seconds
+                    finish(null)
+                    return@post
+                }
+                LargeDataHandler.getInstance().glassesControl(
+                    byteArrayOf(
+                        0x02, 0x02,
+                        (angle and 0xFF).toByte(),
+                        (seconds and 0xFF).toByte(),
+                        ((seconds ushr 8) and 0xFF).toByte(),
+                    )
+                ) { _, _ -> }
+                videoDurationOnDevice = seconds
+                main.postDelayed({
+                    finish("video duration ${current}s → ${seconds}s (angle $angle kept)")
+                }, VIDEO_CONFIG_SETTLE_MS)
+            }
+        }
+        main.postDelayed({
+            // Fail open: start anyway, but be loud that the glasses' OWN
+            // duration is now what stops the recording.
+            finish(
+                "video config read timed out — the glasses' own duration governs " +
+                    "this recording, not the ${seconds}s you picked"
+            )
+        }, VIDEO_CONFIG_READ_TIMEOUT_MS)
+    }
+
+    override fun setVideoDuration(seconds: Int) {
+        val clamped = seconds.coerceIn(1, VIDEO_MAX_SECONDS)
+        Log.i(TAG, "setVideoDuration ${clamped}s")
+        retentionPrefs().edit().putInt("video_seconds", clamped).apply()
+        if (lastConnectionState != "connected" || videoRequestId != null) return
+        writeVideoDurationThen(clamped) { note ->
+            if (note != null) emit("deviceEvent", mapOf("hex" to note))
+        }
+    }
+
+    /** Push the saved recording length to freshly-connected glasses, so the
+     *  firmware's auto-stop already matches the user's choice by the time they
+     *  hit record. Mirrors [applySavedVolume]. */
+    private fun applySavedVideoDuration() {
+        if (lastConnectionState != "connected" || videoRequestId != null) return
+        val saved = retentionPrefs().getInt("video_seconds", -1)
+        if (saved <= 0) return
+        writeVideoDurationThen(saved) { note ->
+            if (note != null) emit("deviceEvent", mapOf("hex" to note))
+        }
+    }
+
+    /** The link died. A recording keeps running on the glasses, but we can no
+     *  longer observe or stop it — say so instead of leaving a stuck clock. */
+    private fun onVideoLinkLost() {
+        videoDurationOnDevice = -1
+        val requestId = videoRequestId ?: return
+        failVideo(
+            requestId, videoSeconds, "disconnected",
+            "the glasses disconnected mid-recording — the file (if any) stays on " +
+                "them and syncs on the next connect"
+        )
     }
 
     /** Rolling watchdog for the BLE thumbnail transfer (re-armed per chunk). */
@@ -1525,6 +1971,21 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
     override fun startWifiSync() {
         Log.i(TAG, "startWifiSync")
+        // WiFi-P2P puts the glasses in transfer mode, which aborts a recording
+        // in progress. Refuse — and emit a TERMINAL syncProgress so whoever
+        // asked (including the debounced auto-sync) releases its in-flight
+        // guard instead of waiting for a run that will never report.
+        videoRequestId?.let {
+            emit(
+                "syncProgress",
+                mapOf(
+                    "file" to "sync skipped — recording video",
+                    "pct" to 100,
+                    "speedKbps" to 0.0,
+                )
+            )
+            return
+        }
         syncActive = true
         emit(
             "syncProgress",
@@ -1918,6 +2379,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                         pendingMac ?: DeviceManager.getInstance().deviceAddress,
                     )
                 }
+                lastBatteryPct = resp.battery
                 emit(
                     "battery",
                     mapOf("pct" to resp.battery, "charging" to resp.isCharging)
@@ -1956,6 +2418,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         cancelPhotoWatchdog()
         cancelThumbnailWatchdog()
         cancelSyncWatchdog()
+        cancelVideoTimers()
+        videoRequestId = null
+        videoConfirmed = false
         stopAudioTest()
         tts?.shutdown()
         tts = null

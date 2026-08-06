@@ -61,6 +61,8 @@ def test_export_schemas_matches_protocol() -> None:
         "connect_glasses",
         "disconnect_glasses",
         "enable_bluetooth",
+        "record_video",
+        "stop_recording",
     }
 
     assert schemas["create_note"]["parameters"] == {

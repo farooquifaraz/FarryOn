@@ -209,6 +209,52 @@ class DisconnectGlassesTool(Tool):
         return {"applied": True}
 
 
+class RecordVideoTool(Tool):
+    """Start a video recording on the smart glasses.
+
+    Fire-and-forget on purpose: a recording runs for up to four minutes, and a
+    tool call that waited for it would stall the whole live session. The app
+    starts it the moment it sees this call and reports the outcome on screen.
+    """
+
+    name = "record_video"
+    description = (
+        "Start recording VIDEO on the user's smart glasses. Use when they ask "
+        "to record a video / start recording / video banao / video record karo. "
+        "This is only for video — a request for a photo or a question about "
+        "what they are looking at is capture_photo instead. The recording "
+        "stops on its own after the length set in the app's settings; say that "
+        "you have started recording."
+    )
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+
+    async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+        return {"started": True}
+
+
+class StopRecordingTool(Tool):
+    """Stop a glasses video recording early."""
+
+    name = "stop_recording"
+    description = (
+        "Stop the video recording running on the user's smart glasses. Use "
+        "when they say to stop/end the recording, or 'recording band karo'. "
+        "Does nothing if nothing is recording."
+    )
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+
+    async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+        return {"stopped": True}
+
+
 class EndSessionTool(Tool):
     """End the live session."""
 

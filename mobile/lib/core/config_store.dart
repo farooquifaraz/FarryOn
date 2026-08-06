@@ -127,6 +127,8 @@ class ConfigStore {
       primaryLanguage: p.getString('cfg.lang.primary'),
       secondaryLanguage: p.getString('cfg.lang.secondary'),
       glassesVolume: p.getInt('cfg.glassesVolume'),
+      videoRecordSeconds: p.getInt('cfg.videoRecordSeconds'),
+      saveRecordingsToPhone: p.getBool('cfg.saveRecordingsToPhone'),
     );
   }
 
@@ -148,6 +150,8 @@ class ConfigStore {
     await p.setString('cfg.lang.primary', c.primaryLanguage);
     await p.setString('cfg.lang.secondary', c.secondaryLanguage);
     await p.setInt('cfg.glassesVolume', c.glassesVolume);
+    await p.setInt('cfg.videoRecordSeconds', c.videoRecordSeconds);
+    await p.setBool('cfg.saveRecordingsToPhone', c.saveRecordingsToPhone);
   }
 
   // ---- Email accounts ----------------------------------------------------

@@ -151,6 +151,10 @@ class LiveNotifier extends Notifier<LiveSessionState> {
   Future<void> disconnectGlasses() => _controller.disconnectGlasses();
   Future<void> setGlassesVolume(int level) =>
       _controller.setGlassesVolume(level);
+  Future<void> startGlassesRecording() => _controller.startGlassesRecording();
+  Future<void> stopGlassesRecording() => _controller.stopGlassesRecording();
+  Future<void> setVideoRecordSeconds(int seconds) =>
+      _controller.setVideoRecordSeconds(seconds);
   void respondToolPermission(String id, bool granted) =>
       _controller.respondToolPermission(id, granted);
   void dismissError() => _controller.dismissError();
