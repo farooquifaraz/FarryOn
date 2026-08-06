@@ -70,6 +70,9 @@ class WebSocketLiveClient {
   static const Duration _pongTimeout = Duration(seconds: 10);
   static const Duration _baseBackoff = Duration(milliseconds: 500);
   static const Duration _maxBackoff = Duration(seconds: 8);
+  // If the socket opens but the server never sends `ready`, recover instead of
+  // hanging in `connecting` forever (half-open LB, stuck worker, TLS proxy).
+  static const Duration _readyTimeout = Duration(seconds: 10);
 
   final _events = StreamController<ServerMessage>.broadcast();
   final _frames = StreamController<DecodedFrame>.broadcast();
@@ -93,6 +96,7 @@ class WebSocketLiveClient {
   Timer? _pingTimer;
   Timer? _pongTimer;
   Timer? _reconnectTimer;
+  Timer? _readyTimer;
 
   int _backoffAttempt = 0;
   final _random = Random();
@@ -198,6 +202,18 @@ class WebSocketLiveClient {
 
     // Handshake immediately; the server replies with `ready` (§6).
     _sendHandshake();
+
+    // Guard the `ready` reply itself: the heartbeat only starts in _onReady, so
+    // without this a socket that connects but never gets `ready` would sit in
+    // `connecting` until an OS-level TCP timeout (minutes). Treat a missing
+    // `ready` as a dead link and recover via the normal drop path.
+    _readyTimer?.cancel();
+    _readyTimer = Timer(_readyTimeout, () {
+      if (_currentStatus != ConnectionStatus.connected) {
+        _log.warn('no `ready` within ${_readyTimeout.inSeconds}s → dropping');
+        _handleDrop();
+      }
+    });
   }
 
   void _sendHandshake() {
@@ -307,6 +323,8 @@ class WebSocketLiveClient {
   void _onReady(ReadyMessage msg) {
     _resumeId = msg.sessionId;
     _backoffAttempt = 0; // reset backoff on a successful handshake (§7)
+    _readyTimer?.cancel(); // `ready` arrived — disarm the watchdog
+    _readyTimer = null;
     _setStatus(ConnectionStatus.connected);
     _startHeartbeat();
     if (msg.protocolVersion != kProtocolVersion) {
@@ -389,8 +407,10 @@ class WebSocketLiveClient {
   Future<void> _teardownSocket({int? closeCode}) async {
     _pingTimer?.cancel();
     _pongTimer?.cancel();
+    _readyTimer?.cancel();
     _pingTimer = null;
     _pongTimer = null;
+    _readyTimer = null;
 
     final sub = _socketSub;
     final channel = _channel;
@@ -416,6 +436,7 @@ class WebSocketLiveClient {
     _disposed = true;
     _started = false;
     _reconnectTimer?.cancel();
+    _readyTimer?.cancel();
     await _teardownSocket(closeCode: ws_status.goingAway);
     await _events.close();
     await _frames.close();

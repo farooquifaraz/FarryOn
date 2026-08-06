@@ -725,6 +725,17 @@ class LiveController {
         // foreground, leaving the camera released with nothing to restore it.
         // Now that we're connected, put it back if it should be on.
         unawaited(_ensureCameraMatchesIntent());
+        // Reconnect restores session INTENT, not just the camera: if the mic
+        // was open before the drop, the surviving audio subscription is still
+        // pushing PCM but the server's VAD window belonged to the dead session
+        // — re-open it so the user isn't silently unheard after a reconnect.
+        // On a FIRST connect micOpen is still false (startListening runs
+        // later), so this never double-sends audio_start. Also re-sync the
+        // device kind so glasses/phone frame-wait budgets stay correct.
+        if (_state.micOpen) {
+          _client.send(const AudioStartMessage());
+        }
+        _notifyDeviceUpdate();
       case TranscriptMessage():
         _applyTranscript(msg);
       case AudioStartEvent():
