@@ -388,25 +388,105 @@ class LiveController {
   /// [GlassesRecording.startedAt], so a missed tick is cosmetic.
   Timer? _recordingTicker;
 
-  /// Start recording on the glasses for the configured duration. Reports
-  /// problems through [_state.lastError] — never silently does nothing.
-  Future<void> startGlassesRecording() async {
+  /// Whether the mic was open before the recording, so it can be put back the
+  /// way the user had it — and only that way.
+  bool _micWasOpenBeforeRecording = false;
+
+  /// A start already in progress. Silencing Farry takes a moment (the speaker
+  /// has to drain), and a second tap during that window must not queue up a
+  /// second recording.
+  bool _startingRecording = false;
+
+  /// Longest we wait for the speaker to fall silent before recording anyway.
+  /// A stuck playback must not block the feature — but it must not be able to
+  /// bleed a whole sentence into the video either.
+  static const _recordingSilenceTimeout = Duration(seconds: 3);
+
+  /// Longest a spoken "starting the recording" may take before we roll without
+  /// it. Generous: cutting the confirmation off is worse than a short wait,
+  /// and the user asked for this out loud so they are expecting an answer.
+  static const _recordingReplyTimeout = Duration(seconds: 8);
+
+  /// How long to let that reply START arriving. A voice tool call reaches us
+  /// BEFORE its audio does, so without this "nothing is playing" would read as
+  /// "nothing to wait for" and the confirmation would be swallowed.
+  static const _recordingReplyGrace = Duration(milliseconds: 1500);
+
+  /// Start recording on the glasses for the configured duration.
+  ///
+  /// Farry goes fully quiet FIRST. The glasses record their audio from their
+  /// own microphone, so the order here is the feature: interrupt whatever is
+  /// being said, close the mic, wait for the speaker to actually finish, and
+  /// only then tell the glasses to roll. Starting first and silencing after
+  /// would put the tail of a sentence into every video.
+  /// [afterSpokenReply] is set when the request came by voice: Farry is about
+  /// to say she's starting, and cutting that off would leave someone wearing
+  /// the glasses with no idea whether it worked. So that path waits for the
+  /// confirmation to finish instead of interrupting it.
+  Future<void> startGlassesRecording({bool afterSpokenReply = false}) async {
     final bridge = _glassesBridge;
     if (bridge == null) return;
-    if (_state.recording != null) return;
+    if (_state.recording != null || _startingRecording) return;
     if (!_state.glassesConnected) {
       _emit(_state.copyWith(
           lastError: 'Connect the glasses first to record video.'));
       return;
     }
+    _startingRecording = true;
     try {
+      _micWasOpenBeforeRecording = _state.micOpen;
+      // 1. Clear the speaker of anything Farry is saying.
+      if (afterSpokenReply) {
+        await _waitForSilence(_recordingReplyTimeout,
+            grace: _recordingReplyGrace);
+      } else if (_state.liveState == LiveState.speaking || _ttsActive) {
+        await interrupt();
+      }
+      // 2. Close the mic — no more turns can start.
+      if (_state.micOpen) await stopListening();
+      // 3. Confirm the speaker really is empty.
+      await _waitForSilence(_recordingSilenceTimeout);
+      // 4. Only now: roll. The `recording` state comes from the videoState
+      //    event, never from here — only the glasses can confirm they started.
       await bridge.startVideoRecording(_config.videoRecordSeconds);
-      // The `recording` state is set by the videoState event, not here: only
-      // the glasses can confirm they actually started.
     } catch (e) {
       _log.warn('startGlassesRecording failed: $e');
       _emit(_state.copyWith(lastError: "Couldn't start the recording."));
+      _restoreAfterRecording();
+    } finally {
+      _startingRecording = false;
     }
+  }
+
+  /// Poll until nothing is playing, capped so a wedged player can't hang the
+  /// button forever. [grace] first gives audio that hasn't started yet a
+  /// chance to appear, so a reply still in flight isn't mistaken for silence.
+  Future<void> _waitForSilence(Duration cap,
+      {Duration grace = Duration.zero}) async {
+    bool speaking() => _ttsActive || _player.isPlayingWithin(Duration.zero);
+    if (grace > Duration.zero) {
+      final graceEnd = DateTime.now().add(grace);
+      while (DateTime.now().isBefore(graceEnd) && !speaking()) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }
+    final deadline = DateTime.now().add(cap);
+    while (DateTime.now().isBefore(deadline)) {
+      if (!speaking()) return;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    _log.warn('recording: speaker still busy after ${cap.inSeconds}s '
+        '— starting anyway');
+  }
+
+  /// Give the session back exactly the mic state it had before recording.
+  /// Playback needs no undoing: its gate is derived from [_state.recording],
+  /// which the caller has already cleared.
+  void _restoreAfterRecording() {
+    if (_micWasOpenBeforeRecording && !_state.micOpen) {
+      unawaited(startListening());
+    }
+    _micWasOpenBeforeRecording = false;
   }
 
   /// Stop early. The UI flips as soon as the glasses confirm.
@@ -466,12 +546,16 @@ class LiveController {
     }
   }
 
+  /// End the recording locally and hand the session back to the user. Clearing
+  /// `recording` is what lifts the playback gate, so it happens FIRST and
+  /// unconditionally — every route out of a recording lands here.
   void _endRecording() {
     _recordingTicker?.cancel();
     _recordingTicker = null;
     if (_state.recording != null) {
       _emit(_state.copyWith(clearRecording: true));
     }
+    _restoreAfterRecording();
   }
 
   /// Settings "Glasses" card: user-initiated disconnect — the bridge marks it
@@ -778,6 +862,16 @@ class LiveController {
 
     _frameSub = _client.frames.listen((frame) {
       if (frame.tag == FrameTag.outputAudio) {
+        // Nothing may come out of the speakers while the glasses are
+        // recording: they capture their audio from their OWN microphone, so
+        // anything Farry says would be baked into the video.
+        //
+        // The gate is DERIVED from the recording state, not a flag of its own.
+        // That is deliberate: the mic gate that once deafened the whole app
+        // did so because a separate flag got stuck set. There is no second
+        // flag here to get stuck — the moment `recording` clears, by any
+        // route (stop, duration reached, timeout, disconnect), sound is back.
+        if (_state.recording != null) return;
         _ttsBytes += frame.payload.length; // track how much TTS we must play out
         // Fire-and-forget; PcmPlayer applies its own backpressure.
         unawaited(_player.feed(frame.payload));
@@ -1065,7 +1159,7 @@ class LiveController {
         // (it already streams frames).
         unawaited(captureGlassesPhoto());
       case 'record_video':
-        unawaited(startGlassesRecording());
+        unawaited(startGlassesRecording(afterSpokenReply: true));
       case 'stop_recording':
         unawaited(stopGlassesRecording());
       case 'rotate_camera':

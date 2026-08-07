@@ -1633,6 +1633,13 @@ class _RecordingBar extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 4),
+          // Farry is deliberately deaf and mute right now — say so, or the
+          // silence reads as the app having broken.
+          const Text(
+            'Farry is paused so her voice stays out of the video',
+            style: TextStyle(color: Aurora.textMuted, fontSize: 11),
+          ),
           const SizedBox(height: 8),
           ClipRRect(
             borderRadius: BorderRadius.circular(2),

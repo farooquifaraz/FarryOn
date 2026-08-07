@@ -243,7 +243,9 @@ class StopRecordingTool(Tool):
     description = (
         "Stop the video recording running on the user's smart glasses. Use "
         "when they say to stop/end the recording, or 'recording band karo'. "
-        "Does nothing if nothing is recording."
+        "Rarely reachable by voice — the microphone is closed while a "
+        "recording runs — but it works from a typed message. Does nothing if "
+        "nothing is recording."
     )
     parameters: dict[str, Any] = {
         "type": "object",

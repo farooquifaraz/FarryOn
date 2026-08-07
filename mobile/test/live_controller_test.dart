@@ -481,11 +481,11 @@ void main() {
   // started, and a badge that outlives one that ended.
 
   LiveController newGlassesController(FakeGlassesBridge glasses,
-      {AppConfig? config}) {
+      {AppConfig? config, FakePcmPlayer? player}) {
     final ctl = LiveController(
       config: config ?? const AppConfig(host: 'h', port: 8000, secure: false),
       registry: DeviceRegistry(factory: (_) => FakeCaptureSource()),
-      player: FakePcmPlayer(),
+      player: player ?? FakePcmPlayer(),
       permissions: GrantingPermissions(),
       clientFactory: (cfg, deviceInfo) => WebSocketLiveClient(
         config: cfg,
@@ -601,6 +601,13 @@ void main() {
       'needsPermission': false,
     });
     await tick();
+    expect(glasses.videoCalls, isEmpty,
+        reason: 'a spoken confirmation must not be cut off by the recording');
+
+    // The voice path waits for that confirmation before rolling — here none
+    // ever arrives, so it proceeds once the grace window closes.
+    await Future<void>.delayed(const Duration(milliseconds: 1900));
+    await tick();
     expect(glasses.videoCalls, ['start:60']);
 
     glasses.emit('videoState',
@@ -633,5 +640,124 @@ void main() {
     );
     expect(rec.clampedElapsed, const Duration(seconds: 30));
     expect(rec.label, '0:30 / 0:30');
+  });
+
+  // ---- Farry is silent while the glasses record ---------------------------
+  //
+  // The glasses capture their audio from their OWN microphone, so anything
+  // Farry says during a recording lands in the video. These pin the two halves
+  // of that: nothing comes out while recording, and everything comes back
+  // afterwards — including down the failure paths, because a permanently mute
+  // assistant is a far worse bug than a spoiled video.
+
+  test('no audio reaches the speaker while a recording is running', () async {
+    final glasses = FakeGlassesBridge();
+    final player = FakePcmPlayer();
+    final ctl = newGlassesController(glasses, player: player);
+    await ctl.connect();
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+
+    fake.pushBinary(MediaFrame.encode(
+        tag: FrameTag.outputAudio, timestampMs: 1, payload: Uint8List.fromList([1, 2, 3, 4])));
+    await tick();
+    expect(player.fed, hasLength(1), reason: 'normal playback works');
+
+    glasses.emit('videoState',
+        {'state': 'recording', 'requestId': 'v1', 'seconds': 30});
+    await tick();
+    fake.pushBinary(MediaFrame.encode(
+        tag: FrameTag.outputAudio, timestampMs: 2, payload: Uint8List.fromList([1, 2, 3, 4])));
+    await tick();
+    expect(player.fed, hasLength(1),
+        reason: "Farry's voice must not be recorded into the video");
+
+    glasses.emit('videoState', {
+      'state': 'stopped',
+      'requestId': 'v1',
+      'seconds': 30,
+      'reason': 'duration_reached',
+    });
+    await tick();
+    fake.pushBinary(MediaFrame.encode(
+        tag: FrameTag.outputAudio, timestampMs: 3, payload: Uint8List.fromList([1, 2, 3, 4])));
+    await tick();
+    expect(player.fed, hasLength(2),
+        reason: 'the speaker must come back the moment recording ends');
+  });
+
+  test('a failed recording still gives the speaker back', () async {
+    // The gate is derived from the recording state precisely so it cannot
+    // stick. This drives the nastiest exit — a mid-recording disconnect.
+    final glasses = FakeGlassesBridge();
+    final player = FakePcmPlayer();
+    final ctl = newGlassesController(glasses, player: player);
+    await ctl.connect();
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+    glasses.emit('videoState',
+        {'state': 'recording', 'requestId': 'v1', 'seconds': 240});
+    await tick();
+
+    glasses.emit('videoState', {
+      'state': 'failed',
+      'requestId': 'v1',
+      'seconds': 240,
+      'reason': 'disconnected',
+      'detail': 'the glasses disconnected mid-recording',
+    });
+    await tick();
+    fake.pushBinary(MediaFrame.encode(
+        tag: FrameTag.outputAudio, timestampMs: 9, payload: Uint8List.fromList([1, 2, 3, 4])));
+    await tick();
+    expect(player.fed, hasLength(1),
+        reason: 'a failure must never leave the assistant permanently mute');
+  });
+
+  test('the mic is closed before the glasses are told to roll', () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+    await ctl.startListening();
+    await tick();
+    expect(ctl.state.micOpen, isTrue);
+
+    await ctl.startGlassesRecording();
+    await tick();
+    expect(ctl.state.micOpen, isFalse,
+        reason: 'the mic must be shut before recording, not after');
+    expect(glasses.videoCalls, ['start:60']);
+  });
+
+  test('the mic is restored only if it was open beforehand', () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+    await ctl.stopListening();
+    await tick();
+    expect(ctl.state.micOpen, isFalse);
+
+    await ctl.startGlassesRecording();
+    await tick();
+    glasses.emit('videoState',
+        {'state': 'recording', 'requestId': 'v1', 'seconds': 30});
+    await tick();
+    glasses.emit('videoState', {
+      'state': 'stopped',
+      'requestId': 'v1',
+      'seconds': 30,
+      'reason': 'user_stopped',
+    });
+    await tick();
+    expect(ctl.state.micOpen, isFalse,
+        reason: "a closed mic must stay closed — don't hand back more than we took");
   });
 }

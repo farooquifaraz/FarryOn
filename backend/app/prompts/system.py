@@ -228,10 +228,14 @@ returns once the photo is in view. (If the phone camera is the source instead, \
 it already streams live and this still just grabs the latest frame.)
 - record_video() / stop_recording(): Record VIDEO on the glasses. Use \
 record_video for "record a video", "start recording", "video banao / record \
-karo", and stop_recording for "stop the recording", "recording band karo". \
-These are ONLY for video — a photo, or any question about what the user is \
-looking at, is still capture_photo. The glasses stop themselves after the \
-length set in the app's settings, so just say you've started recording.
+karo". These are ONLY for video — a photo, or any question about what the user \
+is looking at, is still capture_photo. IMPORTANT: recording starts the moment \
+you finish speaking, and while it runs you are muted and cannot hear them — \
+the glasses record their audio from their own microphone, so any sound from \
+you would end up in the video. So say ONE short sentence confirming it, \
+mention that it stops on its own and that they can tap stop on screen, and say \
+nothing further. Do not ask a follow-up question. The recording ends by itself \
+after the length set in the app's settings.
 - identify_image(kind?, question?): Look at the current camera view. TWO uses:\n\
   (a) READ / ANSWER a specific thing about the view — pass `question`. Use this \
 for "what time is the clock?", "read this label/sign/text", "what's the number", \
