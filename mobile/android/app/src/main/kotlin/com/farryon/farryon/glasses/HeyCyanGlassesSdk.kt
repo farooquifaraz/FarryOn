@@ -103,6 +103,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
          *  glasses' WiFi-P2P never comes up (e.g. on the charger). */
         private const val WIFI_SYNC_STALL_TIMEOUT_MS = 60_000L
 
+        /** How long to let both sides settle after a P2P reset before the one
+         *  retry. The glasses' WiFi takes seconds to come down and back up;
+         *  retrying immediately just re-wedges it. */
+        private const val SYNC_RECOVERY_SETTLE_MS = 6_000L
+
         /** Media-count probe reply budget before importing anyway. */
         private const val MEDIA_COUNT_PROBE_TIMEOUT_MS = 3_000L
 
@@ -1046,6 +1051,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         override fun onGlassesFail(errorCode: Int) {
             cancelSyncWatchdog()
             syncActive = false
+            syncRecoveryTried = false
             emit("deviceEvent", mapOf("hex" to "wifi glassesFail err=$errorCode"))
             emit(
                 "syncProgress",
@@ -1112,6 +1118,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         override fun fileDownloadComplete() {
             cancelSyncWatchdog()
             syncActive = false
+            syncRecoveryTried = false
             syncIndex = 0
             syncTotal = 0
             fullCleanupActive = false // a storage-full purge (if any) is done
@@ -2012,6 +2019,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
     override fun startWifiSync() {
         Log.i(TAG, "startWifiSync")
+        syncRecoveryTried = false
         // WiFi-P2P puts the glasses in transfer mode, which aborts a recording
         // in progress. Refuse — and emit a TERMINAL syncProgress so whoever
         // asked (including the debounced auto-sync) releases its in-flight
@@ -2208,23 +2216,75 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         cancelSyncWatchdog()
         val r = Runnable {
             if (!syncActive) return@Runnable
+            if (!syncRecoveryTried) {
+                recoverStalledSync()
+                return@Runnable
+            }
             syncActive = false
+            syncRecoveryTried = false
             emit(
                 "deviceEvent",
                 mapOf(
-                    "hex" to "WiFi sync STALLED (60 s) — glasses' WiFi-P2P never " +
-                        "appeared. Try: take the glasses OFF the charger, keep them " +
-                        "next to the phone, then Start sync again."
+                    "hex" to "WiFi sync STALLED again after a P2P reset — the " +
+                        "glasses need to be switched off and on."
                 )
             )
             // pct=100 releases the Lab's syncing spinner; the file text says why.
             emit(
                 "syncProgress",
-                mapOf("file" to "sync failed — see console", "pct" to 100, "speedKbps" to 0.0)
+                mapOf(
+                    "file" to "Couldn't reach the glasses' WiFi — switch them " +
+                        "off and on, then sync again",
+                    "pct" to 100,
+                    "speedKbps" to 0.0,
+                )
             )
         }
         syncWatchdog = r
         main.postDelayed(r, WIFI_SYNC_STALL_TIMEOUT_MS)
+    }
+
+    /** One automatic recovery per sync run: see [recoverStalledSync]. */
+    @Volatile private var syncRecoveryTried = false
+
+    /**
+     * A stalled transfer usually means the glasses' WiFi-P2P session is wedged
+     * — it winds down slowly and several syncs in quick succession can leave it
+     * stuck (seen 2026-08-08 after four transfers in ten minutes, and in the
+     * July notes). Until now the only cure was the user power-cycling the
+     * glasses, which is not something to ask of anyone in production.
+     *
+     * The vendor's own app has a command for exactly this
+     * (`WifiP2pManagerSingleton.resetDeviceP2p` = 0x02 0x01 0x0f), so: tear our
+     * side down, ask the glasses to reset theirs, wait for both to settle, and
+     * try once more. ONCE — [syncRecoveryTried] makes sure a device that is
+     * genuinely wedged produces one honest message instead of an endless loop.
+     */
+    private fun recoverStalledSync() {
+        syncRecoveryTried = true
+        Log.i(TAG, "sync stalled — resetting P2P and retrying once")
+        emit(
+            "syncProgress",
+            mapOf(
+                "file" to "reconnecting to the glasses' WiFi…",
+                "pct" to 0,
+                "speedKbps" to 0.0,
+            )
+        )
+        // Nothing to tear down on our side: the vendor SDK has no cancel for a
+        // running importAlbum (verified against the .aar). The reset below is
+        // aimed at the glasses, which is where the wedged session lives.
+        LargeDataHandler.getInstance().glassesControl(
+            byteArrayOf(0x02, 0x01, 0x0f)
+        ) { _, rsp ->
+            Log.i(TAG, "p2p reset reply err=${rsp?.errorCode}")
+        }
+        main.postDelayed({
+            if (!syncActive) return@postDelayed
+            Log.i(TAG, "retrying importAlbum after P2P reset")
+            armSyncWatchdog()
+            GlassesControl.getInstance(app)?.importAlbum()
+        }, SYNC_RECOVERY_SETTLE_MS)
     }
 
     private fun cancelSyncWatchdog() {

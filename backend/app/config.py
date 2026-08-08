@@ -33,8 +33,13 @@ class Settings(BaseSettings):
 
     # -- AI provider selection -------------------------------------------------
     ai_provider: AIProvider = Field(
-        default="mock",
-        description="Which AIGateway adapter to use: gemini | openai | mock.",
+        default="gemini",
+        description="Which AIGateway adapter to use: gemini | openai | grok | "
+        "mock. Defaults to gemini — its flash model has a free tier, so a fresh "
+        "deploy talks to a real model with only GEMINI_API_KEY set. NOTE: the "
+        "free tier is a single per-project quota shared by ALL users, not a "
+        "per-user allowance; at scale it is exhausted quickly and per-user "
+        "limits (quota_enforcement_enabled / plan_limits) still apply.",
     )
 
     # Gemini Live
