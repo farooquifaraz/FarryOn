@@ -77,6 +77,16 @@ class LiveController {
       _glassesBridge?.setRetentionDays(_config.glassesRetentionDays) ??
           Future<void>.value(),
     );
+    // Same reasoning for the recording length, and the same de-duplicated
+    // 'connected' event makes it necessary: the glasses can be linked before
+    // this controller ever subscribes (device-seen 2026-08-08 — an auto-connect
+    // completed first and the connect-time push never ran). Native persists it
+    // and re-applies it on a warm link, so seeding it here is what guarantees
+    // the firmware stops at the length the user picked.
+    unawaited(
+      _glassesBridge?.setVideoDuration(_config.videoRecordSeconds) ??
+          Future<void>.value(),
+    );
   }
 
   static final _log = Logger('LiveController');
@@ -615,6 +625,16 @@ class LiveController {
         if (connected) {
           unawaited(
             _glassesBridge?.setRetentionDays(_config.glassesRetentionDays) ??
+                Future<void>.value(),
+          );
+          // Keep the glasses' own recording length in step with the app's
+          // setting. The FIRMWARE is what stops a recording, so a device that
+          // never heard our choice would quietly use its own — and the user
+          // would get a different length than the one they picked. Pushing it
+          // here means it is already right before they ever hit record, even
+          // if they have never opened the Video recording page.
+          unawaited(
+            _glassesBridge?.setVideoDuration(_config.videoRecordSeconds) ??
                 Future<void>.value(),
           );
           // Pull anything already sitting on the glasses (photos taken while

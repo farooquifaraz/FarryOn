@@ -1822,6 +1822,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         Log.i(TAG, "setVideoDuration ${clamped}s")
         retentionPrefs().edit().putInt("video_seconds", clamped).apply()
         if (lastConnectionState != "connected" || videoRequestId != null) return
+        // Already in step with this device — skip the BLE round trip. Several
+        // callers legitimately push the same value around connect time (app
+        // start, the connect handler, the delayed re-apply), and connect is
+        // exactly when the control channel is busiest.
+        if (videoDurationOnDevice == clamped) return
         writeVideoDurationThen(clamped) { note ->
             if (note != null) emit("deviceEvent", mapOf("hex" to note))
         }
