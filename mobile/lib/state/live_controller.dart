@@ -857,6 +857,11 @@ class LiveController {
 
   Timer? _pendingMediaTimer;
 
+  /// Comfortably past the native stall-recovery worst case (60 s stall + 6 s
+  /// settle + 60 s retry). A backstop that fires DURING a recovery is worse
+  /// than no backstop.
+  static const _autoSyncGuardTimeout = Duration(seconds: 150);
+
   /// Settings / dashboard "Sync now": transfer whatever is waiting, on demand.
   /// Reports refusals through [_state.lastError] rather than doing nothing.
   Future<void> syncGlassesNow() async {
@@ -875,7 +880,7 @@ class LiveController {
     if (_autoSyncing) return; // already running
     _autoSyncing = true;
     _autoSyncWatchdog?.cancel();
-    _autoSyncWatchdog = Timer(const Duration(seconds: 90), () {
+    _autoSyncWatchdog = Timer(_autoSyncGuardTimeout, () {
       _autoSyncing = false;
     });
     try {
@@ -909,8 +914,11 @@ class LiveController {
     _autoSyncing = true;
     // Backstop: clear the guard even if a terminal syncProgress never lands
     // (sync stalls / glasses drop mid-run), so future photos still sync.
+    // Must outlast the native worst case — a 60 s stall, a P2P reset, and a
+    // 60 s retry — or this fires mid-recovery and lets a second transfer start
+    // on top of the one being rescued.
     _autoSyncWatchdog?.cancel();
-    _autoSyncWatchdog = Timer(const Duration(seconds: 90), () {
+    _autoSyncWatchdog = Timer(_autoSyncGuardTimeout, () {
       _autoSyncing = false;
     });
     unawaited(bridge.startWifiSync().catchError((Object e) {

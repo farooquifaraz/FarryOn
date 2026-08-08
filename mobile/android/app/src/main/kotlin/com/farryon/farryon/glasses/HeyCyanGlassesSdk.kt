@@ -934,6 +934,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                                 if (retentionDays == -1 && !syncActive) {
                                     fullCleanupActive = true
                                     syncActive = true
+                                    syncRecoveryTried = false
                                     armSyncWatchdog()
                                     GlassesControl.getInstance(app)?.importAlbum()
                                 }
@@ -2019,6 +2020,24 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
     override fun startWifiSync() {
         Log.i(TAG, "startWifiSync")
+        // One transfer at a time. With the stall recovery a run can now last
+        // ~2 minutes (60 s stall + reset + 60 s retry), which is longer than
+        // the Dart side's in-flight guard — so a second caller really can
+        // arrive mid-run, and two concurrent importAlbum calls would wedge the
+        // very P2P session the recovery is trying to rescue. No terminal
+        // syncProgress here on purpose: a sync IS running, and its own events
+        // are what should drive the UI.
+        if (syncActive) {
+            Log.i(TAG, "startWifiSync: a transfer is already running — ignoring")
+            // A deviceEvent, not a syncProgress: pct=100 would read as "this
+            // run finished" and release the caller's in-flight guard, which is
+            // the opposite of the truth.
+            emit(
+                "deviceEvent",
+                mapOf("hex" to "sync already in progress — request ignored")
+            )
+            return
+        }
         syncRecoveryTried = false
         // WiFi-P2P puts the glasses in transfer mode, which aborts a recording
         // in progress. Refuse — and emit a TERMINAL syncProgress so whoever
@@ -2183,6 +2202,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             return
         }
         syncActive = true
+        syncRecoveryTried = false
         armSyncWatchdog()
         GlassesControl.getInstance(app)?.importAlbum()
     }
@@ -2222,6 +2242,8 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             }
             syncActive = false
             syncRecoveryTried = false
+            syncIndex = 0
+            syncTotal = 0
             emit(
                 "deviceEvent",
                 mapOf(
