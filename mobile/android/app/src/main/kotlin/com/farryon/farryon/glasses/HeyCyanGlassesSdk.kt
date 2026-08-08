@@ -2145,6 +2145,29 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
     }
 
+    /**
+     * Debug: write the glasses' video resolution.
+     *
+     * Shape from the vendor app (RecordSettingActivity, videoResolution
+     * chooser): `{0x02, 0x08, sel, value}` where `sel` is 2 or 4 depending on
+     * orientation and `value` is the resolution the user picked. The legal
+     * VALUES arrive in the device's reply to `0x01 0x08 N`, whose dataType (8)
+     * our .aar does not parse — so they have to be found by measurement:
+     * write a candidate, record, compare the file size.
+     */
+    override fun debugSetVideoResolution(sel: Int, value: Int) {
+        Log.i(TAG, "debugSetVideoResolution sel=$sel value=$value")
+        LargeDataHandler.getInstance().glassesControl(
+            byteArrayOf(0x02, 0x08, (sel and 0xFF).toByte(), (value and 0xFF).toByte())
+        ) { _, rsp ->
+            Log.i(
+                TAG,
+                "resolution reply dataType=${rsp?.dataType} err=${rsp?.errorCode} " +
+                    "workType=${rsp?.glassWorkType}"
+            )
+        }
+    }
+
     override fun forceWifiSync() {
         Log.i(TAG, "forceWifiSync (debug)")
         if (videoRequestId != null || syncActive) {

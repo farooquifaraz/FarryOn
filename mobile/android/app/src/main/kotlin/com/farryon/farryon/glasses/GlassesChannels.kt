@@ -275,6 +275,10 @@ class GlassesChannels private constructor(
                     "rawtoggle" -> sdk.debugRawVideoToggle()
                     "info" -> sdk.requestDeviceInfo()
                     "resetp2p" -> sdk.debugResetP2p()
+                    "vres" -> sdk.debugSetVideoResolution(
+                        intent.getIntExtra("sel", 2),
+                        intent.getIntExtra("value", 2),
+                    )
                     // Connect to a SPECIFIC unit, so a second pair can be
                     // tested without driving the UI by hand.
                     "connectmac" -> {

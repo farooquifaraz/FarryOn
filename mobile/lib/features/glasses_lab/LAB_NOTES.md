@@ -434,3 +434,38 @@ claiming success — but a capture in that window costs a full 8 s watchdog
 before the user hears anything. A short post-transfer cool-down that refuses
 immediately would be kinder; not added yet, since the right length is a guess
 until it is measured.
+
+### 2026-08-08 — video resolution: command decoded, VALUES still unknown
+
+Trying to bring the file size down (30 s = ~42.6 MB, ~11 Mbps; 4 min ≈ 300 MB).
+
+The write is fully decoded from `RecordSettingActivity$initView$1$6$1.invoke`:
+
+```java
+int sel = (getDirection() == 1) ? 2 : 4;      // orientation selector
+byte[] b = { 0x02, 0x08, (byte) sel, (byte) getVideoResolution() };
+```
+
+So `{0x02, 0x08, <2|4>, <value>}`. The matching read is `{0x01, 0x08, N}`.
+
+**Blocked on the values.** The legal resolution values arrive in the device's
+reply to the read, whose `dataType` is 8 — and `GlassModelControlResponse
+.acceptData` in our .aar only parses dataType 1, 2, 3, 4 and 6. The write's
+reply is equally opaque: `dataType=0 err=1`, i.e. our parser did not recognise
+it at all. Same wall as `0x01 0x0a` (work type) earlier — HeyCyan ships a newer
+SDK than `LIB_GLASSES_SDK-release_3`.
+
+Measured blind, `sel=2`:
+* `value=2` → 30 s clip = 42.65 MB. Unchanged from the 42.6 MB baseline.
+* `value=1` → clip recorded, but the retrieval stalled (P2P did not come up
+  after several syncs in quick succession — the documented wind-down problem),
+  so its size was never measured.
+
+**Do not ship a quality setting until the values are known.** A chooser that
+silently does nothing is worse than no chooser. Two ways forward: ask the
+vendor for the value table (added to the L802 message), or get an .aar new
+enough to parse dataType 8.
+
+Note: this unit's resolution has been written twice with unverified values.
+Recording still works normally afterwards. The vendor app's Record settings
+screen is the place to see and reset it.

@@ -99,6 +99,10 @@ interface GlassesSdk {
 
     /** Debug/diagnostic: the vendor's own WiFi-P2P reset command. */
     fun debugResetP2p()
+
+    /** Debug/diagnostic: write the glasses' video resolution (see the
+     *  HeyCyan bridge for the byte shape). */
+    fun debugSetVideoResolution(sel: Int, value: Int)
     fun setVolume(type: String, level: Int)
 
     /** Auto-delete synced glasses photos to free the headset's storage.
@@ -355,6 +359,9 @@ class StubGlassesSdk : GlassesSdk {
 
     override fun debugResetP2p() =
         emit("deviceEvent", mapOf("hex" to "resetP2p (stub)"))
+
+    override fun debugSetVideoResolution(sel: Int, value: Int) =
+        emit("deviceEvent", mapOf("hex" to "videoResolution sel=$sel v=$value (stub)"))
 
     override fun setVolume(type: String, level: Int) {
         emit("deviceEvent", mapOf("hex" to "volume:$type=$level"))
