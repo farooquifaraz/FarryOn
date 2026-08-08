@@ -753,6 +753,89 @@ void main() {
     expect(glasses.recordingCalls, ['start:60']);
   });
 
+  test('a finished recording is announced on the dashboard and out loud',
+      () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    // A live session: the spoken half only fires when one is up.
+    fake.pushJson({
+      'type': 'ready',
+      'sessionId': 'sess-rec',
+      'protocolVersion': 1,
+      'model': 'test',
+    });
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+    glasses.emit('videoState',
+        {'state': 'recording', 'requestId': 'v1', 'seconds': 30});
+    await tick();
+
+    glasses.emit('videoState', {
+      'state': 'stopped',
+      'requestId': 'v1',
+      'seconds': 30,
+      'reason': 'duration_reached',
+    });
+    await tick();
+
+    // On screen…
+    expect(
+      ctl.state.transcripts.where((t) => t.isNotice).map((t) => t.text),
+      contains(contains('Recording finished')),
+    );
+    // …and asked of the assistant, so it reaches a pocketed phone too.
+    final spoken = fake.sentLog
+        .whereType<String>()
+        .any((m) => m.contains('recording on the glasses just finished'));
+    expect(spoken, isTrue,
+        reason: 'the completion must reach someone not looking at the screen');
+  });
+
+  test('sync progress is surfaced, and cleared when it finishes', () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+
+    glasses.emit('syncProgress',
+        {'file': 'video.mp4', 'pct': 42, 'speedKbps': 3.6});
+    await tick();
+    expect(ctl.state.syncStatus?.pct, 42);
+    expect(ctl.state.syncStatus?.file, 'video.mp4');
+
+    glasses.emit('syncProgress', {'file': 'all files done', 'pct': 100});
+    await tick();
+    expect(ctl.state.syncStatus, isNull,
+        reason: 'a finished transfer must not leave a progress bar on screen');
+  });
+
+  test('the record button is held while a start is in flight', () async {
+    // Start and stop are one command on the glasses, so a second tap before
+    // the device answers used to stop the recording that was just starting.
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+
+    // Two taps in the same breath must reach the glasses ONCE. A second
+    // toggle would stop the recording the first one is starting.
+    final first = ctl.startGlassesRecording();
+    final second = ctl.startGlassesRecording();
+    await Future.wait([first, second]);
+    await tick();
+    expect(glasses.recordingCalls, ['start:60'],
+        reason: 'a double tap must not toggle the recording straight back off');
+    expect(ctl.state.recordingBusy, isFalse,
+        reason: 'the button must come back once the request is away');
+  });
+
   test('the mic is restored only if it was open beforehand', () async {
     final glasses = FakeGlassesBridge();
     final ctl = newGlassesController(glasses);

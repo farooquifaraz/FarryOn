@@ -697,6 +697,8 @@ class _Controls extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (recording != null) _RecordingBar(recording: recording),
+          if (recording == null && state.syncStatus != null)
+            _SyncBar(sync: state.syncStatus!),
           // Scaled to fit rather than spread: with the glasses selected there
           // are six controls, and on a narrower phone the row overflowed its
           // width (device-seen 2026-08-08 — 17 px, the striped overflow bar).
@@ -752,7 +754,15 @@ class _Controls extends StatelessWidget {
                       : 'Stop recording',
                   gradient: Aurora.gradCoral,
                   danger: recording != null,
-                  onPressed: state.glassesConnected ? onToggleRecording : null,
+                  // Start and stop are the SAME command on the glasses, and
+                  // the device takes a second or two to answer. A second tap
+                  // in that window silently stopped the recording that was
+                  // just starting (device-seen 2026-08-08 — three
+                  // "already_recording" reports in a row). Disable the button
+                  // until the device has spoken.
+                  onPressed: state.glassesConnected && !state.recordingBusy
+                      ? onToggleRecording
+                      : null,
                 ),
               _CircleButton(
                 icon: Icons.center_focus_strong,
@@ -1658,6 +1668,58 @@ class _RecordingBar extends StatelessWidget {
               backgroundColor: Aurora.glassBorder,
               valueColor:
                   const AlwaysStoppedAnimation<Color>(Color(0xFFFF5A5F)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A quiet progress strip while glasses media transfers to the phone.
+///
+/// A four-minute recording is ~300 MB and takes minutes over WiFi-P2P. Without
+/// this the app looks idle and the user has no way to know their video is
+/// still on its way — or that they should stay near the phone.
+class _SyncBar extends StatelessWidget {
+  const _SyncBar({required this.sync});
+
+  final GlassesSync sync;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.cloud_download_rounded,
+                  size: 14, color: Aurora.teal),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Saving to your phone · ${sync.label}',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Aurora.textPrimary,
+                    fontSize: 12,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              value: sync.pct / 100,
+              minHeight: 3,
+              backgroundColor: Aurora.glassBorder,
+              valueColor: const AlwaysStoppedAnimation<Color>(Aurora.teal),
             ),
           ),
         ],

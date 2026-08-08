@@ -91,6 +91,8 @@ class LiveSessionState {
     this.glassesTalking = false,
     this.glassesWorn = false,
     this.recording,
+    this.syncStatus,
+    this.recordingBusy = false,
     this.lastCapturedPhoto,
     this.lastCapturedAt,
     this.lastError,
@@ -156,6 +158,15 @@ class LiveSessionState {
   /// recording. Purely additive: every other part of the session ignores it.
   final GlassesRecording? recording;
 
+  /// True while a start/stop is in flight with the glasses. Start and stop are
+  /// the same command, so a second tap before the device answers would undo
+  /// the first — the button is held disabled until it does.
+  final bool recordingBusy;
+
+  /// A glasses media transfer in progress, or null when nothing is syncing.
+  /// Shown on the dashboard so a long video transfer isn't invisible.
+  final GlassesSync? syncStatus;
+
   /// The most recent glasses photo (raw JPEG), shown as a preview in the chat
   /// so the user can visually confirm what was actually captured and sent for
   /// recognition. Null until the first glasses capture.
@@ -196,6 +207,9 @@ class LiveSessionState {
     bool? glassesWorn,
     GlassesRecording? recording,
     bool clearRecording = false,
+    GlassesSync? syncStatus,
+    bool clearSync = false,
+    bool? recordingBusy,
     Uint8List? lastCapturedPhoto,
     DateTime? lastCapturedAt,
     String? lastError,
@@ -221,6 +235,8 @@ class LiveSessionState {
         glassesTalking: glassesTalking ?? this.glassesTalking,
         glassesWorn: glassesWorn ?? this.glassesWorn,
         recording: clearRecording ? null : (recording ?? this.recording),
+        syncStatus: clearSync ? null : (syncStatus ?? this.syncStatus),
+        recordingBusy: recordingBusy ?? this.recordingBusy,
         lastCapturedPhoto: lastCapturedPhoto ?? this.lastCapturedPhoto,
         lastCapturedAt: lastCapturedAt ?? this.lastCapturedAt,
         lastError: clearError ? null : (lastError ?? this.lastError),
@@ -268,4 +284,26 @@ class GlassesRecording {
   /// e.g. `0:42 / 2:00`.
   String get label =>
       '${format(clampedElapsed)} / ${format(Duration(seconds: seconds))}';
+}
+
+/// A glasses → phone media transfer in progress.
+class GlassesSync {
+  const GlassesSync({required this.file, required this.pct, this.speedKbps});
+
+  /// The file being transferred, or a stage label ("WiFi-P2P pairing…").
+  final String file;
+
+  /// 0-100. Reaching 100 ends the transfer.
+  final int pct;
+
+  final double? speedKbps;
+
+  /// Short enough for a one-line status strip.
+  String get label {
+    final speed = speedKbps;
+    final rate = (speed == null || speed <= 0)
+        ? ''
+        : ' · ${speed.toStringAsFixed(1)} MB/s';
+    return '$pct%$rate';
+  }
 }

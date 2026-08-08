@@ -61,6 +61,103 @@ class Notifications {
     ),
   );
 
+  /// Glasses activity (recording, syncing) lives on its OWN channel, at low
+  /// importance and silent. A reminder is an alarm the user asked for; a
+  /// recording in progress is a status line they glance at. Putting the two on
+  /// one channel would either buzz for status or mute real reminders, and the
+  /// user can silence one without losing the other.
+  static const _activityChannelId = 'farryon_glasses_activity';
+
+  /// One id, reused: recording and syncing replace each other rather than
+  /// stacking up notifications the user has to sweep away.
+  static const activityId = 90001;
+
+  static const _activityDetails = NotificationDetails(
+    android: AndroidNotificationDetails(
+      _activityChannelId,
+      'Glasses activity',
+      channelDescription: 'Recording and syncing on your smart glasses',
+      importance: Importance.low,
+      priority: Priority.low,
+      playSound: false,
+      enableVibration: false,
+      icon: 'ic_notification',
+      // Ongoing while it runs: this is a live activity, not a message, and it
+      // must not be swipeable into a state where the user thinks it stopped.
+      ongoing: true,
+      autoCancel: false,
+      onlyAlertOnce: true,
+    ),
+  );
+
+  /// A finished-and-dismissable variant of the same slot.
+  static const _activityDoneDetails = NotificationDetails(
+    android: AndroidNotificationDetails(
+      _activityChannelId,
+      'Glasses activity',
+      channelDescription: 'Recording and syncing on your smart glasses',
+      importance: Importance.defaultImportance,
+      priority: Priority.defaultPriority,
+      playSound: false,
+      enableVibration: false,
+      icon: 'ic_notification',
+      onlyAlertOnce: true,
+    ),
+  );
+
+  /// Show/replace the glasses activity line. [progress] 0-100 draws a bar;
+  /// null shows none. [done] makes it dismissable and stops it being ongoing.
+  ///
+  /// Never throws: a missing notification must not be able to take down a
+  /// recording.
+  static Future<void> showActivity(
+    String title,
+    String body, {
+    int? progress,
+    bool done = false,
+  }) async {
+    await init();
+    if (!_ready) return;
+    try {
+      final details = done
+          ? _activityDoneDetails
+          : (progress == null
+              ? _activityDetails
+              : NotificationDetails(
+                  android: AndroidNotificationDetails(
+                    _activityChannelId,
+                    'Glasses activity',
+                    channelDescription:
+                        'Recording and syncing on your smart glasses',
+                    importance: Importance.low,
+                    priority: Priority.low,
+                    playSound: false,
+                    enableVibration: false,
+                    icon: 'ic_notification',
+                    ongoing: true,
+                    autoCancel: false,
+                    onlyAlertOnce: true,
+                    showProgress: true,
+                    maxProgress: 100,
+                    progress: progress.clamp(0, 100),
+                  ),
+                ));
+      await _plugin.show(activityId, title, body, details);
+    } catch (e) {
+      _log.warn('activity notification failed: $e');
+    }
+  }
+
+  /// Clear the glasses activity line.
+  static Future<void> clearActivity() async {
+    if (!_ready) return;
+    try {
+      await _plugin.cancel(activityId);
+    } catch (e) {
+      _log.warn('activity notification clear failed: $e');
+    }
+  }
+
   /// Lazily initialise the plugin, timezone DB, channel, and permissions. Safe
   /// to call repeatedly.
   static Future<void> init() async {
@@ -81,6 +178,16 @@ class Notifications {
           'Reminders',
           description: 'Farry task reminders',
           importance: Importance.max,
+        ),
+      );
+      await impl?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          _activityChannelId,
+          'Glasses activity',
+          description: 'Recording and syncing on your smart glasses',
+          importance: Importance.low,
+          playSound: false,
+          enableVibration: false,
         ),
       );
       await impl?.requestNotificationsPermission();

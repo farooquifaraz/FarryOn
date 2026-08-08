@@ -448,6 +448,7 @@ class LiveController {
       return;
     }
     _startingRecording = true;
+    _emit(_state.copyWith(recordingBusy: true));
     try {
       _micWasOpenBeforeRecording = _state.micOpen;
       _recordingAskedByVoice = afterSpokenReply;
@@ -472,6 +473,7 @@ class LiveController {
       _restoreAfterRecording();
     } finally {
       _startingRecording = false;
+      _emit(_state.copyWith(recordingBusy: false));
     }
   }
 
@@ -510,11 +512,17 @@ class LiveController {
   Future<void> stopGlassesRecording() async {
     final bridge = _glassesBridge;
     if (bridge == null || _state.recording == null) return;
+    _emit(_state.copyWith(recordingBusy: true));
     try {
       await bridge.stopVideoRecording();
     } catch (e) {
       _log.warn('stopGlassesRecording failed: $e');
     }
+    // Released by the videoState event that resolves the stop; this is the
+    // backstop for a device that never answers at all.
+    Timer(const Duration(seconds: 9), () {
+      if (_state.recordingBusy) _emit(_state.copyWith(recordingBusy: false));
+    });
   }
 
   /// Settings chooser → persist and push to the glasses.
@@ -550,10 +558,28 @@ class LiveController {
         final seconds = (event.data['seconds'] as num?)?.toInt() ??
             _config.videoRecordSeconds;
         _recordingTicker?.cancel();
-        _recordingTicker = Timer.periodic(
-          const Duration(seconds: 1),
-          (_) => _emit(_state.copyWith()),
-        );
+        // Repaint the on-screen clock every second, and refresh the
+        // notification every 5 — the phone may be in a pocket, and a recording
+        // the user cannot see running is one they cannot decide to stop.
+        var ticks = 0;
+        _recordingTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+          _emit(_state.copyWith());
+          final rec = _state.recording;
+          if (rec != null && ++ticks % 5 == 0) {
+            unawaited(Notifications.showActivity(
+              'Recording on your glasses',
+              rec.label,
+              progress: rec.seconds == 0
+                  ? null
+                  : (rec.clampedElapsed.inSeconds * 100 ~/ rec.seconds),
+            ));
+          }
+        });
+        unawaited(Notifications.showActivity(
+          'Recording on your glasses',
+          '0:00 / ${GlassesRecording.format(Duration(seconds: seconds))}',
+          progress: 0,
+        ));
         _emit(_state.copyWith(
           recording: GlassesRecording(
             requestId: requestId,
@@ -562,7 +588,9 @@ class LiveController {
           ),
         ));
       case 'stopped':
+        final finished = _state.recording;
         _endRecording();
+        _announceRecordingDone(finished);
         // Pull it onto the phone if the user asked for that. The debounce also
         // gives the glasses a moment to finalise the file.
         if (_config.saveRecordingsToPhone) {
@@ -570,6 +598,7 @@ class LiveController {
         }
       case 'failed':
         _endRecording();
+        unawaited(Notifications.clearActivity());
         _reportRecordingFailure(
           (event.data['reason'] as String?) ?? 'capture_failed',
           spoken: _recordingAskedByVoice,
@@ -587,9 +616,47 @@ class LiveController {
   /// End the recording locally and hand the session back to the user. Clearing
   /// `recording` is what lifts the playback gate, so it happens FIRST and
   /// unconditionally — every route out of a recording lands here.
+  /// Tell the user the recording is done — out loud, on the dashboard, and in
+  /// the notification shade. All three, because any one of them can be the
+  /// only one they are looking at: the phone may be pocketed (voice), the
+  /// screen may be open (dashboard), or they may come back later (shade).
+  ///
+  /// Safe to say out loud now: [_endRecording] has already cleared the
+  /// recording, so the playback gate is open again.
+  void _announceRecordingDone(GlassesRecording? finished) {
+    final length = finished == null
+        ? ''
+        : ' (${GlassesRecording.format(Duration(seconds: finished.seconds))})';
+    unawaited(Notifications.showActivity(
+      'Recording finished',
+      _config.saveRecordingsToPhone
+          ? 'Saving it to your phone…'
+          : 'It stays on your glasses until the next sync.',
+      done: true,
+    ));
+    _emit(_state.copyWith(
+      transcripts: [
+        ..._state.transcripts,
+        TranscriptEntry(
+          role: 'notice',
+          text: 'Recording finished$length — saving to your phone.',
+          isFinal: true,
+        ),
+      ],
+    ));
+    // And have Farry say it, the same way she announces a low battery.
+    if (_state.connection == ConnectionStatus.connected) {
+      _client.send(TextMessage(
+        '(System note: the video recording on the glasses just finished'
+        '$length. Tell me so in ONE short sentence, then stop.)',
+      ));
+    }
+  }
+
   void _endRecording() {
     _recordingTicker?.cancel();
     _recordingTicker = null;
+    if (_state.recordingBusy) _emit(_state.copyWith(recordingBusy: false));
     if (_state.recording != null) {
       _emit(_state.copyWith(clearRecording: true));
     }
@@ -713,9 +780,34 @@ class LiveController {
         // A sync run reaching 100% (files done / nothing to sync) frees the
         // in-flight guard so the next photo can trigger a fresh sync.
         final pct = (event.data['pct'] as num?)?.toInt() ?? 0;
+        final file = (event.data['file'] as String?) ?? 'Syncing…';
         if (pct >= 100) {
           _autoSyncing = false;
           _autoSyncWatchdog?.cancel();
+          _emit(_state.copyWith(clearSync: true));
+          // A finished transfer replaces the ongoing line rather than adding
+          // to it, and becomes dismissable.
+          unawaited(Notifications.showActivity(
+            file.contains('nothing') || file.contains('skipped')
+                ? 'Nothing to sync'
+                : 'Saved to your phone',
+            file,
+            done: true,
+          ));
+        } else {
+          _emit(_state.copyWith(
+            syncStatus: GlassesSync(
+              file: file,
+              pct: pct,
+              speedKbps: (event.data['speedKbps'] as num?)?.toDouble(),
+            ),
+          ));
+          // A 300 MB video takes minutes; without this the phone looks idle.
+          unawaited(Notifications.showActivity(
+            'Saving to your phone',
+            '$file · $pct%',
+            progress: pct,
+          ));
         }
     }
   }
