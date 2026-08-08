@@ -124,6 +124,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
          *  MTU (which the delete command needs) is negotiated first. */
         private const val RETENTION_SWEEP_DELAY_MS = 5_000L
 
+        /** Longest edge for the chat preview of a synced photo. The originals
+         *  are 6560x4928; a preview does not need more than this, and decoding
+         *  one at full size would cost ~130 MB. */
+        private const val SYNCED_PREVIEW_MAX_PX = 1080
+
         // -- Video recording (see LAB_NOTES.md "Video recording") -------------
 
         /** Longest recording offered. The bridge REJECTS anything longer
@@ -1114,6 +1119,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             armSyncWatchdog()
             emit("deviceEvent", mapOf("hex" to "downloaded ${entity.fileName}"))
             exportToGallery(entity.filePath, entity.fileName)
+            emitSyncedPhotoPreview(entity.filePath, entity.fileName)
             // Now that it's safely on the phone, honour the retention policy —
             // free the glasses' storage by deleting old (or, on a full purge,
             // all) synced photos.
@@ -1178,6 +1184,52 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
         override fun recordingToPcmError(fileName: String, errorInfo: String) =
             emit("deviceEvent", mapOf("hex" to "recordingToPcm error $errorInfo"))
+    }
+
+    /**
+     * Show a photo that just arrived from the glasses in the chat.
+     *
+     * A capture the WEARER took with the glasses' own button never produces a
+     * BLE thumbnail (see the 0x01 notify), so the sync is the first moment the
+     * phone has the picture at all. Showing it then is the honest version of
+     * "it appears in the chat" — seconds-to-minutes late, not instant.
+     *
+     * Downscaled here, not in Dart: these are 6560x4928 originals and decoding
+     * one at full size for a preview costs ~130 MB of RAM.
+     *
+     * Deliberately NOT sent to the model: the user asked for it to be shown,
+     * not commented on, and unprompted remarks about every photo are the same
+     * annoyance we spent the day removing.
+     */
+    private fun emitSyncedPhotoPreview(path: String?, name: String?) {
+        if (path.isNullOrEmpty() || name.isNullOrEmpty()) return
+        if (name.substringAfterLast('.', "").lowercase() !in listOf("jpg", "jpeg")) {
+            return
+        }
+        Thread {
+            try {
+                val bounds = android.graphics.BitmapFactory.Options().apply {
+                    inJustDecodeBounds = true
+                }
+                android.graphics.BitmapFactory.decodeFile(path, bounds)
+                var sample = 1
+                while (bounds.outWidth / sample > SYNCED_PREVIEW_MAX_PX) sample *= 2
+                val bmp = android.graphics.BitmapFactory.decodeFile(
+                    path,
+                    android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
+                ) ?: return@Thread
+                val out = java.io.ByteArrayOutputStream()
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, out)
+                bmp.recycle()
+                emit(
+                    "syncedPhoto",
+                    mapOf("jpeg" to out.toByteArray(), "name" to name)
+                )
+            } catch (e: Throwable) {
+                // A preview is a nicety; never let it disturb a sync.
+                Log.i(TAG, "synced photo preview failed: $e")
+            }
+        }.start()
     }
 
     /**

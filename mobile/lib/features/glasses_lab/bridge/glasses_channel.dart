@@ -134,6 +134,8 @@ class GlassesDeviceHit {
 /// reason codes match `GlassesCaptureFailure.wire`),
 /// `videoState` {state: recording|stopped|failed, requestId, seconds,
 /// elapsedMs, reason?, detail?} (glasses video recording lifecycle),
+/// `syncedPhoto` {jpeg, name} (a photo that just transferred from the glasses,
+/// downscaled for the chat preview — shown, never sent to the model),
 /// `pcmChunk` {bytes, sampleRate},
 /// `syncProgress` {file, pct, speedKbps}, `audio` {status}, `error` {message},
 /// `deviceEvent` {hex} (raw/unmapped notifications).

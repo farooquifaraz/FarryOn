@@ -789,6 +789,18 @@ class LiveController {
             _refreshPendingMedia(const Duration(seconds: 8));
           }
         }
+      case 'syncedPhoto':
+        // A photo that just came off the glasses — usually one the wearer took
+        // with the glasses' own button, which has no BLE thumbnail and so has
+        // been invisible until now. Shown, not sent: this is a picture landing
+        // on the phone, not a question for Farry.
+        final jpeg = event.data['jpeg'];
+        if (jpeg is Uint8List && jpeg.isNotEmpty) {
+          _emit(_state.copyWith(
+            lastCapturedPhoto: jpeg,
+            lastCapturedAt: DateTime.now(),
+          ));
+        }
       case 'mediaCount':
         _emit(_state.copyWith(
           pendingMedia: GlassesMedia(

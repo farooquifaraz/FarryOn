@@ -909,6 +909,27 @@ void main() {
     expect(ctl.state.lastError, contains("Can't sync while"));
   });
 
+  test('a synced photo is shown but never sent to the model', () async {
+    // A wearer's button photo has no BLE thumbnail, so the sync is the first
+    // time the phone has it. It should appear — and go no further: the user
+    // asked to see their photos, not to be told about them.
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    final before = fake.sentLog.whereType<Uint8List>().length;
+
+    glasses.emit('syncedPhoto', {
+      'jpeg': Uint8List.fromList([9, 8, 7, 6]),
+      'name': 'IMG_1.jpg',
+    });
+    await tick();
+
+    expect(ctl.state.lastCapturedPhoto, Uint8List.fromList([9, 8, 7, 6]));
+    expect(fake.sentLog.whereType<Uint8List>().length, before,
+        reason: 'a synced photo must not be pushed to the model as a frame');
+  });
+
   test('the mic is restored only if it was open beforehand', () async {
     final glasses = FakeGlassesBridge();
     final ctl = newGlassesController(glasses);
