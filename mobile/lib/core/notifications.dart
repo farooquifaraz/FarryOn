@@ -116,8 +116,8 @@ class Notifications {
     int? progress,
     bool done = false,
   }) async {
-    await init();
-    if (!_ready) return;
+    await _ensurePlugin();
+    if (!_pluginReady) return;
     try {
       final details = done
           ? _activityDoneDetails
@@ -150,7 +150,7 @@ class Notifications {
 
   /// Clear the glasses activity line.
   static Future<void> clearActivity() async {
-    if (!_ready) return;
+    if (!_pluginReady) return;
     try {
       await _plugin.cancel(activityId);
     } catch (e) {
@@ -158,11 +158,22 @@ class Notifications {
     }
   }
 
-  /// Lazily initialise the plugin, timezone DB, channel, and permissions. Safe
-  /// to call repeatedly.
-  static Future<void> init() async {
-    if (_ready || _attempted) return;
-    _attempted = true;
+  /// True once the plugin and channels exist. Separate from [_ready], which
+  /// also means the permission flow has run.
+  static bool _pluginReady = false;
+  static bool _pluginAttempted = false;
+
+  /// Set up the plugin and channels and NOTHING else — no permission prompts.
+  ///
+  /// Status notifications (recording, syncing) must never be able to raise a
+  /// system dialog: a prompt appearing mid-recording backgrounds the app,
+  /// churns the camera, and in one case left it stuck on the splash
+  /// (device-seen 2026-08-08). If notifications aren't permitted the show
+  /// simply does nothing — the on-screen UI already carries the same
+  /// information.
+  static Future<void> _ensurePlugin() async {
+    if (_pluginReady || _pluginAttempted) return;
+    _pluginAttempted = true;
     try {
       tzdata.initializeTimeZones();
       const android = AndroidInitializationSettings('ic_notification');
@@ -190,6 +201,23 @@ class Notifications {
           enableVibration: false,
         ),
       );
+      _pluginReady = true;
+    } catch (e) {
+      _log.warn('notification plugin init failed: $e');
+    }
+  }
+
+  /// Full initialisation INCLUDING the permission prompts reminders need.
+  /// Only call from a path where a dialog is expected — never from a status
+  /// notification. Safe to call repeatedly.
+  static Future<void> init() async {
+    if (_ready || _attempted) return;
+    _attempted = true;
+    try {
+      await _ensurePlugin();
+      final impl = _plugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
       await impl?.requestNotificationsPermission();
       await impl?.requestExactAlarmsPermission();
       // Critical on aggressive OEMs (Samsung): without a battery-optimisation
