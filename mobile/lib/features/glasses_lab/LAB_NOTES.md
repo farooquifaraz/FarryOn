@@ -403,3 +403,34 @@ Also seen: three `already_recording` reports in a row from repeated taps on a
 device that was already recording. Correct behaviour — the reply's work type
 is what we believe, not our own intent — but the UX is confusing when taps
 land faster than the device answers.
+
+### 2026-08-08 — the glasses are single-tasking, and now they say so
+
+Sequence from a real session, all behaving correctly:
+
+```
+18:08:08  record_video -> recording, 30 s, auto-stop
+18:08:5x  WiFi transfer running (2.1-2.9 MB/s)
+18:08:54  record_video again -> refused "busy" -> capture_failed -> the
+          assistant said: "The recording didn't start because the glasses are
+          busy with another capture."
+18:09:25  transfer done, gallery <- 20260808180812785.mp4
+18:09:48  AI photo -> capture_timeout after 8 s ("glasses busy")
+```
+
+Two things worth remembering:
+
+1. **A glasses media transfer blocks everything else on the device.** ~35 s for
+   a 30 s video, minutes for a 4-minute one. Asking for a second recording (or
+   a photo) during it fails, correctly.
+2. **The device stays busy for a while AFTER the transfer reports done.** The
+   photo at 18:09:48 was 23 s after `all files done`, and still timed out. The
+   media count also lagged (`vid=1` until 18:10:05). Consistent with the
+   lazily-updated counts already noted above — the WiFi-P2P session takes time
+   to wind down.
+
+The failures are honest now — the assistant names the reason instead of
+claiming success — but a capture in that window costs a full 8 s watchdog
+before the user hears anything. A short post-transfer cool-down that refuses
+immediately would be kinder; not added yet, since the right length is a guess
+until it is measured.
