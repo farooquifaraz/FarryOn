@@ -1068,6 +1068,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     "file" to fileName,
                     "pct" to progress,
                     "speedKbps" to lastWifiSpeedKbps,
+                    // Which of how many. A single percentage is misleading when
+                    // three clips are queued: it restarts at 0 twice and the
+                    // user cannot tell progress from a stall.
+                    "index" to syncIndex,
+                    "total" to syncTotal,
                 )
             )
         }
@@ -1086,12 +1091,29 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
         override fun fileCount(index: Int, total: Int) {
             armSyncWatchdog()
+            syncIndex = index
+            syncTotal = total
             emit("deviceEvent", mapOf("hex" to "sync file $index/$total"))
+            // Surface it immediately too: the first file's progress callbacks
+            // may be seconds away, and the user should already know how much
+            // is queued.
+            emit(
+                "syncProgress",
+                mapOf(
+                    "file" to "starting…",
+                    "pct" to 0,
+                    "speedKbps" to 0.0,
+                    "index" to index,
+                    "total" to total,
+                )
+            )
         }
 
         override fun fileDownloadComplete() {
             cancelSyncWatchdog()
             syncActive = false
+            syncIndex = 0
+            syncTotal = 0
             fullCleanupActive = false // a storage-full purge (if any) is done
             emit(
                 "syncProgress",
@@ -1964,6 +1986,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     }
 
     // -- WiFi media sync (Task 2.6a) ------------------------------------------
+
+    /** Which file of how many the current transfer is on, from the SDK's
+     *  fileCount callback. Reset when a run finishes. */
+    @Volatile private var syncIndex = 0
+    @Volatile private var syncTotal = 0
 
     /** Watchdog: importAlbum fails SILENTLY when the glasses never raise
      *  their WiFi-P2P (observed 2026-07-06: SDK retried peer discovery

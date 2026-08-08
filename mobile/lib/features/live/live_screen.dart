@@ -1710,7 +1710,7 @@ class _SyncBar extends StatelessWidget {
               const SizedBox(width: 8),
               Flexible(
                 child: Text(
-                  'Saving to your phone · ${sync.label}',
+                  '${sync.file} · ${sync.label}',
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Aurora.textPrimary,

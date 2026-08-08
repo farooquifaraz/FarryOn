@@ -818,16 +818,21 @@ class LiveController {
             done: true,
           ));
         } else {
-          _emit(_state.copyWith(
-            syncStatus: GlassesSync(
-              file: file,
-              pct: pct,
-              speedKbps: (event.data['speedKbps'] as num?)?.toDouble(),
-            ),
-          ));
+          final sync = GlassesSync(
+            file: file,
+            pct: pct,
+            speedKbps: (event.data['speedKbps'] as num?)?.toDouble(),
+            index: (event.data['index'] as num?)?.toInt() ?? 0,
+            total: (event.data['total'] as num?)?.toInt() ?? 0,
+          );
+          _emit(_state.copyWith(syncStatus: sync));
           // A 300 MB video takes minutes; without this the phone looks idle.
+          // Name the file and say how many are queued — one percentage that
+          // restarts at 0 for each clip reads like a stall.
           unawaited(Notifications.showActivity(
-            'Saving to your phone',
+            sync.total > 1
+                ? 'Saving ${sync.index} of ${sync.total} to your phone'
+                : 'Saving to your phone',
             '$file · $pct%',
             progress: pct,
           ));

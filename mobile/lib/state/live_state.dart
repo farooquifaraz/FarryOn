@@ -296,7 +296,19 @@ class GlassesRecording {
 
 /// A glasses → phone media transfer in progress.
 class GlassesSync {
-  const GlassesSync({required this.file, required this.pct, this.speedKbps});
+  const GlassesSync({
+    required this.file,
+    required this.pct,
+    this.speedKbps,
+    this.index = 0,
+    this.total = 0,
+  });
+
+  /// Which file of how many, 1-based. Zero when the glasses haven't said yet.
+  /// With several clips queued a bare percentage restarts at 0 each time and
+  /// reads exactly like a stall, so the count is what makes it legible.
+  final int index;
+  final int total;
 
   /// The file being transferred, or a stage label ("WiFi-P2P pairing…").
   final String file;
@@ -306,14 +318,18 @@ class GlassesSync {
 
   final double? speedKbps;
 
-  /// Short enough for a one-line status strip.
+  /// Short enough for a one-line status strip: "2 of 3 · 47% · 3.6 MB/s".
   String get label {
     final speed = speedKbps;
     final rate = (speed == null || speed <= 0)
         ? ''
         : ' · ${speed.toStringAsFixed(1)} MB/s';
-    return '$pct%$rate';
+    final of = total > 1 ? '$index of $total · ' : '';
+    return '$of$pct%$rate';
   }
+
+  /// How many are still to come after this one.
+  int get remaining => total > index ? total - index : 0;
 }
 
 /// What the glasses are holding that hasn't reached the phone yet.
