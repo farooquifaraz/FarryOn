@@ -220,12 +220,12 @@ class RecordVideoTool(Tool):
 
     name = "record_video"
     description = (
-        "Start recording VIDEO on the user's smart glasses. Use when they ask "
-        "to record a video / start recording / video banao / video record karo. "
-        "This is only for video — a request for a photo or a question about "
-        "what they are looking at is capture_photo instead. The recording "
-        "stops on its own after the length set in the app's settings; say that "
-        "you have started recording."
+        "Start recording VIDEO on the user's smart glasses. Call this when "
+        "they ask to record a video / start recording / video banao / video "
+        "record karo. Only for video — a request for a photo, or a question "
+        "about what they are looking at, is capture_photo instead. Nothing is "
+        "recorded unless this is called. What to tell the user comes back in "
+        "the result."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -271,7 +271,20 @@ class RecordVideoTool(Tool):
                         ),
                     }
                 await asyncio.sleep(0.15)
-        return {"started": True}
+        # The words the assistant is allowed to say live HERE, in the result of
+        # a call that actually ran — not in the description, where they were an
+        # invitation to narrate the outcome without doing it (device-seen
+        # 2026-08-08: nine replies, zero tool calls, and the user was told a
+        # recording had started).
+        return {
+            "started": True,
+            "_instruction": (
+                "The recording is now running on the glasses. Say so in ONE "
+                "short sentence — it stops on its own, and they can tap stop "
+                "on screen — then stop talking. Your microphone is closed "
+                "while it records, so do not ask a follow-up question."
+            ),
+        }
 
 
 class StopRecordingTool(Tool):
@@ -279,9 +292,9 @@ class StopRecordingTool(Tool):
 
     name = "stop_recording"
     description = (
-        "Stop the video recording running on the user's smart glasses. Use "
-        "when they say to stop/end the recording, or 'recording band karo'. "
-        "Rarely reachable by voice — the microphone is closed while a "
+        "Stop the video recording running on the user's smart glasses. Call "
+        "this when they say to stop/end the recording, or 'recording band "
+        "karo'. Rarely reachable by voice — the microphone is closed while a "
         "recording runs — but it works from a typed message. Does nothing if "
         "nothing is recording."
     )
@@ -292,7 +305,13 @@ class StopRecordingTool(Tool):
     }
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
-        return {"stopped": True}
+        return {
+            "stopped": True,
+            "_instruction": (
+                "Tell the user the recording has stopped, in one short "
+                "sentence."
+            ),
+        }
 
 
 class EndSessionTool(Tool):

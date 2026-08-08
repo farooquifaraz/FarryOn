@@ -152,3 +152,36 @@ async def test_dispatch_captures_tool_exception(db_session) -> None:
     result = await engine.dispatch("boom", {}, ctx)
     assert result.ok is False
     assert "kaboom" in (result.error or "")
+
+
+def test_device_tools_describe_the_action_not_the_speech() -> None:
+    """A tool description says WHEN TO CALL; the words go in the result.
+
+    Regression, device-seen 2026-08-08: record_video's description carried most
+    of a script for what to say ("say that you have started recording"). The
+    model satisfied that by saying it — nine replies, zero tool calls, and the
+    user was told a recording had started while nothing recorded. Speech
+    guidance belongs in the tool's RESULT, which only exists once the call has
+    actually run.
+    """
+    schemas = {s["name"]: s for s in _engine().export_schemas()}
+    scripted = ("say that you", "say one short", "mention that it", "tell them that you")
+    for name in ("record_video", "stop_recording", "capture_photo"):
+        desc = schemas[name]["description"].lower()
+        for phrase in scripted:
+            assert phrase not in desc, (
+                f"{name}'s description scripts what to SAY ({phrase!r}); "
+                "put that in the tool's result instead"
+            )
+        assert "call this" in desc or "call it" in desc, (
+            f"{name}'s description must tell the model to CALL it"
+        )
+
+
+def test_prompt_forbids_claiming_unperformed_actions() -> None:
+    """The general rule that keeps every device tool honest, not just video."""
+    from app.prompts.system import build_system_prompt
+
+    prompt = build_system_prompt(None).lower()
+    assert "saying an action happened does not make it happen" in prompt
+    assert "unless you called the tool" in prompt
