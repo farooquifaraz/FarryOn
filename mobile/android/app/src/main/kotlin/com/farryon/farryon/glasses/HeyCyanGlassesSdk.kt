@@ -2100,6 +2100,24 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         main.postDelayed({ refreshMediaCount() }, 12_000L)
     }
 
+    /**
+     * Debug: the vendor app's own P2P reset (`WifiP2pManagerSingleton
+     * .resetDeviceP2p` = 0x02 0x01 0x0f). Aimed squarely at "the glasses'
+     * WiFi-P2P never appears", which LAB_NOTES has seen wedge before.
+     */
+    override fun debugResetP2p() {
+        Log.i(TAG, "debugResetP2p → 02 01 0f")
+        LargeDataHandler.getInstance().glassesControl(
+            byteArrayOf(0x02, 0x01, 0x0f)
+        ) { _, rsp ->
+            Log.i(
+                TAG,
+                "resetP2p reply dataType=${rsp?.dataType} err=${rsp?.errorCode} " +
+                    "workType=${rsp?.glassWorkType}"
+            )
+        }
+    }
+
     override fun forceWifiSync() {
         Log.i(TAG, "forceWifiSync (debug)")
         if (videoRequestId != null || syncActive) {

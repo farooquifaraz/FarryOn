@@ -92,6 +92,9 @@ interface GlassesSdk {
      *  app-side state, with the device's reply logged. Answers "is it
      *  recording right now?", which nothing else can. */
     fun debugRawVideoToggle()
+
+    /** Debug/diagnostic: the vendor's own WiFi-P2P reset command. */
+    fun debugResetP2p()
     fun setVolume(type: String, level: Int)
 
     /** Auto-delete synced glasses photos to free the headset's storage.
@@ -342,6 +345,9 @@ class StubGlassesSdk : GlassesSdk {
 
     override fun debugRawVideoToggle() =
         emit("deviceEvent", mapOf("hex" to "rawVideoToggle (stub)"))
+
+    override fun debugResetP2p() =
+        emit("deviceEvent", mapOf("hex" to "resetP2p (stub)"))
 
     override fun setVolume(type: String, level: Int) {
         emit("deviceEvent", mapOf("hex" to "volume:$type=$level"))

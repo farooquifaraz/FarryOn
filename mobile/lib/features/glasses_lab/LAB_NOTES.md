@@ -304,3 +304,41 @@ full packet): `dataType = b[7]`.
    toggle AFTER the device already stopped would start a NEW recording.
 3. HeyCyan refuses to start a video below **15 %** battery (`HomeFragment` checks
    `UserConfig.battery <= 15` and toasts `g_glasses_low_battery`). We mirror that.
+
+### 2026-08-08 — video recording: the commands work, the storage does not
+
+First hardware run of the video feature on the L802. Split cleanly into
+"our side, verified working" and "the device is not writing anything".
+
+**Verified working**
+* `0x01 0x02` read → the glasses reported their OWN video duration as **180 s**
+  (matching the vendor app's "3min" string). `0x02 0x02 <angle> <lo> <hi>`
+  wrote 30 s, and a relaunch read it back as 30 — the write persists, and the
+  angle is preserved. Without this a 30 s pick would have recorded 3 minutes.
+* `0x02 0x01 0x02` is understood as video: the reply is
+  `dataType=1 err=-1 workType=2`.
+* The app-side clock closes out at 30001–30002 ms for a 30 s pick, repeatably.
+
+**Not working — three symptoms, same subsystem**
+* Nothing is ever stored. After a recording: `mediaCount img=0 vid=0 rec=0`.
+* A PLAIN photo (`0x02 0x01 0x01`) produces no `photoStored` notify and no
+  stored file either — while an AI photo (`0x06`) still streams its ~21 KB
+  thumbnail over BLE in ~3.7 s. So BLE, the control channel and the camera are
+  all alive; only writes to the glasses' own storage produce nothing.
+* WiFi-P2P never comes up: a forced `importAlbum` (media-count gate bypassed)
+  stalls the full 60 s. Not charging, glasses worn, freshly power-cycled.
+* `requestDeviceInfo` → `wifiFirmware` and `wifiHardware` both EMPTY. Same as
+  2026-07-05 — so empty is NOT proof of a fault on its own, but it is
+  consistent with the WiFi/storage co-processor being down.
+
+**Ruled out**: wear detection (symptoms identical worn and not), a stale P2P
+session (power-cycled), our own command bytes (the device echoes work type 2),
+and "the device silently ignores everything" — `0x02 0x01 0x0f`
+(`resetDeviceP2p`, the vendor's own P2P reset) comes back `err=1`, a real
+refusal. So this firmware DOES report errors when it refuses; the video
+command's `err=-1` really is an accept.
+
+**Open**: whether the official HeyCyan app can record a video / store a photo
+on this same unit right now. That single test separates "the device" from
+"our code" and is the next step. Force-stop FarryOn first — it holds the BLE
+link.

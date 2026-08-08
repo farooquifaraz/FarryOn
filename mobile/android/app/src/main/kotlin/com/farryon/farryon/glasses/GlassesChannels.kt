@@ -266,6 +266,8 @@ class GlassesChannels private constructor(
                     // so the glasses' real album is what answers, not a probe.
                     "sync" -> sdk.forceWifiSync()
                     "rawtoggle" -> sdk.debugRawVideoToggle()
+                    "info" -> sdk.requestDeviceInfo()
+                    "resetp2p" -> sdk.debugResetP2p()
                 }
             }
         }
