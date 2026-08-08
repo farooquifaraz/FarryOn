@@ -357,6 +357,14 @@ class OpenAIRealtimeGateway(AIGateway):
             "tools": self._tool_definitions(),
             "tool_choice": "auto",
         }
+        # What the model can actually reach. Worth a line: a tool the user
+        # keeps asking for and never gets is either absent here or being
+        # narrated instead of called, and only this log tells the two apart.
+        logger.info(
+            "openai.tools_configured",
+            count=len(ga_session["tools"]),
+            names=[t["name"] for t in ga_session["tools"]],
+        )
 
         last_exc: Exception | None = None
         # Configured model first, then the GA default (OpenAI only) — Grok and
@@ -501,6 +509,15 @@ class OpenAIRealtimeGateway(AIGateway):
                 )
 
         elif etype == "response.function_call_arguments.done":
+            # Logged at the edge, BEFORE anything of ours can drop it. Without
+            # this, "the model never called the tool" and "we lost the call"
+            # look identical from the outside — which is exactly where an
+            # afternoon went on 2026-08-08.
+            logger.info(
+                "openai.function_call",
+                name=str(getattr(event, "name", "")),
+                call_id=str(getattr(event, "call_id", "")),
+            )
             raw_args = getattr(event, "arguments", "") or "{}"
             try:
                 args = json.loads(raw_args)
@@ -519,6 +536,17 @@ class OpenAIRealtimeGateway(AIGateway):
 
         elif etype == "response.done":
             self._response_active = False
+            # Did this turn produce a tool call, or only words? The one fact
+            # that separates "the model chose not to act" from every other
+            # explanation.
+            try:
+                kinds = [
+                    getattr(i, "type", "?")
+                    for i in (getattr(getattr(event, "response", None), "output", None) or [])
+                ]
+                logger.info("openai.response_output", kinds=kinds)
+            except Exception:  # noqa: BLE001 - diagnostics must never break a turn
+                pass
             if self._assistant_buf:
                 await self._queue.put(
                     TranscriptEvent(
