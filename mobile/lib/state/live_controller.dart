@@ -440,11 +440,17 @@ class LiveController {
     if (!_state.glassesConnected) {
       _emit(_state.copyWith(
           lastError: 'Connect the glasses first to record video.'));
+      // Tell the backend too, or the model — which asked for this — happily
+      // announces "Recording started" over a recording that never began
+      // (device-seen 2026-08-08). A banner the user isn't looking at is not
+      // enough when the answer is spoken.
+      _reportRecordingFailure('not_connected', spoken: afterSpokenReply);
       return;
     }
     _startingRecording = true;
     try {
       _micWasOpenBeforeRecording = _state.micOpen;
+      _recordingAskedByVoice = afterSpokenReply;
       // 1. Clear the speaker of anything Farry is saying.
       if (afterSpokenReply) {
         await _waitForSilence(_recordingReplyTimeout,
@@ -462,6 +468,7 @@ class LiveController {
     } catch (e) {
       _log.warn('startGlassesRecording failed: $e');
       _emit(_state.copyWith(lastError: "Couldn't start the recording."));
+      _reportRecordingFailure('capture_failed', spoken: afterSpokenReply);
       _restoreAfterRecording();
     } finally {
       _startingRecording = false;
@@ -519,11 +526,27 @@ class LiveController {
     }
   }
 
+  /// Whether the recording in flight was asked for by voice, so a failure
+  /// arriving later (the glasses refusing, a timeout) still reaches the model
+  /// that is waiting to speak about it.
+  bool _recordingAskedByVoice = false;
+
+  /// Report to the backend that a recording did not start. Reuses the
+  /// `capture_failed` control message the vision tools already wait on, so
+  /// there is one failure path for "the device could not do the thing",
+  /// not two.
+  void _reportRecordingFailure(String reason, {required bool spoken}) {
+    if (!spoken) return; // nothing is waiting on it; the banner is enough
+    _log.warn('recording failed ($reason) — reporting to the backend');
+    _client.send(CaptureFailedMessage(reason: reason));
+  }
+
   void _onVideoStateEvent(GlassesLabEvent event) {
     final state = event.data['state'] as String?;
     final requestId = (event.data['requestId'] as String?) ?? '';
     switch (state) {
       case 'recording':
+        _recordingAskedByVoice = false;
         final seconds = (event.data['seconds'] as num?)?.toInt() ??
             _config.videoRecordSeconds;
         _recordingTicker?.cancel();
@@ -547,6 +570,11 @@ class LiveController {
         }
       case 'failed':
         _endRecording();
+        _reportRecordingFailure(
+          (event.data['reason'] as String?) ?? 'capture_failed',
+          spoken: _recordingAskedByVoice,
+        );
+        _recordingAskedByVoice = false;
         final detail = event.data['detail'] as String?;
         _emit(_state.copyWith(
           lastError: detail == null

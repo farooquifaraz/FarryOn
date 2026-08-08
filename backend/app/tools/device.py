@@ -9,6 +9,7 @@ voice: "mute the mic", "turn the camera off", "rotate", "end the session".
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from typing import Any
 
@@ -232,7 +233,44 @@ class RecordVideoTool(Tool):
         "required": [],
     }
 
+    #: How long to give the device to say it could NOT start. Long enough to
+    #: cover the glasses' own accept (~0.7 s observed) plus the moment the app
+    #: spends silencing the assistant first, short enough that a working start
+    #: doesn't feel like a stall.
+    _FAILURE_WINDOW_S = 3.0
+
+    #: What went wrong, in words the model can say out loud.
+    _REASONS = {
+        "not_connected": "the smart glasses aren't connected",
+        "busy": "the glasses are busy with another capture",
+        "low_battery": "the glasses' battery is too low to record",
+        "bad_duration": "the recording length is out of range",
+        "disconnected": "the glasses disconnected",
+        "capture_timeout": "the glasses didn't respond",
+        "already_recording": "the glasses were already recording",
+    }
+
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+        # Do NOT report success just because the message was sent. The app
+        # cannot start a recording with the glasses disconnected, and a tool
+        # that always says "started" made the assistant announce a recording
+        # that never began (device-seen 2026-08-08). Wait briefly for the
+        # device to object; silence here means it went through.
+        if ctx.capture_error is not None:
+            deadline = asyncio.get_running_loop().time() + self._FAILURE_WINDOW_S
+            while asyncio.get_running_loop().time() < deadline:
+                reason = ctx.capture_error()
+                if reason:
+                    return {
+                        "started": False,
+                        "_instruction": (
+                            "The recording did NOT start because "
+                            f"{self._REASONS.get(reason, reason)}. Tell the "
+                            "user that plainly in one short sentence. Do not "
+                            "say it started."
+                        ),
+                    }
+                await asyncio.sleep(0.15)
         return {"started": True}
 
 
