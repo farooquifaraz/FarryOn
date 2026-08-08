@@ -375,3 +375,31 @@ is necessary, not belt-and-braces.
 
 Note: a 30 s pick produced a 31.68 s file. The firmware's own start/stop
 latency, not drift — the app-side clock is unaffected.
+
+### 2026-08-08 — V2 + V9 pass on the L801 (4 min, and a BLE drop mid-recording)
+
+One run covered both. A 4-minute recording started at 15:51:00; the BLE link
+dropped 49.6 s in and came back 7 s later.
+
+```
+15:50:59  videoState recording  seconds=240
+15:51:48  connectionState disconnected
+15:51:48  videoState failed  reason=disconnected  elapsedMs=49659
+15:51:55  connectionState connected
+15:51:58  mediaCount vid=0        <- still recording on the glasses
+15:55:10  mediaCount vid=1        <- ~4 min after the start: firmware finished
+15:57:19  gallery <- 20260808155100899.mp4
+15:57:57  mediaCount vid=0        <- retention removed it after the sync
+```
+
+The file: **303.6 MB, video 241.77 s, audio 241.00 s** — the FULL four minutes.
+So a dropped link costs the app its view of the recording, not the recording:
+the firmware keeps going and the next connect's auto-sync collects it. The
+"failed" the UI showed was accurate at that moment (we could no longer observe
+or stop it) and its wording already said the file stays on the glasses and
+syncs on the next connect.
+
+Also seen: three `already_recording` reports in a row from repeated taps on a
+device that was already recording. Correct behaviour — the reply's work type
+is what we believe, not our own intent — but the UX is confusing when taps
+land faster than the device answers.
