@@ -26,11 +26,15 @@ async def test_seeds_the_catalog(db_session) -> None:
     await seed.seed_plans(db_session)
 
     plans = await _plans_by_name(db_session)
-    assert set(seed.PLAN_CATALOG) <= set(plans)
-    assert plans["plus"].price_cents == 999
-    assert plans["pro"].price_cents == 1999
+    assert set(seed.sold_plans()) <= set(plans)
+    # Prices come from Settings.plan_catalog (lite $5, plus $10, pro $20).
+    assert plans["lite"].price_cents == 500
+    assert plans["plus"].price_cents == 1000
+    assert plans["pro"].price_cents == 2000
     assert plans["plus"].currency == "USD"
     assert plans["pro"].is_active is True
+    # The free/trial tier is a fallback, not a billable row.
+    assert "free" not in plans
 
 
 async def test_running_twice_does_not_duplicate(db_session) -> None:
@@ -43,17 +47,22 @@ async def test_running_twice_does_not_duplicate(db_session) -> None:
     assert len(rows) == 1
 
 
-async def test_a_price_change_reaches_an_existing_row(db_session, monkeypatch) -> None:
+async def test_a_price_change_reaches_an_existing_row(db_session) -> None:
     # The trap: seeding that only ever creates would leave a stale price on the
     # row forever. Change the catalog, re-seed, the DB must follow.
     await seed.seed_plans(db_session)
-    monkeypatch.setitem(seed.PLAN_CATALOG, "pro", (2499, "month", "Pro — repriced."))
 
-    await seed.seed_plans(db_session)
+    from app.config import get_settings
+
+    base = get_settings()
+    catalog = {name: dict(row) for name, row in base.plan_catalog.items()}
+    catalog["pro"]["price_usd"] = 24.99
+    repriced = base.model_copy(update={"plan_catalog": catalog})
+
+    await seed.seed_plans(db_session, repriced)
 
     plans = await _plans_by_name(db_session)
     assert plans["pro"].price_cents == 2499
-    assert plans["pro"].description == "Pro — repriced."
 
 
 async def test_a_custom_plan_is_left_alone(db_session) -> None:
@@ -78,6 +87,6 @@ async def test_seeded_plan_names_match_the_quota_caps(db_session) -> None:
     from app.config import get_settings
 
     limits = get_settings().plan_limits
-    for name in seed.PLAN_CATALOG:
+    for name in seed.sold_plans():
         assert name in limits, f"plan {name!r} is sold but has no quota caps"
         assert "voice_seconds" in limits[name]

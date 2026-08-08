@@ -12,23 +12,35 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.core.security import hash_password
 from app.db.models import Permission, Plan, Role, RolePermission, User, UserRole
 from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
-# The billing catalog. Prices live here (the plans table is billing's source of
-# truth); the matching daily caps live in Settings.plan_limits, keyed by the
-# same name — one place for money, one for cost-control, joined by name. The
-# "free" fallback tier is not sold, so it is not seeded here.
-#
-# name -> (price_cents, interval, description)
-PLAN_CATALOG: dict[str, tuple[int, str, str]] = {
-    "plus": (999, "month", "Plus — 7 minutes of voice a day, 20 scans."),
-    "pro": (1999, "month", "Pro — 15 minutes of voice a day, unlimited scans."),
-}
+# The billing catalog is now ONE place: Settings.plan_catalog holds price AND
+# caps per plan (edit plans there). This derives the sold rows the `plans` table
+# needs from it. Only priced plans are billable; the free/trial tier (price 0)
+# is a fallback, not a billable row, so it is skipped.
+def sold_plans(
+    settings: Settings | None = None,
+) -> dict[str, tuple[int, str, str]]:
+    """Billable plans as ``name -> (price_cents, interval, description)``.
+
+    Sourced from ``Settings.plan_catalog`` so a price or cap change is a single
+    edit there and reaches the DB on the next deploy.
+    """
+    settings = settings or get_settings()
+    out: dict[str, tuple[int, str, str]] = {}
+    for name, plan in settings.plan_catalog.items():
+        price_cents = settings.plan_price_cents(name)
+        if price_cents <= 0:
+            continue  # free/unsold tier is not a billable row
+        minutes = int(plan.get("voice_minutes", 0))
+        description = f"{name.capitalize()} — {minutes} minutes of voice a month."
+        out[name] = (price_cents, "month", description)
+    return out
 
 # code -> human description
 DEFAULT_PERMISSIONS: dict[str, str] = {
@@ -163,18 +175,20 @@ async def seed_first_super_admin(
         await session.flush()
 
 
-async def seed_plans(session: AsyncSession) -> None:
+async def seed_plans(
+    session: AsyncSession, settings: Settings | None = None
+) -> None:
     """Upsert the billing catalog. Idempotent — safe on every deploy.
 
     Matched by name: a plan that exists has its price/interval/description
-    brought in line with the catalog (so a price change here reaches the DB on
-    the next deploy), and a missing one is created active. Plans NOT in the
-    catalog are left untouched — an operator may have added a custom plan
-    through the admin panel, and this must not delete it. `is_active` is only
-    set on create, so an operator can retire a catalog plan by deactivating it
-    without this resurrecting it every deploy.
+    brought in line with the catalog (so a price change in Settings.plan_catalog
+    reaches the DB on the next deploy), and a missing one is created active.
+    Plans NOT in the catalog are left untouched — an operator may have added a
+    custom plan through the admin panel, and this must not delete it. `is_active`
+    is only set on create, so an operator can retire a catalog plan by
+    deactivating it without this resurrecting it every deploy.
     """
-    for name, (price_cents, interval, description) in PLAN_CATALOG.items():
+    for name, (price_cents, interval, description) in sold_plans(settings).items():
         existing = (
             await session.execute(select(Plan).where(Plan.name == name))
         ).scalar_one_or_none()
@@ -199,5 +213,5 @@ async def seed_plans(session: AsyncSession) -> None:
 async def run_seed(session: AsyncSession, settings: Settings) -> None:
     """Run the full seed sequence (roles/permissions, plans, first super_admin)."""
     roles = await seed_roles_and_permissions(session)
-    await seed_plans(session)
+    await seed_plans(session, settings)
     await seed_first_super_admin(session, settings, roles)

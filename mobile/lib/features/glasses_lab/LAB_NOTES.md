@@ -476,3 +476,39 @@ enough to parse dataType 8.
 Note: this unit's resolution has been written twice with unverified values.
 Recording still works normally afterwards. The vendor app's Record settings
 screen is the place to see and reset it.
+
+### 2026-08-08 — the glasses' own button: what it does, and what we can see
+
+Vendor guide (HeyCyan → "Learn to take photos and videos"), right-hand button:
+
+| action | gesture | indicator |
+|---|---|---|
+| photo | single click | light flashes |
+| start recording | **double click** | light stays on |
+| stop recording | single click while recording | — |
+
+Verified on the L801: a double click really does record, and the clip lands in
+the album (video count 1 → 2).
+
+**What the app can and cannot see.**
+
+* A wearer's capture produces notify `0x01` only. Its payload carries both
+  counts: byte 7 = photos, byte 9 = videos (the latter INFERRED from two
+  samples, 1 → 2 across a button recording — not from vendor docs).
+* There is **no notify when a button recording STARTS.** Only completion is
+  visible, via that count. So the app cannot show a REC bar for a recording the
+  wearer began, and cannot stop one.
+* **A button photo has no BLE thumbnail.** Tried pulling one on `0x01`:
+  `getPictureThumbnails()` delivers nothing and the rolling watchdog fires
+  after 3 s. Only the AI-photo command (`0x02 0x01 0x06`) asks the firmware to
+  produce a thumbnail; a plain capture just goes to storage. The attempt was
+  removed — it cost a 3 s stall on the control channel and raised a bogus
+  `captureFailed` on every button press.
+
+**Consequence for the chat preview.** A wearer's photo can only reach the phone
+through the WiFi sync, at full resolution. Showing it in the chat therefore
+means showing it AFTER a sync, not seconds after the press.
+
+Reminder of the two tiers, since this is where they matter: the AI is fed the
+**BLE thumbnail** (512×384, ~20 KB, ~4 s) — the full-res 6560×4928 image only
+ever arrives over WiFi and goes to the gallery.

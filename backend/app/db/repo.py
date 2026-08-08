@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
@@ -55,6 +55,22 @@ async def get_daily_usage(
 ) -> DailyUsage | None:
     """Return the usage row for ``(user_key, day)``, or None."""
     return await session.get(DailyUsage, (user_key, day))
+
+
+async def lifetime_voice_seconds(session: AsyncSession, *, user_key: str) -> int:
+    """Total voice seconds this user has EVER used (summed across all days).
+
+    Backs the one-time ``trial`` plan: its voice budget is a lifetime total, so
+    the session meter compares against this rather than a single day's row. The
+    per-day rows are still the write path (``bump_daily_usage``); this just adds
+    them up. Returns 0 for a user who has never spoken.
+    """
+    result = await session.execute(
+        select(func.coalesce(func.sum(DailyUsage.voice_seconds), 0)).where(
+            DailyUsage.user_key == user_key
+        )
+    )
+    return int(result.scalar_one() or 0)
 
 
 async def bump_daily_usage(

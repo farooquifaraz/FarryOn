@@ -11,7 +11,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 AIProvider = Literal["gemini", "openai", "grok", "mock"]
@@ -257,26 +257,51 @@ class Settings(BaseSettings):
     # app does costs us Gemini tokens on every minute of use (measured ~$0.01-
     # 0.015/active-minute, and a long session re-bills its whole context each
     # turn, so cost rises faster than time) — so "free" here is a small taste,
-    # not a usable tier. Set its caps to 0 for a hard paywall.
+    # not a usable tier.
     default_plan: str = Field(default="free")
-    # Per-plan daily caps, enforced server-side. 0 = feature off, -1 = unlimited.
+
+    # -- Plan catalog: THE single place to edit plans --------------------------
+    # One row per plan. EVERYTHING about a plan lives here — price AND caps — so
+    # changing a plan (or adding one) is a one-line edit. The billing `plans`
+    # table is (re)seeded from this on every deploy, and the daily quota caps
+    # (`plan_limits`, below) are DERIVED from this — you never edit those by hand.
     #
-    # Pricing (global/USD, paid-only) decided 2026-07-19 against measured cost,
-    # with cap-cost held to ~40% of price so the gross margin floor is ~60% even
-    # for a user who maxes the cap every day; typical use (~3-5 min/day) leaves
-    # far more. voice_seconds is the real cost driver; image scans are one-shot
-    # Gemini calls (~$0.0003) so their caps are about abuse, not unit economics.
+    #   price_usd     — monthly price in USD. 0.0 = free/unsold (not seeded to
+    #                   the billing table, never sent to Stripe).
+    #   period        — "month": caps renew daily.
+    #                   "trial": `voice_minutes` is a ONE-TIME lifetime budget
+    #                   (not per day), so a free taste can't be farmed forever.
+    #   voice_minutes — the plan's VOICE budget in minutes. For "month" it is the
+    #                   MONTHLY budget, enforced as a daily cap of minutes / 30
+    #                   (so a user can't binge a whole month in one day). For
+    #                   "trial" it is the whole one-time lifetime budget.
+    #   image_scans / web_searches — DAILY caps. -1 = unlimited, 0 = off.
     #
-    #   free  — unpaid taste. ~$1.80/mo max if a signup maxes it and never pays.
-    #   plus  — $9.99/mo. 7 min/day  (420s). Cap-cost ~$4/mo  → ~60% margin.
-    #   pro   — $19.99/mo. 15 min/day (900s). Cap-cost ~$9/mo → ~55% margin.
-    plan_limits: dict[str, dict[str, int]] = Field(
+    # Voice at ~$0.012/min is ~95% of cost, so `voice_minutes` is the real dial.
+    # Caps are sized so a user who maxes them every day is STILL profitable — see
+    # docs/REVENUE_PLAN.md for the full P&L and the no-loss rule. image_scans and
+    # web_searches are one-shot and cheap (~$0.003), so their caps are about
+    # abuse, not unit economics.
+    plan_catalog: dict[str, dict[str, float | int | str]] = Field(
         default_factory=lambda: {
-            "free": {"voice_seconds": 180, "image_scans": 2, "web_searches": 5},
-            "plus": {"voice_seconds": 420, "image_scans": 20, "web_searches": 50},
-            "pro": {"voice_seconds": 900, "image_scans": -1, "web_searches": 200},
+            #        price  period     voice_min  scans  searches
+            "free": {"price_usd": 0.0,  "period": "trial", "voice_minutes": 60,  "image_scans": 3,  "web_searches": 10},   # noqa: E501
+            "lite": {"price_usd": 5.0,  "period": "month", "voice_minutes": 150, "image_scans": 20, "web_searches": 50},   # noqa: E501
+            "plus": {"price_usd": 10.0, "period": "month", "voice_minutes": 360, "image_scans": 50, "web_searches": 100},  # noqa: E501
+            "pro":  {"price_usd": 20.0, "period": "month", "voice_minutes": 900, "image_scans": -1, "web_searches": 200},  # noqa: E501
         }
     )
+    # Days used to spread a monthly voice budget into a daily cap. 30 is the
+    # conventional month; a user who talks every single day gets voice_minutes
+    # of voice a month (give or take the odd 31-day month), never a month's
+    # worth in one sitting.
+    days_per_month: int = Field(default=30)
+
+    # Daily quota caps the quota code reads (voice_seconds / image_scans /
+    # web_searches per plan). DERIVED from `plan_catalog` on startup — leave it
+    # empty and edit `plan_catalog` instead. Set it explicitly only to override
+    # the derivation entirely (e.g. a test injecting a synthetic plan).
+    plan_limits: dict[str, dict[str, int]] = Field(default_factory=dict)
 
     # -- Tunables --------------------------------------------------------------
     tool_timeout_seconds: float = Field(default=20.0)
@@ -340,10 +365,71 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @model_validator(mode="after")
+    def _fill_plan_limits(self) -> "Settings":
+        """Populate ``plan_limits`` from ``plan_catalog`` when left empty.
+
+        ``plan_catalog`` is the single source of truth; the quota code reads the
+        derived per-day caps here. An explicitly-provided ``plan_limits`` (e.g.
+        a test override) is respected as-is.
+        """
+        if not self.plan_limits:
+            self.plan_limits = self._derive_plan_limits()
+        return self
+
     @property
     def auth_enabled(self) -> bool:
         """Whether JWT verification should be enforced on the WS handshake."""
         return self.jwt_secret != "dev-insecure-change-me"
+
+    # -- Plan helpers (derived from plan_catalog) ------------------------------
+    def _plan(self, name: str | None) -> dict[str, float | int | str]:
+        """The catalog row for ``name``, falling back to the default plan."""
+        cat = self.plan_catalog
+        return cat.get(name or "") or cat.get(self.default_plan, {})
+
+    def is_trial_plan(self, name: str | None) -> bool:
+        """True when the plan's voice budget is a one-time LIFETIME total.
+
+        The session voice meter uses this to decide whether to compare usage
+        against the user's all-time voice (trial) or just today's (monthly).
+
+        Exact lookup, no fallback: only a plan explicitly marked ``period:
+        "trial"`` is a trial. An unknown plan (e.g. a custom one an operator
+        added straight to the DB) is treated as monthly — the safe default, so a
+        stray name never turns into a permanent lifetime lock.
+        """
+        row = self.plan_catalog.get(name or self.default_plan)
+        return bool(row) and str(row.get("period", "month")) == "trial"
+
+    def plan_price_cents(self, name: str) -> int:
+        """The plan's monthly price in cents (0 for free/unsold)."""
+        return int(round(float(self._plan(name).get("price_usd", 0)) * 100))
+
+    def _derive_plan_limits(self) -> dict[str, dict[str, int]]:
+        """Daily quota caps derived from :attr:`plan_catalog`. Per plan:
+
+        * ``month`` — daily voice cap = ``round(voice_minutes * 60 / days_per_month)``.
+        * ``trial`` — voice cap = the whole lifetime budget (``voice_minutes * 60``);
+          the meter compares it against the user's LIFETIME voice, not today's
+          (see ``session._load_voice_usage``), so 60 trial minutes are 60 minutes
+          ever, not per day.
+
+        ``image_scans`` / ``web_searches`` pass through as daily caps.
+        """
+        out: dict[str, dict[str, int]] = {}
+        for name, p in self.plan_catalog.items():
+            minutes = int(p.get("voice_minutes", 0))
+            if str(p.get("period", "month")) == "trial":
+                voice_seconds = minutes * 60
+            else:
+                voice_seconds = round(minutes * 60 / max(1, self.days_per_month))
+            out[name] = {
+                "voice_seconds": voice_seconds,
+                "image_scans": int(p.get("image_scans", 0)),
+                "web_searches": int(p.get("web_searches", 0)),
+            }
+        return out
 
 
 @lru_cache

@@ -914,7 +914,31 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                         val label = when (load[6].toInt()) {
                             // Seen on hardware: fires after each photo lands
                             // on the glasses' storage; load[7] = photo count.
-                            0x01 -> "photoStored count=${load.getOrNull(7)?.toInt()}"
+                            0x01 -> {
+                                // Fires when the glasses have STORED something
+                                // the wearer captured with their own button —
+                                // a photo (single click) or a finished video
+                                // (double click to start, single to stop).
+                                //
+                                // Do NOT try to pull a thumbnail here. Tried it
+                                // on 2026-08-08: getPictureThumbnails() returns
+                                // nothing for a button photo, because only the
+                                // AI-photo command (0x06) asks the firmware to
+                                // produce one. All it bought was a 3 s stall on
+                                // the BLE channel and a bogus captureFailed.
+                                // A wearer's capture reaches the phone by WiFi
+                                // sync, at full resolution.
+                                //
+                                // The payload carries both counts, so report
+                                // them straight away instead of waiting for a
+                                // separate probe. Byte 9 as the video count is
+                                // INFERRED from two samples (1->2 across a
+                                // button recording), not from the vendor docs.
+                                val photos = load.getOrNull(7)?.toInt() ?: 0
+                                val videos = load.getOrNull(9)?.toInt() ?: 0
+                                emitMediaCount(photos, videos, 0)
+                                "photoStored photos=$photos videos=$videos"
+                            }
                             0x03 ->
                                 if (load.getOrNull(7)?.toInt() == 1)
                                     "TOUCH long-press → glasses mic ON"

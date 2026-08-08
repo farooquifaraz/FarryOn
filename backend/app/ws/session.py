@@ -876,6 +876,16 @@ class Session:
                 from app.modules.billing import service as billing
 
                 self._plan_name = await billing.active_plan_name(db, self._user_id)
+                # A "trial" plan's voice cap is a ONE-TIME lifetime budget, not a
+                # daily one, so meter it against the user's all-time voice rather
+                # than just today's row. Monthly plans stay on today's total,
+                # loaded above. (Cold path — once per session, not per frame.)
+                if get_settings().is_trial_plan(self._plan_name):
+                    self._voice_used_s = float(
+                        await repo.lifetime_voice_seconds(
+                            db, user_key=self._usage_key()
+                        )
+                    )
         except Exception as exc:  # noqa: BLE001
             logger.warning("quota.voice_load_failed", error=str(exc))
 
