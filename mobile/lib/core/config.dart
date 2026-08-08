@@ -108,8 +108,15 @@ class AppConfig {
   /// so the recording really is the length that was picked.
   final int videoRecordSeconds;
 
-  /// Copy a finished glasses recording to the phone (`DCIM/FarryOn`) over the
+  /// Sync a finished glasses recording to the phone IMMEDIATELY, over the
   /// existing WiFi media sync. Default on.
+  ///
+  /// Note what this does NOT do: recordings reach `DCIM/FarryOn` either way,
+  /// because every file the glasses hand over is exported to the gallery. This
+  /// only decides whether that happens the moment recording ends or at the
+  /// next sync (a photo, or a reconnect). Making it mean "never copy" would
+  /// risk the retention sweep deleting a video off the glasses that had never
+  /// reached the phone.
   final bool saveRecordingsToPhone;
 
   /// Save every live capture (phone camera / glasses still) into the phone

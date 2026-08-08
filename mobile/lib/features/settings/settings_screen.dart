@@ -874,8 +874,8 @@ class _VideoRecordingPage extends ConsumerWidget {
       '$seconds seconds';
 
   static String describe(AppConfig cfg) => cfg.saveRecordingsToPhone
-      ? '${label(cfg.videoRecordSeconds)} · saved to phone'
-      : '${label(cfg.videoRecordSeconds)} · kept on glasses';
+      ? '${label(cfg.videoRecordSeconds)} · synced right away'
+      : '${label(cfg.videoRecordSeconds)} · synced later';
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -916,8 +916,8 @@ class _VideoRecordingPage extends ConsumerWidget {
           SettingsRow(
             icon: Icons.save_alt_rounded,
             gradient: Aurora.gradGreen,
-            title: 'Save to phone',
-            subtitle: 'Copies the video into DCIM/FarryOn over WiFi',
+            title: 'Sync as soon as it finishes',
+            subtitle: 'Pulls the video over WiFi the moment recording ends',
             showDivider: false,
             trailing: Switch(
               value: cfg.saveRecordingsToPhone,
@@ -929,9 +929,10 @@ class _VideoRecordingPage extends ConsumerWidget {
         ]),
         const SizedBox(height: 12),
         const Text(
-          'The glasses need to be off the charger for the WiFi transfer. '
-          'Recordings always stay on the glasses either way, and sync the next '
-          'time they can.',
+          'Every recording ends up in your phone gallery (DCIM/FarryOn) — this '
+          'only decides whether it transfers straight away or waits for the '
+          'next sync. Turn it off to save battery. The glasses need to be off '
+          'the charger for the WiFi transfer.',
           style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
         ),
       ],
