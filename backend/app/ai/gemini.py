@@ -384,6 +384,11 @@ class GeminiGateway(AIGateway):
         tool_call = getattr(message, "tool_call", None)
         if tool_call is not None:
             for fc in getattr(tool_call, "function_calls", []) or []:
+                # Same line the OpenAI path logs, for the same reason: without
+                # it, "the model never called the tool" and "we lost the call"
+                # are indistinguishable. Parity matters — a feature has to be
+                # diagnosable on whichever provider the user picked.
+                logger.info("gemini.function_call", name=str(fc.name))
                 await self._queue.put(
                     ToolCallEvent(
                         id=str(getattr(fc, "id", "") or getattr(fc, "name", "")),

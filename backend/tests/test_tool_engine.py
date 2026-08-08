@@ -185,3 +185,20 @@ def test_prompt_forbids_claiming_unperformed_actions() -> None:
     prompt = build_system_prompt(None).lower()
     assert "saying an action happened does not make it happen" in prompt
     assert "unless you called the tool" in prompt
+
+
+def test_language_pin_does_not_trust_a_misheard_room() -> None:
+    """A transcript is what the MIC heard, not necessarily what the user said.
+
+    Regression, device-seen 2026-08-08: the mic picked up music, whisper
+    transcribed Swedish song lyrics, and the absolute pin ("reply in EXACTLY
+    the language of those words") made the assistant answer an English-speaking
+    user in Swedish. The pin must carry the escape hatch.
+    """
+    from app.ai.openai_realtime import OpenAIRealtimeGateway
+
+    gw = OpenAIRealtimeGateway(system_prompt="SYSTEM", tools=[])
+    pinned = gw._language_pinned_instructions("Det är mitt liv").lower()
+    assert "system" in pinned, "the full system prompt must ride along"
+    assert "song lyrics" in pinned
+    assert "do not switch language" in pinned

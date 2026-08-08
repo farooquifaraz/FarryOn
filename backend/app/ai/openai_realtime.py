@@ -726,16 +726,30 @@ class OpenAIRealtimeGateway(AIGateway):
         await self._create_response_with_frame(user_words=words or None)
 
     def _language_pinned_instructions(self, user_words: str) -> str:
-        """The session prompt plus a hard per-response language pin.
+        """The session prompt plus a per-response language pin.
 
         Response-level instructions REPLACE the session instructions for that
         response, so the full system prompt must ride along.
+
+        The pin used to be absolute — "reply in EXACTLY the language of those
+        words" — which turned a transcription error into a hard instruction.
+        A microphone picked up music in the room, whisper returned Swedish song
+        lyrics, and the assistant dutifully answered an English-speaking user
+        in Swedish (device-seen 2026-08-08). A mic hears the room, not just the
+        user, so the pin now says what to do when the words plainly are not
+        this user talking.
         """
         return (
-            f"{self.system_prompt}\n\nRIGHT NOW the user's just-spoken words "
-            f"were: «{user_words}». Reply in EXACTLY the language "
-            "of those words, even if every earlier turn used a different "
-            "language."
+            f"{self.system_prompt}\n\nRIGHT NOW the transcript of what the "
+            f"microphone just heard is: «{user_words}». Normally that is the "
+            "user speaking, and you must reply in the language of those words "
+            "even if every earlier turn used a different language. BUT a "
+            "microphone picks up the whole room. If those words are plainly "
+            "not this user talking to you — song lyrics, a television or radio "
+            "playing, a stray fragment in a language they have never used with "
+            "you — then do not answer them and do not switch language for "
+            "them: keep the language you were already speaking, and stay quiet "
+            "unless they actually asked you something."
         )
 
     async def _safe_response_create(self, user_words: str | None = None) -> None:
