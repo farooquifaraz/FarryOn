@@ -92,6 +92,7 @@ class LiveSessionState {
     this.glassesWorn = false,
     this.recording,
     this.syncStatus,
+    this.pendingMedia,
     this.recordingBusy = false,
     this.lastCapturedPhoto,
     this.lastCapturedAt,
@@ -163,6 +164,11 @@ class LiveSessionState {
   /// the first — the button is held disabled until it does.
   final bool recordingBusy;
 
+  /// What is waiting on the glasses, as they last reported it. Drives the
+  /// dashboard's "waiting to sync" chip in manual mode — without it, manual
+  /// sync is a setting the user forgets until the glasses fill up.
+  final GlassesMedia? pendingMedia;
+
   /// A glasses media transfer in progress, or null when nothing is syncing.
   /// Shown on the dashboard so a long video transfer isn't invisible.
   final GlassesSync? syncStatus;
@@ -209,6 +215,7 @@ class LiveSessionState {
     bool clearRecording = false,
     GlassesSync? syncStatus,
     bool clearSync = false,
+    GlassesMedia? pendingMedia,
     bool? recordingBusy,
     Uint8List? lastCapturedPhoto,
     DateTime? lastCapturedAt,
@@ -236,6 +243,7 @@ class LiveSessionState {
         glassesWorn: glassesWorn ?? this.glassesWorn,
         recording: clearRecording ? null : (recording ?? this.recording),
         syncStatus: clearSync ? null : (syncStatus ?? this.syncStatus),
+        pendingMedia: pendingMedia ?? this.pendingMedia,
         recordingBusy: recordingBusy ?? this.recordingBusy,
         lastCapturedPhoto: lastCapturedPhoto ?? this.lastCapturedPhoto,
         lastCapturedAt: lastCapturedAt ?? this.lastCapturedAt,
@@ -305,5 +313,28 @@ class GlassesSync {
         ? ''
         : ' · ${speed.toStringAsFixed(1)} MB/s';
     return '$pct%$rate';
+  }
+}
+
+/// What the glasses are holding that hasn't reached the phone yet.
+class GlassesMedia {
+  const GlassesMedia({this.photos = 0, this.videos = 0, this.recordings = 0});
+
+  final int photos;
+  final int videos;
+  final int recordings;
+
+  int get total => photos + videos + recordings;
+  bool get isEmpty => total == 0;
+
+  /// "2 videos", "1 photo · 3 videos" — only the kinds that are actually there,
+  /// so the user reads a fact rather than a form.
+  String get label {
+    final parts = <String>[
+      if (photos > 0) '$photos photo${photos == 1 ? '' : 's'}',
+      if (videos > 0) '$videos video${videos == 1 ? '' : 's'}',
+      if (recordings > 0) '$recordings recording${recordings == 1 ? '' : 's'}',
+    ];
+    return parts.join(' · ');
   }
 }

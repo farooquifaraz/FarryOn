@@ -71,6 +71,11 @@ abstract class GlassesBridgeApi {
 
   Future<void> stopWifiSync();
 
+  /// Ask what media is waiting on the glasses — answers as a `mediaCount`
+  /// event. One cheap BLE command; unlike a sync it raises no WiFi and blocks
+  /// nothing, so it is safe to call while the user is doing other things.
+  Future<void> refreshMediaCounts();
+
   /// [type]: `music` | `call` | `system`.
   Future<void> setVolume(String type, int level);
 
@@ -256,6 +261,10 @@ class GlassesChannel implements GlassesBridgeApi {
 
   @override
   Future<void> stopWifiSync() => _method.invokeMethod<void>('stopWifiSync');
+
+  @override
+  Future<void> refreshMediaCounts() =>
+      _method.invokeMethod<void>('refreshMediaCounts');
 
   @override
   Future<void> setVolume(String type, int level) =>

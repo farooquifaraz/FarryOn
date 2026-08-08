@@ -101,6 +101,8 @@ class FakePcmPlayer implements PcmPlayer {
 class FakeGlassesBridge implements GlassesBridgeApi {
   final connectCalls = <String>[];
   final videoCalls = <String>[];
+  int syncCalls = 0;
+  int countCalls = 0;
 
   /// Just the start/stop calls. The recording LENGTH is pushed separately (at
   /// startup and again on connect, both deliberate), and those pushes would
@@ -155,9 +157,11 @@ class FakeGlassesBridge implements GlassesBridgeApi {
   @override
   Future<void> stopAudioTest() async {}
   @override
-  Future<void> startWifiSync() async {}
+  Future<void> startWifiSync() async => syncCalls++;
   @override
   Future<void> stopWifiSync() async {}
+  @override
+  Future<void> refreshMediaCounts() async => countCalls++;
   @override
   Future<void> setVolume(String type, int level) async {}
   @override
@@ -834,6 +838,75 @@ void main() {
         reason: 'a double tap must not toggle the recording straight back off');
     expect(ctl.state.recordingBusy, isFalse,
         reason: 'the button must come back once the request is away');
+  });
+
+  // ---- Manual media sync -------------------------------------------------
+  //
+  // A transfer takes the whole device — no recording, no photo while it runs —
+  // so someone shooting several clips needs to defer it. These pin that
+  // "manual" really means the app never starts one on its own, and that the
+  // user is still told what is waiting.
+
+  test('manual mode does not sync on its own, but does count what is waiting',
+      () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(
+      glasses,
+      config: const AppConfig(
+          host: 'h', port: 8000, secure: false, autoMediaSync: false),
+    );
+    await ctl.connect();
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+    glasses.emit('videoState',
+        {'state': 'recording', 'requestId': 'v1', 'seconds': 30});
+    await tick();
+    glasses.emit('videoState', {
+      'state': 'stopped',
+      'requestId': 'v1',
+      'seconds': 30,
+      'reason': 'duration_reached',
+    });
+    // Past every debounce the auto path uses.
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await tick();
+
+    expect(glasses.syncCalls, 0,
+        reason: 'manual means the app never takes the device by itself');
+  });
+
+  test('the pending count reaches the UI', () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    glasses.emit('mediaCount', {'img': 1, 'vid': 2, 'rec': 0});
+    await tick();
+    expect(ctl.state.pendingMedia?.total, 3);
+    expect(ctl.state.pendingMedia?.label, '1 photo · 2 videos');
+  });
+
+  test('Sync now refuses with a reason when it cannot run', () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+
+    await ctl.syncGlassesNow(); // glasses not connected
+    await tick();
+    expect(glasses.syncCalls, 0);
+    expect(ctl.state.lastError, contains('Connect the glasses'));
+
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+    glasses.emit('videoState',
+        {'state': 'recording', 'requestId': 'v1', 'seconds': 30});
+    await tick();
+    await ctl.syncGlassesNow(); // recording in progress
+    await tick();
+    expect(glasses.syncCalls, 0);
+    expect(ctl.state.lastError, contains("Can't sync while"));
   });
 
   test('the mic is restored only if it was open beforehand', () async {

@@ -593,8 +593,12 @@ class LiveController {
         _announceRecordingDone(finished);
         // Pull it onto the phone if the user asked for that. The debounce also
         // gives the glasses a moment to finalise the file.
-        if (_config.saveRecordingsToPhone) {
+        if (_config.autoMediaSync) {
           _scheduleAutoGlassesSync(const Duration(seconds: 6));
+        } else {
+          // Manual mode: don't transfer, but DO find out what is waiting, so
+          // the dashboard can say so. One cheap BLE command, no WiFi.
+          _refreshPendingMedia(const Duration(seconds: 6));
         }
       case 'failed':
         _endRecording();
@@ -629,9 +633,9 @@ class LiveController {
         : ' (${GlassesRecording.format(Duration(seconds: finished.seconds))})';
     unawaited(Notifications.showActivity(
       'Recording finished',
-      _config.saveRecordingsToPhone
+      _config.autoMediaSync
           ? 'Saving it to your phone…'
-          : 'It stays on your glasses until the next sync.',
+          : "Waiting on your glasses — tap Sync when you're ready.",
       done: true,
     ));
     _emit(_state.copyWith(
@@ -639,7 +643,9 @@ class LiveController {
         ..._state.transcripts,
         TranscriptEntry(
           role: 'notice',
-          text: 'Recording finished$length — saving to your phone.',
+          text: _config.autoMediaSync
+              ? 'Recording finished$length — saving to your phone.'
+              : 'Recording finished$length — waiting on your glasses.',
           isFinal: true,
         ),
       ],
@@ -733,8 +739,13 @@ class LiveController {
                 Future<void>.value(),
           );
           // Pull anything already sitting on the glasses (photos taken while
-          // disconnected) shortly after the link is up.
-          _scheduleAutoGlassesSync(const Duration(seconds: 3));
+          // disconnected) shortly after the link is up — or, in manual mode,
+          // just find out what is there so the user can decide.
+          if (_config.autoMediaSync) {
+            _scheduleAutoGlassesSync(const Duration(seconds: 3));
+          } else {
+            _refreshPendingMedia(const Duration(seconds: 3));
+          }
         }
         // Auto-pick the camera on a connect/disconnect TRANSITION: glasses
         // become the default camera the moment they connect, and it falls back
@@ -772,8 +783,20 @@ class LiveController {
         // single sync instead of one WiFi bring-up per photo.
         final hex = event.data['hex'] as String?;
         if (hex != null && hex.startsWith('photoStored')) {
-          _scheduleAutoGlassesSync(const Duration(seconds: 8));
+          if (_config.autoMediaSync) {
+            _scheduleAutoGlassesSync(const Duration(seconds: 8));
+          } else {
+            _refreshPendingMedia(const Duration(seconds: 8));
+          }
         }
+      case 'mediaCount':
+        _emit(_state.copyWith(
+          pendingMedia: GlassesMedia(
+            photos: (event.data['img'] as num?)?.toInt() ?? 0,
+            videos: (event.data['vid'] as num?)?.toInt() ?? 0,
+            recordings: (event.data['rec'] as num?)?.toInt() ?? 0,
+          ),
+        ));
       case 'videoState':
         _onVideoStateEvent(event);
       case 'syncProgress':
@@ -809,6 +832,53 @@ class LiveController {
             progress: pct,
           ));
         }
+    }
+  }
+
+  /// Ask the glasses what they are holding, after [delay]. Manual mode's
+  /// substitute for a sync: it costs one BLE command and blocks nothing, so
+  /// the "waiting to sync" chip stays truthful without taking the device.
+  void _refreshPendingMedia(Duration delay) {
+    final bridge = _glassesBridge;
+    if (bridge == null) return;
+    _pendingMediaTimer?.cancel();
+    _pendingMediaTimer = Timer(delay, () {
+      if (!_state.glassesConnected) return;
+      unawaited(bridge.refreshMediaCounts().catchError((Object e) {
+        _log.warn('refreshMediaCounts failed: $e');
+      }));
+    });
+  }
+
+  Timer? _pendingMediaTimer;
+
+  /// Settings / dashboard "Sync now": transfer whatever is waiting, on demand.
+  /// Reports refusals through [_state.lastError] rather than doing nothing.
+  Future<void> syncGlassesNow() async {
+    final bridge = _glassesBridge;
+    if (bridge == null) return;
+    if (!_state.glassesConnected) {
+      _emit(_state.copyWith(
+          lastError: "Connect the glasses to sync what's on them."));
+      return;
+    }
+    if (_state.recording != null) {
+      _emit(_state.copyWith(
+          lastError: "Can't sync while the glasses are recording."));
+      return;
+    }
+    if (_autoSyncing) return; // already running
+    _autoSyncing = true;
+    _autoSyncWatchdog?.cancel();
+    _autoSyncWatchdog = Timer(const Duration(seconds: 90), () {
+      _autoSyncing = false;
+    });
+    try {
+      await bridge.startWifiSync();
+    } catch (e) {
+      _log.warn('syncGlassesNow failed: $e');
+      _autoSyncing = false;
+      _emit(_state.copyWith(lastError: "Couldn't start the sync."));
     }
   }
 
@@ -2054,6 +2124,7 @@ class LiveController {
     _autoSyncTimer?.cancel();
     _autoSyncWatchdog?.cancel();
     _recordingTicker?.cancel();
+    _pendingMediaTimer?.cancel();
     await _audioSub?.cancel();
     await _videoSub?.cancel();
     await _glassesSub?.cancel();

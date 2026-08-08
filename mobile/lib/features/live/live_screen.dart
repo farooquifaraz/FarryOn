@@ -382,6 +382,7 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                     onToggleRecording: () => state.recording == null
                         ? notifier.startGlassesRecording()
                         : notifier.stopGlassesRecording(),
+                    onSyncNow: notifier.syncGlassesNow,
                   ),
                   ],
                 ),
@@ -668,6 +669,7 @@ class _Controls extends StatelessWidget {
     required this.onScan,
     required this.onCapturePhoto,
     required this.onToggleRecording,
+    required this.onSyncNow,
   });
 
   final LiveSessionState state;
@@ -682,6 +684,9 @@ class _Controls extends StatelessWidget {
 
   /// Start or stop a glasses video recording (the same button does both).
   final VoidCallback onToggleRecording;
+
+  /// Pull whatever is waiting on the glasses, now.
+  final VoidCallback onSyncNow;
 
   @override
   Widget build(BuildContext context) {
@@ -699,6 +704,10 @@ class _Controls extends StatelessWidget {
           if (recording != null) _RecordingBar(recording: recording),
           if (recording == null && state.syncStatus != null)
             _SyncBar(sync: state.syncStatus!),
+          // Manual-sync mode: say what is waiting, or the setting is one the
+          // user turns on and then forgets until the glasses fill up.
+          if (recording == null && state.syncStatus == null)
+            _PendingMediaChip(state: state, onSync: onSyncNow),
           // Scaled to fit rather than spread: with the glasses selected there
           // are six controls, and on a narrower phone the row overflowed its
           // width (device-seen 2026-08-08 — 17 px, the striped overflow bar).
@@ -1723,6 +1732,71 @@ class _SyncBar extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// "2 videos waiting · Sync" — shown only when the user has chosen to sync on
+/// demand and the glasses are actually holding something.
+///
+/// Deliberately a chip and not a banner: it is a standing fact, not an event,
+/// and it must not compete with the REC bar or a live transfer.
+class _PendingMediaChip extends ConsumerWidget {
+  const _PendingMediaChip({required this.state, required this.onSync});
+
+  final LiveSessionState state;
+  final VoidCallback onSync;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final pending = state.pendingMedia;
+    final auto = ref.watch(configProvider).autoMediaSync;
+    if (auto || pending == null || pending.isEmpty || !state.glassesConnected) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Center(
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: onSync,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(
+                color: Aurora.glass,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Aurora.glassBorder),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.cloud_upload_rounded,
+                      size: 15, color: Aurora.teal),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${pending.label} waiting',
+                    style: const TextStyle(
+                        color: Aurora.textPrimary, fontSize: 12),
+                  ),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'Sync',
+                    style: TextStyle(
+                      color: Aurora.teal,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

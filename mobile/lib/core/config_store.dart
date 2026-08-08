@@ -128,7 +128,10 @@ class ConfigStore {
       secondaryLanguage: p.getString('cfg.lang.secondary'),
       glassesVolume: p.getInt('cfg.glassesVolume'),
       videoRecordSeconds: p.getInt('cfg.videoRecordSeconds'),
-      saveRecordingsToPhone: p.getBool('cfg.saveRecordingsToPhone'),
+      // Carries over the older recordings-only flag so an existing install
+      // keeps the choice it already made.
+      autoMediaSync: p.getBool('cfg.autoMediaSync') ??
+          p.getBool('cfg.saveRecordingsToPhone'),
     );
   }
 
@@ -151,7 +154,7 @@ class ConfigStore {
     await p.setString('cfg.lang.secondary', c.secondaryLanguage);
     await p.setInt('cfg.glassesVolume', c.glassesVolume);
     await p.setInt('cfg.videoRecordSeconds', c.videoRecordSeconds);
-    await p.setBool('cfg.saveRecordingsToPhone', c.saveRecordingsToPhone);
+    await p.setBool('cfg.autoMediaSync', c.autoMediaSync);
   }
 
   // ---- Email accounts ----------------------------------------------------

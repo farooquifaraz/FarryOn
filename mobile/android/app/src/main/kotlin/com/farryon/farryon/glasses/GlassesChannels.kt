@@ -387,6 +387,9 @@ class GlassesChannels private constructor(
                 }
                 "stopAudioTest" -> { sdk.stopAudioTest(); result.success(null) }
                 "startWifiSync" -> { sdk.startWifiSync(); result.success(null) }
+                "refreshMediaCounts" -> {
+                    sdk.refreshMediaCounts(); result.success(null)
+                }
                 "stopWifiSync" -> { sdk.stopWifiSync(); result.success(null) }
                 "setVolume" -> {
                     sdk.setVolume(

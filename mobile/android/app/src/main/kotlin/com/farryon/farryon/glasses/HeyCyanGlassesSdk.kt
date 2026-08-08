@@ -2137,6 +2137,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         )
     }
 
+    /**
+     * Ask the glasses what is waiting on them, WITHOUT starting a transfer.
+     * Manual-sync mode needs the count to tell the user what is pending, and
+     * the count probe is a single cheap BLE command — unlike importAlbum,
+     * which raises WiFi-P2P and blocks the device for as long as it runs.
+     */
+    override fun refreshMediaCounts() = refreshMediaCount()
+
     /** Re-query the glasses' pending-media count (e.g. right after a sync). */
     private fun refreshMediaCount() {
         LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x04)) { _, rsp ->

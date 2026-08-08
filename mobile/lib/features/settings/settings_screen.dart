@@ -873,14 +873,17 @@ class _VideoRecordingPage extends ConsumerWidget {
           .firstOrNull ??
       '$seconds seconds';
 
-  static String describe(AppConfig cfg) => cfg.saveRecordingsToPhone
-      ? '${label(cfg.videoRecordSeconds)} · synced right away'
-      : '${label(cfg.videoRecordSeconds)} · synced later';
+  static String describe(AppConfig cfg) => cfg.autoMediaSync
+      ? '${label(cfg.videoRecordSeconds)} · syncs automatically'
+      : '${label(cfg.videoRecordSeconds)} · sync when you ask';
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final cfg = ref.watch(configProvider);
     final notifier = ref.read(liveProvider.notifier);
+    final live = ref.watch(liveProvider);
+    final pending = live.pendingMedia;
+    final glassesConnected = live.glassesConnected;
 
     return _SubPage(
       title: 'Video recording',
@@ -910,29 +913,51 @@ class _VideoRecordingPage extends ConsumerWidget {
             ),
         ]),
         const SizedBox(height: 18),
-        _fieldLabel('After recording'),
+        _fieldLabel('Copying photos & videos to your phone'),
+        const SizedBox(height: 10),
+        SettingsGroup(children: [
+          _OptionRow(
+            icon: Icons.autorenew_rounded,
+            gradient: Aurora.gradGreen,
+            title: 'Automatically',
+            selected: cfg.autoMediaSync,
+            onTap: () => ref.read(configProvider.notifier).state =
+                cfg.copyWith(autoMediaSync: true),
+          ),
+          _OptionRow(
+            icon: Icons.pan_tool_alt_rounded,
+            gradient: Aurora.gradGreen,
+            title: 'Only when I ask',
+            selected: !cfg.autoMediaSync,
+            showDivider: false,
+            onTap: () => ref.read(configProvider.notifier).state =
+                cfg.copyWith(autoMediaSync: false),
+          ),
+        ]),
         const SizedBox(height: 10),
         SettingsGroup(children: [
           SettingsRow(
-            icon: Icons.save_alt_rounded,
-            gradient: Aurora.gradGreen,
-            title: 'Sync as soon as it finishes',
-            subtitle: 'Pulls the video over WiFi the moment recording ends',
+            icon: Icons.cloud_download_rounded,
+            gradient: Aurora.gradBlue,
+            title: 'Sync now',
+            subtitle: pending == null || pending.isEmpty
+                ? (glassesConnected
+                    ? 'Nothing waiting on the glasses'
+                    : 'Connect the glasses first')
+                : '${pending.label} waiting',
             showDivider: false,
-            trailing: Switch(
-              value: cfg.saveRecordingsToPhone,
-              activeThumbColor: Aurora.mint,
-              onChanged: (v) => ref.read(configProvider.notifier).state =
-                  cfg.copyWith(saveRecordingsToPhone: v),
-            ),
+            onTap: (pending != null && !pending.isEmpty && glassesConnected)
+                ? () => notifier.syncGlassesNow()
+                : null,
           ),
         ]),
         const SizedBox(height: 12),
         const Text(
-          'Every recording ends up in your phone gallery (DCIM/FarryOn) — this '
-          'only decides whether it transfers straight away or waits for the '
-          'next sync. Turn it off to save battery. The glasses need to be off '
-          'the charger for the WiFi transfer.',
+          'A transfer takes over the glasses — they cannot record or take a '
+          'photo while it runs, and a 4-minute video is a few hundred MB. If '
+          'you shoot several clips in a row, pick "Only when I ask" and sync '
+          'once you are done. Everything lands in DCIM/FarryOn either way, and '
+          'the glasses must be off the charger for the transfer.',
           style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
         ),
       ],

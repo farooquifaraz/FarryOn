@@ -33,7 +33,7 @@ class AppConfig {
     this.secondaryLanguage = 'Hindi',
     this.glassesVolume = 70,
     this.videoRecordSeconds = 60,
-    this.saveRecordingsToPhone = true,
+    this.autoMediaSync = true,
   });
 
   /// Backend host (IP or DNS name), without scheme or port.
@@ -108,16 +108,15 @@ class AppConfig {
   /// so the recording really is the length that was picked.
   final int videoRecordSeconds;
 
-  /// Sync a finished glasses recording to the phone IMMEDIATELY, over the
-  /// existing WiFi media sync. Default on.
+  /// Whether the app pulls glasses media (photos AND videos) to the phone on
+  /// its own, or waits to be asked.
   ///
-  /// Note what this does NOT do: recordings reach `DCIM/FarryOn` either way,
-  /// because every file the glasses hand over is exported to the gallery. This
-  /// only decides whether that happens the moment recording ends or at the
-  /// next sync (a photo, or a reconnect). Making it mean "never copy" would
-  /// risk the retention sweep deleting a video off the glasses that had never
-  /// reached the phone.
-  final bool saveRecordingsToPhone;
+  /// A transfer takes the whole device: a 4-minute video is ~300 MB and the
+  /// glasses can neither record nor photograph while it runs (device-seen
+  /// 2026-08-08 — a second recording was refused mid-transfer). Someone
+  /// shooting several clips wants them all first and the transfer afterwards,
+  /// so this exists. Default on, which is the behaviour everyone had before.
+  final bool autoMediaSync;
 
   /// Save every live capture (phone camera / glasses still) into the phone
   /// gallery (`Pictures/Farry`). Default on.
@@ -190,7 +189,7 @@ class AppConfig {
     String? secondaryLanguage,
     int? glassesVolume,
     int? videoRecordSeconds,
-    bool? saveRecordingsToPhone,
+    bool? autoMediaSync,
   }) =>
       AppConfig(
         host: host ?? this.host,
@@ -215,8 +214,7 @@ class AppConfig {
         secondaryLanguage: secondaryLanguage ?? this.secondaryLanguage,
         glassesVolume: glassesVolume ?? this.glassesVolume,
         videoRecordSeconds: videoRecordSeconds ?? this.videoRecordSeconds,
-        saveRecordingsToPhone:
-            saveRecordingsToPhone ?? this.saveRecordingsToPhone,
+        autoMediaSync: autoMediaSync ?? this.autoMediaSync,
       );
 
   @override

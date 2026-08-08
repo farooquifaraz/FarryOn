@@ -96,6 +96,8 @@ class _FakeBridge implements GlassesBridgeApi {
 
   @override
   Future<void> stopWifiSync() => _maybeFail('stopWifiSync');
+  @override
+  Future<void> refreshMediaCounts() => _maybeFail('refreshMediaCounts');
 
   @override
   Future<void> setVolume(String type, int level) =>

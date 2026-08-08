@@ -83,6 +83,10 @@ interface GlassesSdk {
     fun startWifiSync()
     fun stopWifiSync()
 
+    /** Ask what media is waiting on the glasses (answers as a `mediaCount`
+     *  event). Cheap: one BLE command, no WiFi, no transfer. */
+    fun refreshMediaCounts()
+
     /** Debug/diagnostic: transfer whatever is on the glasses WITHOUT the
      *  media-count gate, so the album itself answers rather than a probe that
      *  may under-report. Reached only from the debuggable-build test hook. */
@@ -340,6 +344,9 @@ class StubGlassesSdk : GlassesSdk {
         syncTask?.let(main::removeCallbacks)
         syncTask = null
     }
+
+    override fun refreshMediaCounts() =
+        emit("mediaCount", mapOf("img" to 0, "vid" to 0, "rec" to 0))
 
     override fun forceWifiSync() = startWifiSync()
 
