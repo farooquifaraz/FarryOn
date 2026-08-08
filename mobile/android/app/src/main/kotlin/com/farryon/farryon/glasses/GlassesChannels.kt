@@ -252,6 +252,20 @@ class GlassesChannels private constructor(
                     "scan" -> sdk.scan(8000) { hits ->
                         android.util.Log.i("GlassesLab", "TEST scan → ${hits.size} hits")
                     }
+                    // A PLAIN photo (not the AI/thumbnail variant): the only
+                    // way to tell "the glasses stored nothing" apart from "the
+                    // media-count probe is lying", which is exactly the
+                    // question a missing recording raises.
+                    "photo" -> sdk.takePhoto()
+                    "video" -> sdk.startVideoRecording(
+                        "test-${System.currentTimeMillis()}",
+                        intent.getIntExtra("seconds", 30),
+                    )
+                    "stopvideo" -> sdk.stopVideoRecording()
+                    // Force the WiFi transfer even when the count says empty,
+                    // so the glasses' real album is what answers, not a probe.
+                    "sync" -> sdk.forceWifiSync()
+                    "rawtoggle" -> sdk.debugRawVideoToggle()
                 }
             }
         }

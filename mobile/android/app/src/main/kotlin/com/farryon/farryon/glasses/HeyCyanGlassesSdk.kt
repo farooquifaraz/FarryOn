@@ -1683,6 +1683,15 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             byteArrayOf(0x02, 0x01, 0x02)
         ) { _, rsp ->
             if (rsp == null) return@glassesControl
+            // Every field, every time: the toggle is the one command whose
+            // reply decides what we believe, and "it was accepted but nothing
+            // recorded" is only diagnosable with the raw numbers.
+            Log.i(
+                TAG,
+                "videoToggle reply starting=$starting dataType=${rsp.dataType} " +
+                    "err=${rsp.errorCode} workType=${rsp.glassWorkType} " +
+                    "workTypeIng=${rsp.workTypeIng} vid=${rsp.videoCount}"
+            )
             // Marshal onto main before touching any of the state above: this
             // callback arrives on a binder thread.
             main.post {
@@ -2062,6 +2071,44 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 )
             }
         }, MEDIA_COUNT_PROBE_TIMEOUT_MS)
+    }
+
+    /**
+     * Debug: run the WiFi transfer without the media-count gate, so the
+     * glasses' actual album decides what comes over. The normal path skips a
+     * zero count on purpose (a 0-file import still spins up P2P and then
+     * errors), but that same skip hides a count that under-reports.
+     */
+    /**
+     * Debug: send the raw start/stop toggle with NO app-side state, and log
+     * the reply plus the media counts a few seconds later. This is the only
+     * way to ask "are you recording right now?" — the work-type query the
+     * vendor app uses needs a newer SDK than the .aar we have.
+     */
+    override fun debugRawVideoToggle() {
+        Log.i(TAG, "debugRawVideoToggle → 02 01 02")
+        LargeDataHandler.getInstance().glassesControl(
+            byteArrayOf(0x02, 0x01, 0x02)
+        ) { _, rsp ->
+            Log.i(
+                TAG,
+                "rawToggle reply dataType=${rsp?.dataType} err=${rsp?.errorCode} " +
+                    "workType=${rsp?.glassWorkType} workTypeIng=${rsp?.workTypeIng}"
+            )
+        }
+        main.postDelayed({ refreshMediaCount() }, 5_000L)
+        main.postDelayed({ refreshMediaCount() }, 12_000L)
+    }
+
+    override fun forceWifiSync() {
+        Log.i(TAG, "forceWifiSync (debug)")
+        if (videoRequestId != null || syncActive) {
+            Log.i(TAG, "forceWifiSync: busy — recording=$videoRequestId sync=$syncActive")
+            return
+        }
+        syncActive = true
+        armSyncWatchdog()
+        GlassesControl.getInstance(app)?.importAlbum()
     }
 
     /** Typed count for the Media sync card (also visible in the console). */

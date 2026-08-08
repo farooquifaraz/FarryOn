@@ -697,8 +697,16 @@ class _Controls extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (recording != null) _RecordingBar(recording: recording),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          // Scaled to fit rather than spread: with the glasses selected there
+          // are six controls, and on a narrower phone the row overflowed its
+          // width (device-seen 2026-08-08 — 17 px, the striped overflow bar).
+          // FittedBox shrinks the whole row uniformly instead of clipping, so
+          // it survives any screen width and any future button.
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+            mainAxisSize: MainAxisSize.min,
+            spacing: 10,
             children: [
               _CircleButton(
                 icon: state.cameraOn ? Icons.videocam : Icons.videocam_off,
@@ -764,6 +772,7 @@ class _Controls extends StatelessWidget {
                 danger: speaking,
               ),
             ],
+            ),
           ),
           const SizedBox(height: 16),
           TextField(

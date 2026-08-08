@@ -101,6 +101,12 @@ class FakePcmPlayer implements PcmPlayer {
 class FakeGlassesBridge implements GlassesBridgeApi {
   final connectCalls = <String>[];
   final videoCalls = <String>[];
+
+  /// Just the start/stop calls. The recording LENGTH is pushed separately (at
+  /// startup and again on connect, both deliberate), and those pushes would
+  /// otherwise drown out what each test is actually about.
+  List<String> get recordingCalls =>
+      videoCalls.where((c) => !c.startsWith('duration:')).toList();
   final _events = StreamController<GlassesLabEvent>.broadcast();
   Map<String, Object?> info = const {'implementation': 'stub', 'lastMac': 'AA:BB:CC'};
 
@@ -497,8 +503,21 @@ void main() {
       glassesBridge: glasses,
     );
     addTearDown(ctl.dispose);
+    // The controller pushes the recording length at construction (the glasses
+    // can already be linked before it subscribes — see the constructor). That
+    // is asserted on its own below; drop it here so each test reads clearly.
+    expect(glasses.videoCalls, ['duration:60']);
+    glasses.videoCalls.clear();
     return ctl;
   }
+
+  test('the recording length is pushed to the glasses at startup', () async {
+    // Regression, device-seen 2026-08-08: pushed only on the connect event,
+    // which never fired because an auto-connect had already completed. The
+    // glasses then kept their OWN 180 s duration.
+    final glasses = FakeGlassesBridge();
+    newGlassesController(glasses); // asserts the startup push in the helper
+  });
 
   test('recording starts only once the glasses confirm it', () async {
     final glasses = FakeGlassesBridge();
@@ -510,7 +529,7 @@ void main() {
 
     await ctl.startGlassesRecording();
     await tick();
-    expect(glasses.videoCalls, ['start:60'],
+    expect(glasses.recordingCalls, ['start:60'],
         reason: 'the configured duration is what gets sent');
     expect(ctl.state.recording, isNull,
         reason: 'the badge must wait for the device, not for our own request');
@@ -554,7 +573,7 @@ void main() {
 
     await ctl.startGlassesRecording();
     await tick();
-    expect(glasses.videoCalls, isEmpty,
+    expect(glasses.recordingCalls, isEmpty,
         reason: 'no BLE command may be sent to glasses that are not connected');
     expect(ctl.state.lastError, contains('Connect the glasses'));
   });
@@ -573,7 +592,7 @@ void main() {
 
     await ctl.stopGlassesRecording();
     await tick();
-    expect(glasses.videoCalls, contains('stop'));
+    expect(glasses.recordingCalls, contains('stop'));
 
     glasses.emit('videoState', {
       'state': 'stopped',
@@ -601,14 +620,14 @@ void main() {
       'needsPermission': false,
     });
     await tick();
-    expect(glasses.videoCalls, isEmpty,
+    expect(glasses.recordingCalls, isEmpty,
         reason: 'a spoken confirmation must not be cut off by the recording');
 
     // The voice path waits for that confirmation before rolling — here none
     // ever arrives, so it proceeds once the grace window closes.
     await Future<void>.delayed(const Duration(milliseconds: 1900));
     await tick();
-    expect(glasses.videoCalls, ['start:60']);
+    expect(glasses.recordingCalls, ['start:60']);
 
     glasses.emit('videoState',
         {'state': 'recording', 'requestId': 'v1', 'seconds': 60});
@@ -621,7 +640,7 @@ void main() {
       'needsPermission': false,
     });
     await tick();
-    expect(glasses.videoCalls, ['start:60', 'stop']);
+    expect(glasses.recordingCalls, ['start:60', 'stop']);
   });
 
   test('the settings chooser pushes the duration to the glasses', () async {
@@ -731,7 +750,7 @@ void main() {
     await tick();
     expect(ctl.state.micOpen, isFalse,
         reason: 'the mic must be shut before recording, not after');
-    expect(glasses.videoCalls, ['start:60']);
+    expect(glasses.recordingCalls, ['start:60']);
   });
 
   test('the mic is restored only if it was open beforehand', () async {

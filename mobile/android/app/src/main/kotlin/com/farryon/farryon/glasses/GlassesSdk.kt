@@ -82,6 +82,16 @@ interface GlassesSdk {
     fun stopAudioTest()
     fun startWifiSync()
     fun stopWifiSync()
+
+    /** Debug/diagnostic: transfer whatever is on the glasses WITHOUT the
+     *  media-count gate, so the album itself answers rather than a probe that
+     *  may under-report. Reached only from the debuggable-build test hook. */
+    fun forceWifiSync()
+
+    /** Debug/diagnostic: the raw video start/stop toggle, bypassing all
+     *  app-side state, with the device's reply logged. Answers "is it
+     *  recording right now?", which nothing else can. */
+    fun debugRawVideoToggle()
     fun setVolume(type: String, level: Int)
 
     /** Auto-delete synced glasses photos to free the headset's storage.
@@ -327,6 +337,11 @@ class StubGlassesSdk : GlassesSdk {
         syncTask?.let(main::removeCallbacks)
         syncTask = null
     }
+
+    override fun forceWifiSync() = startWifiSync()
+
+    override fun debugRawVideoToggle() =
+        emit("deviceEvent", mapOf("hex" to "rawVideoToggle (stub)"))
 
     override fun setVolume(type: String, level: Int) {
         emit("deviceEvent", mapOf("hex" to "volume:$type=$level"))
