@@ -251,6 +251,13 @@ class GlassesChannels private constructor(
                     }
                     "scan" -> sdk.scan(8000) { hits ->
                         android.util.Log.i("GlassesLab", "TEST scan → ${hits.size} hits")
+                        for (h in hits) {
+                            android.util.Log.i(
+                                "GlassesLab",
+                                "TEST hit: ${h["name"]} ${h["mac"]} ${h["rssi"]} dBm " +
+                                    "bonded=${h["bonded"]} connected=${h["connected"]}"
+                            )
+                        }
                     }
                     // A PLAIN photo (not the AI/thumbnail variant): the only
                     // way to tell "the glasses stored nothing" apart from "the
@@ -268,6 +275,18 @@ class GlassesChannels private constructor(
                     "rawtoggle" -> sdk.debugRawVideoToggle()
                     "info" -> sdk.requestDeviceInfo()
                     "resetp2p" -> sdk.debugResetP2p()
+                    // Connect to a SPECIFIC unit, so a second pair can be
+                    // tested without driving the UI by hand.
+                    "connectmac" -> {
+                        val target = intent.getStringExtra("mac") ?: mac
+                        android.util.Log.i("GlassesLab", "TEST connectmac → $target")
+                        sdk.disconnect()
+                        ctx.mainLooper?.let {
+                            android.os.Handler(it).postDelayed(
+                                { sdk.connect(target) }, 1500L
+                            )
+                        }
+                    }
                 }
             }
         }

@@ -342,3 +342,36 @@ command's `err=-1` really is an accept.
 on this same unit right now. That single test separates "the device" from
 "our code" and is the next step. Force-stop FarryOn first — it holds the BLE
 link.
+
+### 2026-08-08 (later) — the L802 is faulty; the L801 records perfectly
+
+The missing-recording hunt above ends here. Same app build, same commands,
+different unit:
+
+| | L802_2B1D | L801_DD8A |
+|---|---|---|
+| duration write | 180s → 30s ✓ | 180s → 30s ✓ |
+| toggle reply | `dataType=1 err=-1 workType=2` | identical |
+| stored after recording | `vid=0` | **`vid=1`** |
+| WiFi-P2P | never appears (60 s stall) | comes up, transfers at ~3.6 MB/s |
+| in the phone gallery | nothing | `20260808141249839.mp4`, 40.6 MB |
+
+The vendor's OWN app fails the same way on the L802: "Record video" toasts
+*"The glasses start recording. Import from the application's album."* and its
+album then shows "No video yet". So the L802's storage/WiFi side is dead, and
+nothing in our code is implicated — the L801 proves the whole path end to end
+(record → firmware auto-stop → WiFi sync → MediaStore → DCIM/FarryOn).
+
+**The recorded file, parsed (this settles the "does Farry get recorded?"
+question that the silencing design rests on):**
+```
+vide  duration=31.68s  950 samples  39.61 MB
+soun  duration=31.00s  487 samples  24,925 B
+```
+487 audio frames over 31 s = 15.7 frames/sec = **1024-sample AAC at 16 kHz**.
+So the glasses DO record an audio track from their own microphone. Anything
+Farry says during a recording would land in it — muting her for the duration
+is necessary, not belt-and-braces.
+
+Note: a 30 s pick produced a 31.68 s file. The firmware's own start/stop
+latency, not drift — the app-side clock is unaffected.
