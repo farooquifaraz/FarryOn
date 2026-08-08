@@ -332,11 +332,18 @@ First hardware run of the video feature on the L802. Split cleanly into
   consistent with the WiFi/storage co-processor being down.
 
 **Ruled out**: wear detection (symptoms identical worn and not), a stale P2P
-session (power-cycled), our own command bytes (the device echoes work type 2),
-and "the device silently ignores everything" — `0x02 0x01 0x0f`
-(`resetDeviceP2p`, the vendor's own P2P reset) comes back `err=1`, a real
-refusal. So this firmware DOES report errors when it refuses; the video
-command's `err=-1` really is an accept.
+session (power-cycled), and our own command bytes — the device echoes work
+type 2, and the L801 answers the identical command identically and records
+fine.
+
+**CORRECTION (2026-08-08, later).** This section first argued that
+`0x02 0x01 0x0f` returning `err=1` proved the firmware reports refusals. That
+reasoning was WRONG. `GlassModelControlResponse` initialises `errorCode = 1` in
+its constructor and only overwrites it for `dataType == 1`; the P2P reset's
+reply is not that dataType, so `err=1` simply means "our parser did not read
+it". Proven on the L801: the same reset returns `err=1` and the P2P session
+then comes back up — it worked. Treat `err=1` on an unparsed dataType as no
+information at all.
 
 **Open**: whether the official HeyCyan app can record a video / store a photo
 on this same unit right now. That single test separates "the device" from
