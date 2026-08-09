@@ -61,6 +61,39 @@ class Settings(BaseSettings):
         description="Comma-separated allow-list for hello.provider.",
     )
 
+    # -- Live translation (hello.mode == "translate") ---------------------------
+    # A translate session is a different model with a different contract — no
+    # tools, no system prompt, no vision — so it gets its own provider knob
+    # rather than riding on `ai_provider`. Left unset it FOLLOWS the mock
+    # switch: `mock_translate` when ai_provider is mock (which is what the test
+    # suite forces), `gemini_translate` otherwise. That way tests and offline
+    # runs never reach for a key, and production never needs this set.
+    translate_provider: str | None = Field(
+        default=None,
+        description="gemini_translate | mock_translate. Unset → follows "
+        "AI_PROVIDER's mock switch.",
+    )
+    gemini_translate_model: str = Field(
+        default="gemini-3.5-live-translate-preview",
+        description="Google's dedicated speech-to-speech translation model. "
+        "Its audio formats match ours exactly (16 kHz PCM16 in, 24 kHz out), "
+        "which is why the capture/playback stack is reused unchanged.",
+    )
+    # Target languages the UI may request. A client-supplied code lands in the
+    # upstream setup message, so it is validated against this list rather than
+    # forwarded verbatim.
+    translate_allowed_target_langs: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: [
+            "en", "hi", "ur", "ar", "bn", "pa", "ta", "te", "mr", "gu",
+            "es", "fr", "de", "pt", "ru", "zh", "ja", "ko", "tr", "id",
+        ],
+        description="Comma-separated BCP-47 allow-list for hello.translate.",
+    )
+    # Translator sessions run far longer than a Q&A session: a talk or a
+    # meeting is measured in tens of minutes, where `max_session_seconds`
+    # (1800) is sized for a conversation with an assistant.
+    translate_max_session_seconds: int = Field(default=3600)
+
     # -- Persistence -----------------------------------------------------------
     database_url: str = Field(
         default="sqlite+aiosqlite:///./farryon.db",
@@ -349,7 +382,12 @@ class Settings(BaseSettings):
         "capture_photo, so the model ingests the frame before replying.",
     )
 
-    @field_validator("allowed_origins", "allowed_providers", mode="before")
+    @field_validator(
+        "allowed_origins",
+        "allowed_providers",
+        "translate_allowed_target_langs",
+        mode="before",
+    )
     @classmethod
     def _split_csv(cls, value: object) -> object:
         """Allow comma-separated env strings for list fields."""

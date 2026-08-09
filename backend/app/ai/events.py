@@ -40,11 +40,16 @@ class TranscriptEvent(GatewayEvent):
         role: ``"user"`` (ASR) or ``"assistant"`` (model text).
         text: Partial or full text.
         final: ``True`` when this fragment finalizes the current utterance.
+        lang: BCP-47 code of the language this text is in, when the provider
+            reports it. Only the translate path populates it — there the source
+            language is *detected*, not configured, so the UI has no other way
+            to label what it heard. ``None`` everywhere else.
     """
 
     role: str
     text: str
     final: bool = False
+    lang: str | None = None
     type: EventType = field(default=EventType.TRANSCRIPT, init=False)
 
 

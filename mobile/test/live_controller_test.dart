@@ -180,6 +180,9 @@ class GrantingPermissions implements PermissionsService {
   @override
   Future<PermissionOutcome> requestMicAndCamera() async =>
       PermissionOutcome.granted;
+  @override
+  Future<PermissionOutcome> requestMicrophone() async =>
+      PermissionOutcome.granted;
 }
 
 void main() {

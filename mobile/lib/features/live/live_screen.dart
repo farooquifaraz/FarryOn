@@ -19,6 +19,7 @@ import '../finder/finder_screen.dart';
 import '../glasses/glasses_connect_flow.dart';
 import '../glasses_lab/glasses_lab_screen.dart';
 import '../settings/settings_screen.dart';
+import '../translate/translate_screen.dart';
 import 'widgets/aurora_orb.dart';
 import 'widgets/camera_preview_view.dart';
 import 'widgets/status_indicator.dart';
@@ -275,6 +276,7 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                   ),
                 ),
                 onNotes: () => YourStuffScreen.open(context),
+                onTranslate: () => TranslateScreen.open(context),
               ),
             ),
           ),
@@ -1040,6 +1042,7 @@ class _TopOverlay extends StatefulWidget {
     required this.onSettings,
     required this.onFinder,
     required this.onNotes,
+    required this.onTranslate,
     required this.chatOn,
     required this.onToggleChat,
   });
@@ -1048,6 +1051,7 @@ class _TopOverlay extends StatefulWidget {
   final VoidCallback onSettings;
   final VoidCallback onFinder;
   final VoidCallback onNotes;
+  final VoidCallback onTranslate;
 
   /// Whether the live transcript is currently shown (drives the chat icon).
   final bool chatOn;
@@ -1120,6 +1124,9 @@ class _TopOverlayState extends State<_TopOverlay> {
                     widget.onToggleChat,
                     gradient: Aurora.gradAmber,
                   ),
+                  _BarIcon(Icons.translate_rounded, 'Live translation',
+                      widget.onTranslate,
+                      gradient: Aurora.gradTeal),
                   _BarIcon(Icons.image_search_rounded,
                       'Finder — identify a photo', widget.onFinder,
                       gradient: Aurora.gradBlue),

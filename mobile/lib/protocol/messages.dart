@@ -43,6 +43,8 @@ class HelloMessage extends ClientMessage {
     this.emails,
     this.clientTime,
     this.languages,
+    this.mode,
+    this.translate,
   });
 
   /// `"android"` or `"ios"`.
@@ -85,6 +87,17 @@ class HelloMessage extends ClientMessage {
   /// Farry-initiated speech. Omitted when null → backend default behavior.
   final List<String>? languages;
 
+  /// What this session is for: `null`/`"agent"` (the assistant) or
+  /// `"translate"` (continuous speech-to-speech translation).
+  ///
+  /// Omitted when null, so a build that predates translation sends exactly the
+  /// hello it always did and the server treats it as `agent`.
+  final String? mode;
+
+  /// Translate-mode settings: `{targetLanguage, echoTargetLanguage}`. The
+  /// SOURCE language is never sent — the model detects it.
+  final Map<String, dynamic>? translate;
+
   @override
   String get type => MsgType.hello;
 
@@ -101,6 +114,8 @@ class HelloMessage extends ClientMessage {
         if (emails != null) 'emails': emails,
         if (clientTime != null) 'clientTime': clientTime,
         if (languages != null) 'languages': languages,
+        if (mode != null) 'mode': mode,
+        if (translate != null) 'translate': translate,
       };
 }
 
@@ -343,6 +358,8 @@ class ReadyMessage extends ServerMessage {
     required this.sessionId,
     required this.protocolVersion,
     this.model,
+    this.mode = 'agent',
+    this.targetLanguage,
   });
 
   final String sessionId;
@@ -351,11 +368,25 @@ class ReadyMessage extends ServerMessage {
   /// e.g. `"gemini-live" | "gpt-realtime"`.
   final String? model;
 
+  /// The mode the server actually accepted — `"agent"` or `"translate"`.
+  ///
+  /// Worth checking rather than assuming: a translate screen that silently
+  /// attached to the assistant would look like a translator producing very
+  /// strange translations. Defaults to `"agent"` so an older backend that
+  /// omits the field reads as the assistant, which is what it is.
+  final String mode;
+
+  /// The target language the server accepted (translate mode only). May differ
+  /// from what was asked for if the code was not on the server's allow-list.
+  final String? targetLanguage;
+
   factory ReadyMessage.fromJson(Map<String, dynamic> json) => ReadyMessage(
         sessionId: json['sessionId'] as String? ?? '',
         protocolVersion:
             (json['protocolVersion'] as num?)?.toInt() ?? kProtocolVersion,
         model: json['model'] as String?,
+        mode: json['mode'] as String? ?? 'agent',
+        targetLanguage: json['targetLanguage'] as String?,
       );
 }
 
@@ -365,6 +396,7 @@ class TranscriptMessage extends ServerMessage {
     required this.role,
     required this.text,
     required this.isFinal,
+    this.lang,
   });
 
   /// `"user"` (ASR) or `"assistant"`.
@@ -374,6 +406,13 @@ class TranscriptMessage extends ServerMessage {
   /// Whether this is the final text for the current utterance.
   final bool isFinal;
 
+  /// BCP-47 code of the language this text is in, when the server reports it.
+  ///
+  /// Only translate sessions populate it: there the source language is
+  /// *detected* rather than configured, so this is the only way the UI can
+  /// label what it just heard. Null on the assistant path.
+  final String? lang;
+
   bool get isUser => role == 'user';
   bool get isAssistant => role == 'assistant';
 
@@ -382,6 +421,7 @@ class TranscriptMessage extends ServerMessage {
         role: json['role'] as String? ?? 'assistant',
         text: json['text'] as String? ?? '',
         isFinal: json['final'] as bool? ?? false,
+        lang: json['lang'] as String?,
       );
 }
 

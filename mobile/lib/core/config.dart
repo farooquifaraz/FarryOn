@@ -34,6 +34,8 @@ class AppConfig {
     this.glassesVolume = 70,
     this.videoRecordSeconds = 60,
     this.autoMediaSync = true,
+    this.translateTargetLanguage = '',
+    this.translateCaptionsOnly = false,
   });
 
   /// Backend host (IP or DNS name), without scheme or port.
@@ -129,6 +131,18 @@ class AppConfig {
   /// `-1` = only when the glasses report storage full.
   final int glassesRetentionDays;
 
+  /// BCP-47 code live translation translates *into*, e.g. `"hi"`.
+  ///
+  /// Empty means the user has never chosen one, which is the signal to ask —
+  /// once. There is deliberately no source language: the model detects it, so
+  /// asking "translate from what?" would be a question with no right answer
+  /// when a room has three languages in it.
+  final String translateTargetLanguage;
+
+  /// Show the translation as text only, without speaking it. For a quiet room,
+  /// or for reading along while listening to the original voice.
+  final bool translateCaptionsOnly;
+
   /// Build the initial config from `--dart-define` values, falling back to
   /// localhost defaults suitable for an emulator talking to a host backend.
   ///
@@ -190,6 +204,8 @@ class AppConfig {
     int? glassesVolume,
     int? videoRecordSeconds,
     bool? autoMediaSync,
+    String? translateTargetLanguage,
+    bool? translateCaptionsOnly,
   }) =>
       AppConfig(
         host: host ?? this.host,
@@ -215,6 +231,10 @@ class AppConfig {
         glassesVolume: glassesVolume ?? this.glassesVolume,
         videoRecordSeconds: videoRecordSeconds ?? this.videoRecordSeconds,
         autoMediaSync: autoMediaSync ?? this.autoMediaSync,
+        translateTargetLanguage:
+            translateTargetLanguage ?? this.translateTargetLanguage,
+        translateCaptionsOnly:
+            translateCaptionsOnly ?? this.translateCaptionsOnly,
       );
 
   @override

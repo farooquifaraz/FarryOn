@@ -24,6 +24,65 @@ def _to_tool_specs(schemas: list[dict]) -> list[ToolSpec]:
     ]
 
 
+def build_translate_gateway(
+    settings: Settings | None = None,
+    *,
+    target_language: str = "en",
+    echo_target_language: bool = False,
+) -> AIGateway:
+    """Construct a gateway for a ``mode: "translate"`` session.
+
+    Deliberately takes no tools and no system prompt: a translate model accepts
+    neither, and passing them would only invite an adapter to start using them.
+
+    Provider resolution follows the mock switch rather than a separate default,
+    so the offline test suite (``conftest.py`` forces ``AI_PROVIDER=mock`` and
+    blanks every key) gets the deterministic twin without having to know this
+    feature exists.
+
+    Args:
+        settings: Settings to use (defaults to the cached global settings).
+        target_language: BCP-47 code to translate *into*. The source language
+            is detected by the model and is never configured.
+        echo_target_language: When ``False`` (the default, and what the UI
+            assumes) the model stays silent on speech that is already in the
+            target language.
+
+    Returns:
+        An unconnected :class:`AIGateway`. Call ``await gateway.connect()``.
+
+    Raises:
+        ValueError: If the resolved translate provider is not recognized.
+    """
+    settings = settings or get_settings()
+    configured = (settings.translate_provider or "").strip().lower()
+    if not configured:
+        configured = (
+            "mock_translate"
+            if settings.ai_provider.lower() == "mock"
+            else "gemini_translate"
+        )
+
+    if configured == "mock_translate":
+        from app.ai.mock_translate import MockTranslateGateway
+
+        return MockTranslateGateway(
+            target_language=target_language,
+            echo_target_language=echo_target_language,
+        )
+
+    if configured == "gemini_translate":
+        from app.ai.gemini_translate import GeminiTranslateGateway
+
+        return GeminiTranslateGateway(
+            target_language=target_language,
+            echo_target_language=echo_target_language,
+            model=settings.gemini_translate_model,
+        )
+
+    raise ValueError(f"unknown translate provider: {configured!r}")
+
+
 def build_gateway(
     tool_schemas: list[dict],
     settings: Settings | None = None,

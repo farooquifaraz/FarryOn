@@ -35,6 +35,7 @@ from starlette.websockets import WebSocketState
 from app.agent.orchestrator import Orchestrator
 from app.agent.tool_engine import ToolEngine
 from app.ai.base import AIGateway
+from app.ai.factory import build_translate_gateway
 from app.ai.events import (
     AudioChunkEvent,
     AudioEndEvent,
@@ -113,6 +114,13 @@ class Session:
         self._send_lock = asyncio.Lock()
         self._closing = False
         self._hello: dict[str, Any] | None = None
+        # Session mode, resolved from hello: "agent" (the assistant, and the
+        # default for every client that has never heard of this field) or
+        # "translate" (continuous speech-to-speech translation). Translate
+        # sessions run a different model with a different contract, so the
+        # branches read off this rather than sniffing the gateway.
+        self._mode: str = "agent"
+        self._translate: dict[str, Any] = {}
         self._orchestrator: Orchestrator | None = None
         # Tracks active tool-call tasks so they are awaited/cancelled cleanly.
         self._tool_tasks: set[asyncio.Task[Any]] = set()
@@ -170,9 +178,22 @@ class Session:
                 client_time if isinstance(client_time, str) else None,
                 languages=langs,
             )
-            self._gateway = self._gateway_factory(
-                self._resolve_provider(), prompt
-            )
+            if self._mode == "translate":
+                # Built here, not through `_gateway_factory`: the factory's job
+                # is to hand a provider the tools and system prompt, and a
+                # translate model takes neither. Routing it through anyway
+                # would mean a translate adapter that quietly accepts both.
+                self._gateway = build_translate_gateway(
+                    self._settings,
+                    target_language=self._translate["target_language"],
+                    echo_target_language=self._translate[
+                        "echo_target_language"
+                    ],
+                )
+            else:
+                self._gateway = self._gateway_factory(
+                    self._resolve_provider(), prompt
+                )
 
             try:
                 await self._gateway.connect()
@@ -184,6 +205,20 @@ class Session:
                     model=self._gateway.model_label,
                     error=repr(exc),
                 )
+                # A translate session must NEVER fall back to an agent
+                # gateway. The fallback below exists so a dead provider still
+                # leaves you with a working assistant — but here the user asked
+                # to be translated, and handing them an assistant that answers
+                # the room instead is worse than telling them it failed.
+                if self._mode == "translate":
+                    await self._send_error(
+                        "translate_unavailable",
+                        "Live translation could not start. Try again in a "
+                        "moment.",
+                        fatal=True,
+                    )
+                    reason = "connect_failed"
+                    return
                 # CHANGED (UX Spec BUG 2): if the client REQUESTED a specific
                 # provider (e.g. openai/grok) and it fails to connect — bad key,
                 # wrong model id, endpoint down — don't leave the user with a dead
@@ -246,38 +281,58 @@ class Session:
                     "sessionId": self.session_id,
                     "protocolVersion": PROTOCOL_VERSION,
                     "model": self._gateway.model_label,
+                    # Echoed so the client can *verify* it got the mode it
+                    # asked for rather than assume it. A translate screen that
+                    # silently attached to an assistant would look like a
+                    # translator producing very strange translations.
+                    "mode": self._mode,
+                    **(
+                        {"targetLanguage": self._translate["target_language"]}
+                        if self._mode == "translate"
+                        else {}
+                    ),
                 }
             )
             await self._send_state("listening")
 
-            web_search = (self._hello or {}).get("webSearch")
-            email = (self._hello or {}).get("email")
-            emails = (self._hello or {}).get("emails")
-            location = (self._hello or {}).get("location")
-            # Vision tools wait longer for a frame on photo-trigger glasses
-            # than on a streaming phone camera (see Settings for the budgets).
-            device = (self._hello or {}).get("device")
-            device_kind = device.get("kind") if isinstance(device, dict) else None
-            frame_wait_seconds = self._frame_wait_for_kind(device_kind)
-            # Size the gateway's frame-freshness window to the camera too, so a
-            # batching adapter (OpenAI) keeps a slow glasses still instead of
-            # dropping it. No-op for streaming adapters (Gemini).
-            self._gateway.set_camera_kind(device_kind)
-            self._orchestrator = Orchestrator(
-                engine=self._engine,
-                gateway=self._gateway,
-                sessionmaker=get_sessionmaker(),
-                notify_client=self._send_json,
-                session_id=self.session_id,
-                user_id=self._user_id,
-                web_search=web_search if isinstance(web_search, dict) else None,
-                email=email if isinstance(email, dict) else None,
-                emails=[e for e in emails if isinstance(e, dict)]
-                if isinstance(emails, list)
-                else None,
-                location=location if isinstance(location, dict) else None,
-                frame_wait_seconds=frame_wait_seconds,
-            )
+            # No orchestrator in translate mode: no tools, no tool audit rows,
+            # no web-search/email/location config reaching a model that has no
+            # way to use them. Vision is refused separately and explicitly in
+            # `_handle_binary` — a None orchestrator alone would not have
+            # stopped a frame reaching the gateway.
+            if self._mode != "translate":
+                web_search = (self._hello or {}).get("webSearch")
+                email = (self._hello or {}).get("email")
+                emails = (self._hello or {}).get("emails")
+                location = (self._hello or {}).get("location")
+                # Vision tools wait longer for a frame on photo-trigger glasses
+                # than on a streaming phone camera (see Settings for the budgets).
+                device = (self._hello or {}).get("device")
+                device_kind = (
+                    device.get("kind") if isinstance(device, dict) else None
+                )
+                frame_wait_seconds = self._frame_wait_for_kind(device_kind)
+                # Size the gateway's frame-freshness window to the camera too, so a
+                # batching adapter (OpenAI) keeps a slow glasses still instead of
+                # dropping it. No-op for streaming adapters (Gemini).
+                self._gateway.set_camera_kind(device_kind)
+                self._orchestrator = Orchestrator(
+                    engine=self._engine,
+                    gateway=self._gateway,
+                    sessionmaker=get_sessionmaker(),
+                    notify_client=self._send_json,
+                    session_id=self.session_id,
+                    user_id=self._user_id,
+                    web_search=web_search
+                    if isinstance(web_search, dict)
+                    else None,
+                    email=email if isinstance(email, dict) else None,
+                    emails=[e for e in emails if isinstance(e, dict)]
+                    if isinstance(emails, list)
+                    else None,
+                    location=location if isinstance(location, dict) else None,
+                    frame_wait_seconds=frame_wait_seconds,
+                )
 
             read_task = asyncio.create_task(self._read_pump(), name="read_pump")
             event_task = asyncio.create_task(
@@ -364,6 +419,8 @@ class Session:
         self._hello = first
         session_info = first.get("session") or {}
         self.resume_of = session_info.get("resumeId")
+        if not await self._resolve_mode(first):
+            return False
 
         # Opportunistically consume a following ``config`` if present soon.
         with contextlib.suppress(asyncio.TimeoutError, WebSocketDisconnect):
@@ -372,6 +429,60 @@ class Session:
                 # Not a config; stash nothing — it will be re-handled? We cannot
                 # push back, so handle known early types inline.
                 await self._dispatch_control(second)
+        return True
+
+    async def _resolve_mode(self, hello: dict[str, Any]) -> bool:
+        """Read ``hello.mode`` and validate its ``translate`` block.
+
+        Returns ``False`` (after sending a fatal error) only for a *named* mode
+        this build does not have. Anything else falls back to ``"agent"``: an
+        absent or empty ``mode`` is what every client written before this
+        feature sends, and those must keep working untouched.
+
+        The target language is validated against
+        ``settings.translate_allowed_target_langs`` rather than forwarded, because
+        it is client-supplied and lands verbatim in the upstream setup message.
+        """
+        mode = hello.get("mode")
+        if mode in (None, "", "agent"):
+            self._mode = "agent"
+            return True
+        if mode != "translate":
+            # A mode we don't implement is a bug in the client, not something
+            # to silently downgrade — downgrading would translate nothing and
+            # answer questions instead, which is worse than failing loudly.
+            await self._send_error(
+                "unsupported_mode",
+                f"Session mode {mode!r} is not supported.",
+                fatal=True,
+            )
+            return False
+
+        block = hello.get("translate")
+        block = block if isinstance(block, dict) else {}
+        target = str(block.get("targetLanguage") or "en").strip().lower()
+        allowed = [
+            str(c).strip().lower()
+            for c in self._settings.translate_allowed_target_langs
+        ]
+        if target not in allowed:
+            target = "en"
+            logger.warning(
+                "translate.target_not_allowed",
+                session_id=self.session_id,
+                requested=str(block.get("targetLanguage"))[:20],
+            )
+        self._mode = "translate"
+        self._translate = {
+            "target_language": target,
+            "echo_target_language": bool(block.get("echoTargetLanguage", False)),
+        }
+        logger.info(
+            "translate.mode",
+            session_id=self.session_id,
+            target=target,
+            echo=self._translate["echo_target_language"],
+        )
         return True
 
     async def _receive_json_with_timeout(
@@ -431,13 +542,25 @@ class Session:
             metrics.FRAMES_IN.labels(kind="audio").inc()
             metrics.AUDIO_BYTES_IN.inc(len(payload))
             self._last_activity = time.monotonic()  # real user turn (idle reset)
-            if not await self._meter_voice(len(payload)):
-                return  # over today's cap — _meter_voice has ended the session
+            # Translate audio is NOT billed against `voice_seconds`: that is
+            # the assistant's allowance, and a half-hour of translation would
+            # empty it. Its own meter (`translate_minutes_per_day`) arrives
+            # with the real provider — until then translate runs only against
+            # the deterministic mock, which costs nothing.
+            if self._mode != "translate":
+                if not await self._meter_voice(len(payload)):
+                    return  # over today's cap — _meter_voice ended the session
             await self._gateway.send_audio(payload, ts_ms=ts)
         elif tag == FrameTag.INPUT_VIDEO:
             metrics.FRAMES_IN.labels(kind="video").inc()
             self._frames_in_video += 1
             now = time.monotonic()
+            # A translate session has no camera and no tool that could ask for
+            # one. Dropping the frame here — rather than trusting the cost gate
+            # below to happen to say no — is what makes "no vision in translate
+            # mode" true instead of merely likely.
+            if self._mode == "translate":
+                return
             # Always cache the latest frame (+ arrival time): identify_image and
             # the typed-turn attach read from here, and it lets us reject a
             # stale frame from before the camera was lowered/turned off.
@@ -580,7 +703,15 @@ class Session:
         reconnects fresh with a cheap, empty context. Both caps are generous and
         configurable; 0 disables one.
         """
-        max_s = self._settings.max_session_seconds
+        # A translator is not a conversation. `max_session_seconds` (30 min) is
+        # sized for someone talking to an assistant; a talk, a lecture or a
+        # meeting runs longer, and being cut off mid-sentence is the failure
+        # this cap was never meant to cause.
+        max_s = (
+            self._settings.translate_max_session_seconds
+            if self._mode == "translate"
+            else self._settings.max_session_seconds
+        )
         idle_s = self._settings.idle_disconnect_seconds
         if max_s <= 0 and idle_s <= 0:
             return  # no caps → let the read/event pumps own the lifetime
@@ -687,6 +818,11 @@ class Session:
                     "role": event.role,
                     "text": event.text,
                     "final": event.final,
+                    # Only the translate path fills this in — there the source
+                    # language is detected, not configured, so it is the one
+                    # thing the client cannot work out for itself. Omitted
+                    # otherwise, so nothing on the agent path changes shape.
+                    **({"lang": event.lang} if event.lang else {}),
                 }
             )
             if event.final and event.text:

@@ -41,6 +41,19 @@ class PermissionsService {
     return PermissionOutcome.denied;
   }
 
+  /// Request the microphone alone.
+  ///
+  /// Live translation never opens the camera, and asking for it anyway would
+  /// prompt the user for access to something the feature cannot use — the kind
+  /// of request that teaches people to deny permissions.
+  Future<PermissionOutcome> requestMicrophone() async {
+    final mic = await Permission.microphone.request();
+    _log.info('permissions mic=$mic (mic only)');
+    if (mic.isGranted) return PermissionOutcome.granted;
+    if (mic.isPermanentlyDenied) return PermissionOutcome.permanentlyDenied;
+    return PermissionOutcome.denied;
+  }
+
   /// Whether both permissions are already granted (no prompt shown).
   Future<bool> hasMicAndCamera() async {
     final mic = await Permission.microphone.status;

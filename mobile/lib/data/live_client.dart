@@ -31,6 +31,29 @@ enum ConnectionStatus {
 /// a fake transport without a real network.
 typedef ChannelFactory = WebSocketChannel Function(Uri uri);
 
+/// What a `mode: "translate"` session should do.
+///
+/// There is no source language: the model detects it. Only the target is
+/// configured, which is also why the UI never asks "translate from what".
+class TranslateSessionConfig {
+  const TranslateSessionConfig({
+    required this.targetLanguage,
+    this.echoTargetLanguage = false,
+  });
+
+  /// BCP-47 code to translate *into*, e.g. `"hi"`.
+  final String targetLanguage;
+
+  /// When false (the default), the model stays silent on speech that is
+  /// already in [targetLanguage] instead of parroting it back.
+  final bool echoTargetLanguage;
+
+  Map<String, dynamic> toJson() => {
+        'targetLanguage': targetLanguage,
+        'echoTargetLanguage': echoTargetLanguage,
+      };
+}
+
 WebSocketChannel _defaultChannelFactory(Uri uri) =>
     WebSocketChannel.connect(uri);
 
@@ -54,9 +77,19 @@ class WebSocketLiveClient {
     required this.platform,
     required DeviceInfo Function() deviceInfoProvider,
     ChannelFactory channelFactory = _defaultChannelFactory,
+    this.translate,
   })  : _config = config,
         _deviceInfoProvider = deviceInfoProvider,
         _channelFactory = channelFactory;
+
+  /// Translate-mode settings, or null for a normal assistant session.
+  ///
+  /// When set, the handshake declares `mode: "translate"` and sends a *lean*
+  /// hello — no web search, no mailboxes, no languages. Those configure tools
+  /// and a system prompt, and a translate session has neither; sending them
+  /// would ship the user's mailbox credentials to a session that can never use
+  /// them.
+  final TranslateSessionConfig? translate;
 
   static final _log = Logger('LiveClient');
 
@@ -218,6 +251,21 @@ class WebSocketLiveClient {
 
   void _sendHandshake() {
     final device = _deviceInfoProvider();
+    final tx = translate;
+    if (tx != null) {
+      // Deliberately lean: everything omitted here configures tools or the
+      // system prompt, and a translate session has neither.
+      send(HelloMessage(
+        platform: platform,
+        appVersion: _config.appVersion,
+        device: device,
+        resumeId: _resumeId,
+        mode: 'translate',
+        translate: tx.toJson(),
+      ));
+      send(const ConfigMessage());
+      return;
+    }
     final wsKey = _config.webSearchApiKey;
     // Email: send EVERY configured mailbox as `hello.emails`, plus the primary
     // as the legacy single `hello.email` for backward compatibility.
