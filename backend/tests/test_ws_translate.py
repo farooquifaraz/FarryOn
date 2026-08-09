@@ -242,6 +242,27 @@ def test_an_unknown_target_language_falls_back_rather_than_failing() -> None:
             assert ready["targetLanguage"] == "en"
 
 
+def test_a_missing_translate_provider_is_answered_not_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact shape of production today.
+
+    `TRANSLATE_PROVIDER` is unset, so it follows `AI_PROVIDER` — which is
+    `gemini` on the server, resolving to a `gemini_translate` module this build
+    does not ship yet. That must reach the user as a sentence, not as a socket
+    that dies without saying why.
+    """
+    monkeypatch.setattr(get_settings(), "translate_provider", "gemini_translate")
+
+    app = create_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/live") as ws:
+            ready = _translate_handshake(ws)
+            assert ready["type"] == "error"
+            assert ready["code"] == "translate_unavailable"
+            assert ready["fatal"] is True
+
+
 def test_an_unsupported_mode_is_refused_loudly() -> None:
     """Downgrading to the assistant would answer the room instead of
     translating it, which is worse than failing."""

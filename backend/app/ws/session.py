@@ -183,13 +183,32 @@ class Session:
                 # is to hand a provider the tools and system prompt, and a
                 # translate model takes neither. Routing it through anyway
                 # would mean a translate adapter that quietly accepts both.
-                self._gateway = build_translate_gateway(
-                    self._settings,
-                    target_language=self._translate["target_language"],
-                    echo_target_language=self._translate[
-                        "echo_target_language"
-                    ],
-                )
+                #
+                # Construction itself can fail — an unknown TRANSLATE_PROVIDER,
+                # or a provider module this build does not ship yet. That has
+                # to be answered, not dropped: an unexplained dead socket is
+                # the one outcome a user cannot act on.
+                try:
+                    self._gateway = build_translate_gateway(
+                        self._settings,
+                        target_language=self._translate["target_language"],
+                        echo_target_language=self._translate[
+                            "echo_target_language"
+                        ],
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "translate.gateway_unavailable",
+                        session_id=self.session_id,
+                        error=repr(exc),
+                    )
+                    await self._send_error(
+                        "translate_unavailable",
+                        "Live translation is not available on this server.",
+                        fatal=True,
+                    )
+                    reason = "translate_unavailable"
+                    return
             else:
                 self._gateway = self._gateway_factory(
                     self._resolve_provider(), prompt
