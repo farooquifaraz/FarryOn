@@ -512,3 +512,82 @@ means showing it AFTER a sync, not seconds after the press.
 Reminder of the two tiers, since this is where they matter: the AI is fed the
 **BLE thumbnail** (512×384, ~20 KB, ~4 s) — the full-res 6560×4928 image only
 ever arrives over WiFi and goes to the gallery.
+
+---
+
+# Gemini Live Translate — what the model actually does
+
+Measured against the real `gemini-3.5-live-translate-preview` on 2026-08-10,
+with a 6-second English sentence spoken through Windows SAPI at 16 kHz and a
+target of Hindi. Everything below contradicted an assumption in the adapter as
+first written, and none of it is in the documentation.
+
+**It works, and it is fast.** Connected on `v1alpha`, first translated audio in
+**247 ms** after the speech stopped. `'Good morning everyone. The meeting will
+start at four in the afternoon.'` → `'सुप्रभात, दोस्तों। बैठक 4 बजे शुरू होगी।'`
+
+### 1. There is no `turn_complete`. Ever.
+
+57 messages, not one turn boundary — not `turn_complete`, not `interrupted`.
+The conversational model ends every turn with one; this model is a continuous
+stream and never does.
+
+Consequence if you assume otherwise (we did): **nothing is ever finalised.**
+Every transcript stays `final=False`, so the UI renders the whole session as
+provisional grey text, the accumulation buffers grow for the length of the
+session, and an hour of speech arrives as a single paragraph.
+
+We infer the boundary from a **1.2 s gap** in transcript deltas, plus a
+hard break at 400 characters for a speaker who never pauses.
+
+### 2. Transcript text is DELTAS, not replacements
+
+```
+IN.language_code='en' IN.text='Good morning, everyone.'
+IN.language_code='en' IN.text=' The meeting'
+IN.language_code='en' IN.text=' will start at'
+IN.language_code='en' IN.text=' 4:00 in the'
+```
+
+Leading spaces included — concatenate them verbatim. Same for the output side.
+
+### 3. Both sides report `language_code`
+
+`input_transcription.language_code` is the **detected** source (`en`) and
+`output_transcription.language_code` is the target (`hi`). The source one is
+the whole reason the UI can label what it heard; there is no other way to know.
+
+### 4. The output stream is padded with pure digital silence, forever
+
+| | |
+|---|---|
+| real translated speech | 3.5 s (14 chunks) |
+| silence after it | 15.2 s and still going when we stopped |
+| sample values in the padding | **exactly 0** |
+
+It does not stop — it continues for as long as the session is open. Forwarded
+verbatim that is ~**170 MB/hour of zeros** down to the phone.
+
+We pass ~1 s of it through (a pause between sentences is part of how the speech
+sounds) and drop the rest, closing the audio segment when the padding starts.
+Only *exactly* zero samples are treated as padding: a faint passage is real
+audio, and a translator that dropped it would be dropping speech.
+
+Effect on the same probe: **888 KB → 276 KB** of audio for one sentence.
+
+### 5. Confirmed: it does truncate the last words
+
+The forum reports are real. The model transcribed `'…will start at 4:00 in
+the'` and never produced "afternoon" — while still translating the *meaning*
+correctly (`'4 बजे शुरू होगी'`). So the transcript can be short of what was
+said even when the translation is right. Not our bug, and not fixable our side;
+worth knowing before someone reports it as one.
+
+### Reproducing
+
+`scratchpad/probe_translate.py` (end-to-end verdict),
+`probe_raw.py` (dump every server message),
+`probe_audio.py` (RMS per chunk, speech vs padding).
+All three need only `GEMINI_API_KEY`.
+The rules they established are pinned in
+`backend/tests/test_gemini_translate_adapter.py`, which needs no key.

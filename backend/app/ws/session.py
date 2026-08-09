@@ -150,6 +150,17 @@ class Session:
         self._voice_used_s: float = 0.0
         self._voice_pending_s: float = 0.0
         self._voice_capped: bool = False
+        # Translation metering — the same three counters, kept apart from the
+        # voice ones so neither can spend the other's budget. `_translate_warned`
+        # makes the 80% heads-up fire once rather than on every frame.
+        self._translate_used_s: float = 0.0
+        self._translate_pending_s: float = 0.0
+        self._translate_capped: bool = False
+        self._translate_warned: bool = False
+        # Set only once the ACTIVE gauge has actually been incremented, so a
+        # session that dies during the handshake cannot decrement a gauge it
+        # never raised and drive it negative.
+        self._translate_gauge_held: bool = False
 
     # -- Public entrypoint ----------------------------------------------------
 
@@ -293,7 +304,15 @@ class Session:
             # first would read (and later bill) a key made from the session id,
             # so every session would start from zero and the daily cap would
             # never be reached.
-            await self._load_voice_usage()
+            if self._mode == "translate":
+                await self._load_translate_usage()
+                metrics.TRANSLATE_SESSIONS.labels(
+                    target=self._translate["target_language"]
+                ).inc()
+                metrics.TRANSLATE_ACTIVE.inc()
+                self._translate_gauge_held = True
+            else:
+                await self._load_voice_usage()
             await self._send_json(
                 {
                     "type": "ready",
@@ -561,14 +580,15 @@ class Session:
             metrics.FRAMES_IN.labels(kind="audio").inc()
             metrics.AUDIO_BYTES_IN.inc(len(payload))
             self._last_activity = time.monotonic()  # real user turn (idle reset)
-            # Translate audio is NOT billed against `voice_seconds`: that is
-            # the assistant's allowance, and a half-hour of translation would
-            # empty it. Its own meter (`translate_minutes_per_day`) arrives
-            # with the real provider — until then translate runs only against
-            # the deterministic mock, which costs nothing.
-            if self._mode != "translate":
-                if not await self._meter_voice(len(payload)):
-                    return  # over today's cap — _meter_voice ended the session
+            # Translate audio is billed to its OWN meter, never to
+            # `voice_seconds`: that is the assistant's allowance, and half an
+            # hour of translating a meeting would empty it — leaving someone
+            # unable to talk to Farry because they listened to a talk.
+            if self._mode == "translate":
+                if not await self._meter_translate(len(payload)):
+                    return  # over today's cap — the session has been ended
+            elif not await self._meter_voice(len(payload)):
+                return  # over today's cap — _meter_voice ended the session
             await self._gateway.send_audio(payload, ts_ms=ts)
         elif tag == FrameTag.INPUT_VIDEO:
             metrics.FRAMES_IN.labels(kind="video").inc()
@@ -1007,6 +1027,115 @@ class Session:
         self._voice_used_s += whole
         self._voice_pending_s -= whole
 
+    async def _meter_translate(self, payload_bytes: int) -> bool:
+        """Count this audio chunk against today's translation budget.
+
+        The twin of :meth:`_meter_voice`, and it follows the same rules —
+        including the important one: **a DB failure lets the audio through**.
+        Metering protects the operator's bill, and cutting someone off
+        mid-sentence over a database hiccup costs more than the seconds it saves.
+
+        Two deliberate differences:
+
+        * The cap is always **daily**, on every plan. Voice has a trial/monthly
+          split because the free plan's 60 minutes are a lifetime allowance;
+          giving translation a second lifetime meter would mean two ways to run
+          out and two places to get it wrong.
+        * The warning at 80% is sent once. Translation is used in situations —
+          a meeting, a talk, a conversation with a stranger — where being cut
+          off without notice is worse than the interruption of being told.
+        """
+        seconds = payload_bytes / _MIC_BYTES_PER_SECOND
+        self._translate_pending_s += seconds
+        metrics.TRANSLATE_AUDIO_SECONDS.inc(seconds)
+
+        cap = plan_cap("translate_seconds", self._plan_name)
+        if not (get_settings().quota_enforcement_enabled and cap >= 0):
+            if self._translate_pending_s >= _VOICE_FLUSH_EVERY_S:
+                await self._flush_translate_usage()
+            return True
+
+        total = self._translate_used_s + self._translate_pending_s
+        if total > cap and not self._translate_capped:
+            self._translate_capped = True
+            await self._flush_translate_usage()
+            logger.info(
+                "quota.translate_exceeded",
+                session_id=self.session_id,
+                user_key=self._usage_key(),
+                used_s=round(total, 1),
+                cap_s=cap,
+            )
+            plan = self._plan_name or get_settings().default_plan
+            upsell = "" if plan == "pro" else " Upgrade for more."
+            budget = f"{cap // 60} minutes" if cap >= 60 else f"{cap} seconds"
+            await self._send_error(
+                "quota_exceeded",
+                f"You've used today's {budget} of live translation on the "
+                f"{plan} plan.{upsell}",
+                fatal=True,
+            )
+            return False
+        if self._translate_capped:
+            return False
+
+        # One heads-up before the wall, not a countdown.
+        if not self._translate_warned and total >= cap * 0.8:
+            self._translate_warned = True
+            left = max(0, int((cap - total) // 60))
+            await self._send_error(
+                "quota_warning",
+                f"About {left} minute{'' if left == 1 else 's'} of translation "
+                "left today.",
+                fatal=False,
+            )
+
+        if self._translate_pending_s >= _VOICE_FLUSH_EVERY_S:
+            await self._flush_translate_usage()
+        return True
+
+    async def _flush_translate_usage(self) -> None:
+        """Write translation seconds counted since the last flush."""
+        if self._translate_pending_s < 1:
+            return
+        whole = int(self._translate_pending_s)
+        try:
+            async with get_sessionmaker()() as db:
+                await repo.bump_daily_usage(
+                    db,
+                    user_key=self._usage_key(),
+                    day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                    translate_seconds=whole,
+                )
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001 - never break the call over this
+            logger.warning("quota.translate_flush_failed", error=str(exc))
+            return
+        self._translate_used_s += whole
+        self._translate_pending_s -= whole
+
+    async def _load_translate_usage(self) -> None:
+        """Read today's translation total once, at session start."""
+        if not get_settings().quota_enforcement_enabled:
+            return
+        try:
+            async with get_sessionmaker()() as db:
+                row = await repo.get_daily_usage(
+                    db,
+                    user_key=self._usage_key(),
+                    day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                )
+                self._translate_used_s = float(
+                    getattr(row, "translate_seconds", 0) if row else 0
+                )
+                from app.modules.billing import service as billing
+
+                self._plan_name = await billing.active_plan_name(
+                    db, self._user_id
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("quota.translate_load_failed", error=str(exc))
+
     async def _load_voice_usage(self) -> None:
         """Read today's voice total once, at session start.
 
@@ -1132,8 +1261,14 @@ class Session:
         )
         # Bill the speech since the last flush. Without this every session under
         # _VOICE_FLUSH_EVERY_S would be free, and a user could talk all day in
-        # 14-second bursts — the cap would count nothing.
+        # 14-second bursts — the cap would count nothing. The translate meter
+        # has exactly the same hole and closes it the same way.
         await self._flush_voice_usage()
+        if self._mode == "translate":
+            await self._flush_translate_usage()
+            if self._translate_gauge_held:
+                self._translate_gauge_held = False
+                metrics.TRANSLATE_ACTIVE.dec()
         # Cost summary: how many camera frames the gate saved this session.
         if self._frames_in_video:
             saved_pct = round(

@@ -83,6 +83,7 @@ class TranslateState {
     this.startedAt,
     this.captionsOnly = false,
     this.error,
+    this.notice,
   });
 
   final TranslateStatus status;
@@ -101,6 +102,11 @@ class TranslateState {
 
   /// A message to show the user. Not fatal on its own.
   final String? error;
+
+  /// A non-alarming message: a quota heads-up, a device that dropped and was
+  /// worked around. Rendered differently from [error] on purpose — colouring a
+  /// "10 minutes left" warning like a failure teaches people to ignore both.
+  final String? notice;
 
   bool get isRunning =>
       status == TranslateStatus.listening ||
@@ -128,6 +134,8 @@ class TranslateState {
     bool? captionsOnly,
     String? error,
     bool clearError = false,
+    String? notice,
+    bool clearNotice = false,
   }) =>
       TranslateState(
         status: status ?? this.status,
@@ -136,6 +144,7 @@ class TranslateState {
         startedAt: clearStartedAt ? null : (startedAt ?? this.startedAt),
         captionsOnly: captionsOnly ?? this.captionsOnly,
         error: clearError ? null : (error ?? this.error),
+        notice: clearNotice ? null : (notice ?? this.notice),
       );
 }
 

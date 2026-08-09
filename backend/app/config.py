@@ -317,11 +317,11 @@ class Settings(BaseSettings):
     # abuse, not unit economics.
     plan_catalog: dict[str, dict[str, float | int | str]] = Field(
         default_factory=lambda: {
-            #        price  period     voice_min  scans  searches
-            "free": {"price_usd": 0.0,  "period": "trial", "voice_minutes": 60,  "image_scans": 3,  "web_searches": 10},   # noqa: E501
-            "lite": {"price_usd": 5.0,  "period": "month", "voice_minutes": 150, "image_scans": 20, "web_searches": 50},   # noqa: E501
-            "plus": {"price_usd": 10.0, "period": "month", "voice_minutes": 360, "image_scans": 50, "web_searches": 100},  # noqa: E501
-            "pro":  {"price_usd": 20.0, "period": "month", "voice_minutes": 900, "image_scans": -1, "web_searches": 200},  # noqa: E501
+            #        price  period     voice_min  scans  searches  translate/day
+            "free": {"price_usd": 0.0,  "period": "trial", "voice_minutes": 60,  "image_scans": 3,  "web_searches": 10,  "translate_minutes_per_day": 5},    # noqa: E501
+            "lite": {"price_usd": 5.0,  "period": "month", "voice_minutes": 150, "image_scans": 20, "web_searches": 50,  "translate_minutes_per_day": 15},   # noqa: E501
+            "plus": {"price_usd": 10.0, "period": "month", "voice_minutes": 360, "image_scans": 50, "web_searches": 100, "translate_minutes_per_day": 45},   # noqa: E501
+            "pro":  {"price_usd": 20.0, "period": "month", "voice_minutes": 900, "image_scans": -1, "web_searches": 200, "translate_minutes_per_day": 120},  # noqa: E501
         }
     )
     # Days used to spread a monthly voice budget into a daily cap. 30 is the
@@ -466,6 +466,15 @@ class Settings(BaseSettings):
                 "voice_seconds": voice_seconds,
                 "image_scans": int(p.get("image_scans", 0)),
                 "web_searches": int(p.get("web_searches", 0)),
+                # Stated per DAY in the catalog rather than derived from a
+                # monthly budget like voice. Voice needs the trial/monthly
+                # split because the free plan's 60 minutes are a one-time
+                # allowance; giving translation a second lifetime meter would
+                # mean two ways to run out, two places to get it wrong, and a
+                # user who cannot tell which one stopped them.
+                "translate_seconds": int(
+                    p.get("translate_minutes_per_day", 0)
+                ) * 60,
             }
         return out
 

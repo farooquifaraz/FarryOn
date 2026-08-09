@@ -155,6 +155,7 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
             if (!s.isRunning && s.turns.isEmpty) const _FarryPausedNotice(),
             if (s.status == TranslateStatus.reconnecting) const _ReconnectBar(),
             if (s.error != null) _ErrorBar(s.error!),
+            if (s.notice != null) _NoticeBar(s.notice!),
             Expanded(
               child: s.turns.isEmpty
                   ? _EmptyState(running: s.isRunning)
@@ -222,6 +223,29 @@ class _ReconnectBar extends StatelessWidget {
           'Reconnecting… what you already have is kept.',
           style: TextStyle(color: Aurora.amber, fontSize: 12),
         ),
+      );
+}
+
+/// A heads-up, not a failure.
+///
+/// Deliberately a different colour from [_ErrorBar]: "10 minutes of
+/// translation left" and "translation is unavailable" are not the same news,
+/// and painting them alike teaches people to skip both.
+class _NoticeBar extends StatelessWidget {
+  const _NoticeBar(this.message);
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: Aurora.tint(Aurora.amber, 0.12),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(message,
+            style: const TextStyle(color: Aurora.amber, fontSize: 12)),
       );
 }
 

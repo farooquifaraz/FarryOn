@@ -5,12 +5,14 @@ import '../../capture/capture_source.dart';
 import '../../capture/device_registry.dart';
 import '../../core/config.dart';
 import '../../core/logger.dart';
+import '../../core/notifications.dart';
 import '../../data/live_client.dart';
 import '../../playback/pcm_player.dart';
 import '../../protocol/frames.dart';
 import '../../protocol/messages.dart';
 import '../../protocol/protocol.dart';
 import '../../state/permissions.dart';
+import '../glasses_lab/bridge/glasses_channel.dart';
 import 'translate_state.dart';
 
 /// Drives one live-translation session.
@@ -41,12 +43,14 @@ class TranslateController {
     required DeviceRegistry registry,
     required PcmPlayer player,
     required PermissionsService permissions,
+    GlassesBridgeApi? glasses,
     WebSocketLiveClient Function(AppConfig, TranslateSessionConfig, DeviceInfo Function())?
         clientFactory,
   })  : _config = config,
         _registry = registry,
         _player = player,
         _permissions = permissions,
+        _glasses = glasses,
         _clientFactory = clientFactory ?? _defaultClientFactory;
 
   static final _log = Logger('TranslateController');
@@ -55,6 +59,16 @@ class TranslateController {
   /// hour; an unbounded list would make every append O(n) and eventually
   /// exhaust memory. The transcript on screen is a live view, not the record.
   static const int maxTurns = 200;
+
+  /// How long the microphone may deliver nothing at all before we conclude it
+  /// is gone rather than merely pointed at a quiet room.
+  ///
+  /// Generous on purpose: the capture source emits continuously — silence
+  /// arrives as silent chunks — so a real gap this long means the stream has
+  /// stopped, not that nobody is speaking. Too short and a pause in a meeting
+  /// would end the session; too long and a phone call leaves the screen
+  /// pretending to listen.
+  static const Duration _micSilenceLimit = Duration(seconds: 20);
 
   static WebSocketLiveClient _defaultClientFactory(
     AppConfig cfg,
@@ -72,6 +86,7 @@ class TranslateController {
   final DeviceRegistry _registry;
   final PcmPlayer _player;
   final PermissionsService _permissions;
+  final GlassesBridgeApi? _glasses;
   final WebSocketLiveClient Function(
       AppConfig, TranslateSessionConfig, DeviceInfo Function()) _clientFactory;
 
@@ -86,7 +101,10 @@ class TranslateController {
   StreamSubscription<DecodedFrame>? _frameSub;
   StreamSubscription<ConnectionStatus>? _statusSub;
   StreamSubscription<Uint8List>? _audioSub;
+  StreamSubscription<GlassesLabEvent>? _glassesSub;
   CaptureSource? _audioSource;
+  Timer? _micWatchdog;
+  DateTime? _lastChunkAt;
   bool _disposed = false;
 
   void _emit(TranslateState next) {
@@ -142,7 +160,9 @@ class TranslateController {
       clearError: true,
     ));
     await _player.initialize();
+    _watchGlasses();
     await _openSocket();
+    unawaited(_showNotification());
     return true;
   }
 
@@ -153,6 +173,7 @@ class TranslateController {
     await _teardownSocket();
     await _player.flush();
     await _player.stop();
+    unawaited(Notifications.clearActivity());
     _emit(_state.copyWith(status: TranslateStatus.stopped));
   }
 
@@ -220,19 +241,72 @@ class TranslateController {
     if (_audioSub != null) return;
     final source = _registry.audioSource;
     _audioSource = source;
-    await source.initialize();
+    try {
+      await source.initialize();
+    } catch (e) {
+      _log.warn('audio source failed to initialize: $e');
+      _emit(_state.copyWith(
+        error: 'The microphone could not be opened. Try again.',
+      ));
+      await stop();
+      return;
+    }
     // No mic gate and no echo guard, on purpose — see the class doc. Every
     // chunk goes up: a gate tuned to hold back non-speech would clip the
     // beginning of a sentence from across a room, and the whole point here is
     // to hear the room rather than the person holding the phone.
-    _audioSub = source.audio16k.listen((chunk) {
-      _client?.sendAudio(chunk);
-    });
+    _audioSub = source.audio16k.listen(
+      (chunk) {
+        _lastChunkAt = DateTime.now();
+        _client?.sendAudio(chunk);
+      },
+      // A capture source that ends or errors mid-session is the shape a phone
+      // call takes: Android hands the microphone to the dialer and this stream
+      // simply stops. Saying so beats a screen that looks like it is listening
+      // to a room it can no longer hear.
+      onError: (Object e) => _micWentDead('error: $e'),
+      onDone: () => _micWentDead('stream ended'),
+      cancelOnError: false,
+    );
     await source.startAudio();
     _client?.send(const AudioStartMessage());
+    _startMicWatchdog();
+  }
+
+  /// The microphone stopped producing audio while we still expect it to.
+  void _micWentDead(String why) {
+    if (!_state.isRunning) return;
+    _log.warn('microphone stopped: $why');
+    _emit(_state.copyWith(
+      error: 'The microphone stopped — another app may be using it. '
+          'Tap to start again.',
+    ));
+    unawaited(stop());
+  }
+
+  /// Notice a microphone that goes quiet without ever raising an error.
+  ///
+  /// `onDone`/`onError` cover a stream that ends loudly. A phone call, or the
+  /// OS quietly revoking the mic, can instead leave the subscription alive and
+  /// simply stop delivering — which looks identical to a silent room until you
+  /// notice that a silent room still delivers silence.
+  void _startMicWatchdog() {
+    _micWatchdog?.cancel();
+    _lastChunkAt = DateTime.now();
+    _micWatchdog = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!_state.isRunning || _audioSub == null) return;
+      final last = _lastChunkAt;
+      if (last == null) return;
+      if (DateTime.now().difference(last) > _micSilenceLimit) {
+        _micWentDead('no audio for ${_micSilenceLimit.inSeconds}s');
+      }
+    });
   }
 
   Future<void> _stopAudio() async {
+    _micWatchdog?.cancel();
+    _micWatchdog = null;
+    _lastChunkAt = null;
     await _audioSub?.cancel();
     _audioSub = null;
     final source = _audioSource;
@@ -240,6 +314,33 @@ class TranslateController {
     if (source != null) {
       await source.stopAudio();
     }
+  }
+
+  /// Watch for the glasses dropping while they are the microphone.
+  ///
+  /// Losing them mid-session would otherwise leave a screen that says
+  /// "Listening…" attached to a microphone that no longer exists. Falling back
+  /// to the phone keeps the session alive — the user is usually still in the
+  /// conversation they were having — and the notice explains why the sound
+  /// changed.
+  void _watchGlasses() {
+    _glassesSub ??= _glasses?.events().listen((event) {
+      if (event.type != 'connectionState') return;
+      if (event.data['state'] == 'connected') return;
+      if (!_state.isRunning) return;
+      if (_registry.audioKind != CaptureDeviceKind.glasses) return;
+      unawaited(_fallBackToPhoneMic());
+    });
+  }
+
+  Future<void> _fallBackToPhoneMic() async {
+    _log.warn('glasses dropped mid-translation → phone mic');
+    await _stopAudio();
+    _registry.setAudioKind(CaptureDeviceKind.phone);
+    _emit(_state.copyWith(
+      notice: 'The glasses disconnected. Listening on the phone instead.',
+    ));
+    if (_state.isRunning) await _startAudio();
   }
 
   // -- Server events --------------------------------------------------------
@@ -259,8 +360,16 @@ class TranslateController {
         return;
       case TranscriptMessage(:final role, :final text, :final isFinal, :final lang):
         _applyTranscript(role: role, text: text, isFinal: isFinal, lang: lang);
-      case ErrorMessage(:final message):
-        _emit(_state.copyWith(error: message));
+      case ErrorMessage(:final code, :final message, :final fatal):
+        // A quota heads-up is not a failure. Painting "10 minutes left" in the
+        // same red as "translation is unavailable" teaches people to ignore
+        // both, and the one that matters is the one they then miss.
+        if (!fatal && code == 'quota_warning') {
+          _emit(_state.copyWith(notice: message));
+        } else {
+          _emit(_state.copyWith(error: message));
+          if (fatal) unawaited(stop());
+        }
       case _:
         break;
     }
@@ -318,8 +427,28 @@ class TranslateController {
 
   Future<void> dispose() async {
     _disposed = true;
+    await _glassesSub?.cancel();
+    _glassesSub = null;
     await _stopAudio();
     await _teardownSocket();
+    unawaited(Notifications.clearActivity());
     await _stateController.close();
+  }
+
+  /// A standing notification while translating.
+  ///
+  /// Translation is something you start and then put the phone down for, so it
+  /// has to be visible from outside the app — both so the user can get back to
+  /// it, and so a session quietly holding the microphone is never invisible.
+  Future<void> _showNotification() async {
+    try {
+      await Notifications.showActivity(
+        'Live translation',
+        'Listening — translating into '
+            '\${translateLanguageName(_state.targetLanguage)}',
+      );
+    } catch (e) {
+      _log.warn('translate notification failed: \$e');
+    }
   }
 }

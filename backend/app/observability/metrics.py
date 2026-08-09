@@ -89,3 +89,36 @@ GEMINI_API_CALLS = Counter(
     "(identify | answer | explain) and outcome (ok | error).",
     ["purpose", "outcome"],
 )
+
+# -- Live translation ---------------------------------------------------------
+# Kept separate from the assistant's counters on purpose: a translate session
+# has a different cost shape (no vision, no tools, continuous audio both ways),
+# and folding it into the same series would make both harder to read.
+#
+# Nothing here ever carries transcript CONTENT — language codes and durations
+# only. A translator is pointed at other people's conversations, and the person
+# being translated never agreed to anything.
+TRANSLATE_SESSIONS = Counter(
+    "farryon_translate_sessions_total",
+    "Translate sessions started, labelled by target language.",
+    ["target"],
+)
+TRANSLATE_ACTIVE = Gauge(
+    "farryon_translate_active_sessions",
+    "Currently active translate sessions.",
+)
+TRANSLATE_AUDIO_SECONDS = Counter(
+    "farryon_translate_audio_seconds_total",
+    "Input audio seconds metered on translate sessions. This is the billable "
+    "quantity; compare against the quota caps.",
+)
+TRANSLATE_FIRST_AUDIO = Histogram(
+    "farryon_translate_first_audio_seconds",
+    "Seconds from the end of a heard utterance to the first byte of its "
+    "translated audio — the delay a listener actually feels.",
+)
+TRANSLATE_ERRORS = Counter(
+    "farryon_translate_errors_total",
+    "Translate failures, labelled by stage (connect | stream).",
+    ["stage"],
+)

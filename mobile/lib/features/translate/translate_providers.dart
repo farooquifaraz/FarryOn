@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../playback/pcm_player.dart';
 import '../../state/providers.dart';
+import '../glasses_lab/bridge/glasses_channel.dart';
 import 'translate_controller.dart';
 import 'translate_state.dart';
 
@@ -27,6 +28,9 @@ final translateControllerProvider = Provider<TranslateController>((ref) {
     registry: ref.watch(deviceRegistryProvider),
     player: ref.watch(translatePlayerProvider),
     permissions: ref.watch(permissionsProvider),
+    // Only so the session can notice the glasses dropping while they ARE the
+    // microphone, and fall back to the phone. It never drives them.
+    glasses: GlassesChannel.shared,
   );
   ref.onDispose(controller.dispose);
   return controller;

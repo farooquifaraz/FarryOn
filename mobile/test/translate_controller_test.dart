@@ -10,6 +10,7 @@ import 'package:farryon/features/translate/translate_state.dart';
 import 'package:farryon/protocol/frames.dart';
 import 'package:farryon/protocol/messages.dart';
 import 'package:farryon/protocol/protocol.dart';
+import 'package:farryon/features/glasses_lab/bridge/glasses_channel.dart';
 import 'package:farryon/state/permissions.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -27,6 +28,22 @@ class _GrantingPermissions implements PermissionsService {
   @override
   Future<PermissionOutcome> requestMicrophone() async =>
       PermissionOutcome.granted;
+}
+
+/// Only the event stream is used — the translate session never drives the
+/// glasses, it just needs to hear them drop.
+class _FakeGlasses implements GlassesBridgeApi {
+  final controller = StreamController<GlassesLabEvent>.broadcast();
+
+  void emit(String type, Map<String, Object?> data) =>
+      controller.add(GlassesLabEvent(type: type, data: data));
+
+  @override
+  Stream<GlassesLabEvent> events() => controller.stream;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('the translate session must not drive the glasses');
 }
 
 class _DenyingPermissions extends _GrantingPermissions {
@@ -306,6 +323,106 @@ void main() {
       await pump();
       expect(controller.state.error, isNotNull);
       expect(controller.state.status, isNot(TranslateStatus.listening));
+    });
+  });
+
+  group('the microphone going away mid-session', () {
+    test('a stream that ends is reported, not ignored', () async {
+      // This is the shape a phone call takes: Android hands the mic to the
+      // dialer and the capture stream simply stops. A screen that keeps saying
+      // "Listening" to a mic it no longer has is the worst outcome.
+      await connect();
+      expect(controller.state.status, TranslateStatus.listening);
+
+      await source.audioCtl.close();
+      await pump(5);
+
+      expect(controller.state.error, contains('microphone stopped'));
+      expect(controller.state.isRunning, isFalse);
+    });
+
+    test('a stream that errors is reported too', () async {
+      await connect();
+      source.audioCtl.addError(StateError('mic seized'));
+      await pump(5);
+      expect(controller.state.error, isNotNull);
+      expect(controller.state.isRunning, isFalse);
+    });
+  });
+
+  group('quota messages', () {
+    test('a warning is a notice, not an error', () async {
+      // "10 minutes left" painted in failure-red teaches people to skip both
+      // that and the message that actually ends the session.
+      await connect();
+      fake.pushJson({
+        'type': 'error',
+        'code': 'quota_warning',
+        'message': 'About 5 minutes of translation left today.',
+        'fatal': false,
+      });
+      await pump();
+      expect(controller.state.notice, contains('5 minutes'));
+      expect(controller.state.error, isNull);
+      expect(controller.state.isRunning, isTrue,
+          reason: 'a warning must not end the session');
+    });
+
+    test('running out ends the session with the reason on screen', () async {
+      await connect();
+      fake.pushJson({
+        'type': 'error',
+        'code': 'quota_exceeded',
+        'message': "You've used today's 5 minutes of live translation.",
+        'fatal': true,
+      });
+      await pump(4);
+      expect(controller.state.error, contains('5 minutes'));
+      expect(controller.state.isRunning, isFalse);
+      expect(source.audioStarted, isFalse, reason: 'the mic must be released');
+    });
+  });
+
+  group('the glasses dropping while they are the microphone', () {
+    late _FakeGlasses glasses;
+
+    setUp(() {
+      glasses = _FakeGlasses();
+      registry.setAudioKind(CaptureDeviceKind.glasses);
+      controller = TranslateController(
+        config: const AppConfig(host: 'h', port: 8000, secure: false),
+        registry: registry,
+        player: player,
+        permissions: _GrantingPermissions(),
+        glasses: glasses,
+        clientFactory: factory,
+      );
+    });
+
+    tearDown(() async {
+      await glasses.controller.close();
+    });
+
+    test('falls back to the phone instead of going deaf', () async {
+      await connect();
+      expect(registry.audioKind, CaptureDeviceKind.glasses);
+
+      glasses.emit('connectionState', {'state': 'disconnected'});
+      await pump(5);
+
+      expect(registry.audioKind, CaptureDeviceKind.phone);
+      expect(controller.state.notice, contains('phone'));
+      expect(controller.state.isRunning, isTrue,
+          reason: 'the conversation is still happening — keep translating');
+    });
+
+    test('a glasses drop while the phone is the mic changes nothing', () async {
+      registry.setAudioKind(CaptureDeviceKind.phone);
+      await connect();
+      glasses.emit('connectionState', {'state': 'disconnected'});
+      await pump(3);
+      expect(controller.state.notice, isNull);
+      expect(controller.state.isRunning, isTrue);
     });
   });
 }
