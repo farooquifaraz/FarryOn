@@ -5,12 +5,12 @@ import 'dart:typed_data';
 import 'package:farryon/capture/device_registry.dart';
 import 'package:farryon/core/config.dart';
 import 'package:farryon/data/live_client.dart';
+import 'package:farryon/features/glasses_lab/bridge/glasses_channel.dart';
 import 'package:farryon/features/translate/translate_controller.dart';
 import 'package:farryon/features/translate/translate_state.dart';
 import 'package:farryon/protocol/frames.dart';
 import 'package:farryon/protocol/messages.dart';
 import 'package:farryon/protocol/protocol.dart';
-import 'package:farryon/features/glasses_lab/bridge/glasses_channel.dart';
 import 'package:farryon/state/permissions.dart';
 import 'package:flutter_test/flutter_test.dart';
 

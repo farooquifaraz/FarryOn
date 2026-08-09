@@ -157,7 +157,11 @@ class TranslateController {
       status: TranslateStatus.starting,
       startedAt: DateTime.now(),
       turns: const [],
+      // Both cleared: a "the glasses disconnected" notice or a quota warning
+      // from the last session has nothing to say about this one, and stale
+      // banners are how a screen starts lying.
       clearError: true,
+      clearNotice: true,
     ));
     await _player.initialize();
     _watchGlasses();

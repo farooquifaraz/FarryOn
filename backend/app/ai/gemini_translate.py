@@ -456,6 +456,13 @@ class GeminiTranslateGateway(AIGateway):
         """Tear down the upstream session (idempotent)."""
         if self._closed:
             return
+        # Close the utterance in flight BEFORE tearing anything down. Without
+        # this the last thing anyone said is dropped: it was only ever sent as
+        # a provisional line, so the screen would keep it greyed out forever
+        # and the sentence that ended the conversation would be the one that
+        # never settled.
+        with contextlib.suppress(Exception):
+            await self._finalize(turn_complete=True)
         self._closed = True
         if self._watchdog_task is not None:
             self._watchdog_task.cancel()
