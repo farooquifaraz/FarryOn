@@ -32,9 +32,21 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
   Timer? _clock;
   bool _wasLiveConnected = false;
 
+  // Captured EAGERLY in initState, never with a lazy `late` initializer.
+  //
+  // `dispose()` is where the assistant gets handed back, and by then `ref` is
+  // dead — a `late final x = ref.read(...)` field resolves on FIRST ACCESS,
+  // which for these two is inside dispose. That threw, `_restore()` died before
+  // reconnecting, and the user was left staring at "Session ended" under a
+  // banner promising Farry would come back on her own.
+  late final TranslateController _controller;
+  late final LiveNotifier _liveNotifier;
+
   @override
   void initState() {
     super.initState();
+    _controller = ref.read(translateControllerProvider);
+    _liveNotifier = ref.read(liveProvider.notifier);
     // The elapsed label is derived from startedAt; this only forces a repaint.
     _clock = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && ref.read(translateProvider).isRunning) setState(() {});
@@ -56,21 +68,29 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
   @override
   void dispose() {
     _clock?.cancel();
-    // Hand the microphone back. Read the controller off the container rather
-    // than `ref` — this runs during teardown, when `ref.read` is no longer
-    // safe, and leaving the assistant disconnected would look like a crash.
     unawaited(_restore());
     super.dispose();
   }
 
+  /// Hand the microphone back and bring Farry with it.
+  ///
+  /// Nothing here may throw: this runs detached during teardown, so an
+  /// exception has no one to catch it and simply leaves the assistant off.
   Future<void> _restore() async {
-    await _controller.stop();
-    if (_wasLiveConnected) await _liveNotifier.connect();
+    try {
+      await _controller.stop();
+    } catch (_) {
+      // Even a failed stop must not block the reconnect below — an assistant
+      // that never comes back is the worse of the two failures.
+    }
+    if (_wasLiveConnected) {
+      try {
+        await _liveNotifier.connect();
+      } catch (_) {
+        // The live screen's own reconnect overlay covers this.
+      }
+    }
   }
-
-  late final TranslateController _controller =
-      ref.read(translateControllerProvider);
-  late final LiveNotifier _liveNotifier = ref.read(liveProvider.notifier);
 
   Future<void> _toggle() async {
     final state = ref.read(translateProvider);
