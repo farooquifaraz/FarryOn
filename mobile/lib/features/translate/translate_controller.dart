@@ -8,6 +8,7 @@ import '../../core/logger.dart';
 import '../../core/notifications.dart';
 import '../../data/live_client.dart';
 import '../../playback/pcm_player.dart';
+import '../../playback/voice_audio_mode.dart';
 import '../../protocol/frames.dart';
 import '../../protocol/messages.dart';
 import '../../protocol/protocol.dart';
@@ -27,13 +28,28 @@ import 'translate_state.dart';
 /// owns a separate socket and a separate player, and the live session is
 /// disconnected while it runs. Nothing in `live_controller.dart` changes.
 ///
-/// Feedback is handled by the platform, not by gating: the capture source
-/// already records through Android's voice-communication path with hardware
-/// echo cancellation, which is what makes full duplex viable at all. There is
-/// also an accidental second line of defence — with `echoTargetLanguage: false`
-/// any translated audio that does leak back in is *already in the target
-/// language*, so the model stays silent on it rather than translating its own
-/// output.
+/// **On feedback, this doc used to be wrong.** It said the platform AEC made
+/// full duplex viable and no echo guard was needed. On a phone at speaker
+/// volume it is not: one English sentence came back as fourteen separate
+/// translations, each the previous one looping in through the microphone
+/// (device-proven 2026-08-10). `echoTargetLanguage: false` did not save it
+/// either — a reverberated copy is not reliably detected as the target
+/// language.
+///
+/// The session also never asked for the **voice audio path**, so the
+/// translation played on the media path where the canceller has no reference
+/// signal at all. That is now fixed (`voice_audio_mode.dart`, which the
+/// assistant has used since August) — but it was NOT the answer either. With
+/// the voice path claimed and the hold removed, the loop came straight back:
+/// the "heard" pane filled with our own Hindi, labelled English. At
+/// loudspeaker volume the platform canceller does not get close enough.
+///
+/// So on the phone's speaker the microphone really is held while we talk, and
+/// that costs speech — whatever is said during the translation is lost, which
+/// on continuous speech chops the transcript into fragments. The user is told
+/// so, because otherwise it reads as a broken feature. The two ways out cost
+/// nothing: earphones or the glasses remove the acoustic path, and
+/// captions-only plays nothing at all.
 ///
 /// Framework-agnostic (no Riverpod import) so it can be unit-tested directly,
 /// matching `LiveController`.
@@ -44,9 +60,11 @@ class TranslateController {
     required PcmPlayer player,
     required PermissionsService permissions,
     GlassesBridgeApi? glasses,
+    VoiceAudioMode? voiceAudioMode,
     WebSocketLiveClient Function(AppConfig, TranslateSessionConfig, DeviceInfo Function())?
         clientFactory,
   })  : _config = config,
+        _voiceAudioMode = voiceAudioMode ?? VoiceAudioMode(),
         _registry = registry,
         _player = player,
         _permissions = permissions,
@@ -59,6 +77,15 @@ class TranslateController {
   /// hour; an unbounded list would make every append O(n) and eventually
   /// exhaust memory. The transcript on screen is a live view, not the record.
   static const int maxTurns = 200;
+
+  /// How long after our own translated audio stops before the microphone is
+  /// trusted again.
+  ///
+  /// Covers the room's acoustic tail, not just the playback itself: what loops
+  /// is the reverberated copy that arrives slightly late. Shorter than the
+  /// assistant's 800 ms because a translator must return to the room quickly —
+  /// long enough to break the loop, short enough not to swallow the reply.
+  static const Duration _echoTail = Duration(milliseconds: 400);
 
   /// How long the microphone may deliver nothing at all before we conclude it
   /// is gone rather than merely pointed at a quiet room.
@@ -105,6 +132,14 @@ class TranslateController {
   CaptureSource? _audioSource;
   Timer? _micWatchdog;
   DateTime? _lastChunkAt;
+  final VoiceAudioMode _voiceAudioMode;
+
+  /// True when the translated audio comes out somewhere that cannot loop back
+  /// into the microphone — a headset, earbuds, or the glasses. Reported by the
+  /// platform when it declines to switch paths, which is a far better signal
+  /// than guessing from what we happen to know is connected.
+  bool _outputIsInEar = false;
+
   bool _disposed = false;
 
   void _emit(TranslateState next) {
@@ -164,6 +199,28 @@ class TranslateController {
       clearNotice: true,
     ));
     await _player.initialize();
+    // BEFORE anything plays. The platform echo canceller is attached to our
+    // microphone but can only subtract our own output when capture and
+    // playback share the voice path — see voice_audio_mode.dart. Skipping this
+    // is what turned one English sentence into fourteen looping translations
+    // (device-proven 2026-08-10): the audio went out on the media path, the
+    // canceller had no reference, and the microphone heard it all.
+    final route = await _voiceAudioMode.enter();
+    // The platform declines to touch the route when sound is already going to a
+    // headset, earbuds or the glasses — which is also exactly the case where
+    // there is no acoustic path back into the microphone at all.
+    _outputIsInEar = route == 'skipped_external_route';
+    _log.info('translate audio route: $route');
+    if (!_outputIsInEar && !_state.captionsOnly) {
+      // Say it before it happens. On the loudspeaker the microphone has to be
+      // held while the translation plays, so continuous speech comes out in
+      // fragments — which reads as a broken feature unless you were told.
+      _emit(_state.copyWith(
+        notice: 'On the phone speaker, anything said while the translation '
+            'plays is missed. Use earphones, the glasses, or "Text only" to '
+            'hear everything.',
+      ));
+    }
     _watchGlasses();
     await _openSocket();
     unawaited(_showNotification());
@@ -177,6 +234,7 @@ class TranslateController {
     await _teardownSocket();
     await _player.flush();
     await _player.stop();
+    await _voiceAudioMode.exit();
     unawaited(Notifications.clearActivity());
     _emit(_state.copyWith(status: TranslateStatus.stopped));
   }
@@ -255,13 +313,17 @@ class TranslateController {
       await stop();
       return;
     }
-    // No mic gate and no echo guard, on purpose — see the class doc. Every
-    // chunk goes up: a gate tuned to hold back non-speech would clip the
-    // beginning of a sentence from across a room, and the whole point here is
-    // to hear the room rather than the person holding the phone.
+    // No mic GATE, on purpose: a gate tuned to hold back non-speech would clip
+    // someone speaking quietly from across a room, which is exactly who a
+    // translator exists to hear. But an echo guard is not optional — see
+    // [_shouldHoldForEcho].
     _audioSub = source.audio16k.listen(
       (chunk) {
+        // Counted before the echo check: the microphone is alive and
+        // delivering, which is all the watchdog needs to know. Counting only
+        // forwarded chunks would make a long translation look like a dead mic.
         _lastChunkAt = DateTime.now();
+        if (_shouldHoldForEcho()) return;
         _client?.sendAudio(chunk);
       },
       // A capture source that ends or errors mid-session is the shape a phone
@@ -275,6 +337,43 @@ class TranslateController {
     await source.startAudio();
     _client?.send(const AudioStartMessage());
     _startMicWatchdog();
+  }
+
+  /// Whether to withhold this chunk because it is probably our own output.
+  ///
+  /// **Device-proven 2026-08-10, and it disproved the design.** The class doc
+  /// used to say the platform AEC made full duplex viable. On a phone at
+  /// speaker volume it does not: one English sentence came back as **fourteen
+  /// separate translations**, each one the previous translation looping back in
+  /// through the microphone. That is not a bug to fix in code — the microphone
+  /// really is hearing a loud, room-reverberated copy of the speaker.
+  ///
+  /// `echoTargetLanguage: false` was supposed to be a second line of defence
+  /// (leaked audio is already in the target language, so the model should stay
+  /// silent on it). It is not reliable: a degraded, reverberated copy does not
+  /// always get detected as the target language.
+  ///
+  /// So the microphone is withheld while our own audio plays — but ONLY when
+  /// there is an acoustic path back into it. With glasses connected the speaker
+  /// is in the wearer's ear, there is no loop, and holding the microphone would
+  /// throw away the one thing that makes this feature worth having: hearing the
+  /// room continuously while the translation is spoken.
+  ///
+  /// The other two ways out cost nothing and are worth knowing: captions-only
+  /// plays no audio at all, and earphones remove the path the same way glasses
+  /// do.
+  bool _shouldHoldForEcho() {
+    if (_state.captionsOnly) return false; // nothing is playing
+    if (_outputIsInEar) return false; // no acoustic path back
+    // NOT short-circuited by the echo canceller, though it was tried.
+    // Claiming the voice path (MODE_IN_COMMUNICATION + speakerphone) and
+    // trusting the platform to subtract our output put the loop straight back:
+    // the "heard" pane filled with our own Hindi, labelled as English
+    // (device-proven 2026-08-10). At loudspeaker volume the canceller does not
+    // get close enough. The voice path is still claimed — it reduces the echo
+    // and matches what the assistant does — but it is not a substitute for
+    // holding the microphone.
+    return _player.isPlayingWithin(_echoTail);
   }
 
   /// The microphone stopped producing audio while we still expect it to.
@@ -328,9 +427,19 @@ class TranslateController {
   /// conversation they were having — and the notice explains why the sound
   /// changed.
   void _watchGlasses() {
+    // Deliberately does NOT set `_outputIsInEar` here. The platform already
+    // answered that question when it declined to switch audio paths, and its
+    // answer covers wired headsets and earbuds too — things the glasses bridge
+    // knows nothing about. Overwriting it with "are the glasses connected"
+    // threw that away and put the hold back on a headset that never needed it.
     _glassesSub ??= _glasses?.events().listen((event) {
       if (event.type != 'connectionState') return;
-      if (event.data['state'] == 'connected') return;
+      final connected = event.data['state'] == 'connected';
+      // Mid-session the route really does change under us: glasses arriving
+      // move the sound into the wearer's ear, glasses leaving bring it back to
+      // the phone's speaker and the echo path with it.
+      _outputIsInEar = connected;
+      if (connected) return;
       if (!_state.isRunning) return;
       if (_registry.audioKind != CaptureDeviceKind.glasses) return;
       unawaited(_fallBackToPhoneMic());
@@ -341,6 +450,7 @@ class TranslateController {
     _log.warn('glasses dropped mid-translation → phone mic');
     await _stopAudio();
     _registry.setAudioKind(CaptureDeviceKind.phone);
+    _outputIsInEar = false;
     _emit(_state.copyWith(
       notice: 'The glasses disconnected. Listening on the phone instead.',
     ));
@@ -435,6 +545,7 @@ class TranslateController {
     _glassesSub = null;
     await _stopAudio();
     await _teardownSocket();
+    await _voiceAudioMode.exit();
     unawaited(Notifications.clearActivity());
     await _stateController.close();
   }
