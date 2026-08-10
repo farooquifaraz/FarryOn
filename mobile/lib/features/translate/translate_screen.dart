@@ -318,6 +318,8 @@ class _TurnTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final heardRtl = isRtlLanguage(turn.heardLang);
+    final targetRtl = isRtlLanguage(target);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -328,15 +330,24 @@ class _TurnTile extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _label('Heard${turn.heardLang != null ? ' · '
-              '${translateLanguageName(turn.heardLang!)}' : ''}'),
+          _label(
+            'Heard${turn.heardLang != null ? ' · '
+                '${translateLanguageName(turn.heardLang!)}' : ''}',
+            Aurora.purpleSoft,
+          ),
           const SizedBox(height: 4),
-          Text(
+          // What was SAID, in the speaker's own words — a reference, kept
+          // visually quieter than the translation so the eye lands on the
+          // thing the user actually came for.
+          _DirectionalText(
             turn.heard,
+            rtl: heardRtl,
             style: TextStyle(
-              // Muted until the sentence is finalised, so the user can see the
-              // difference between "still hearing this" and "this is settled".
-              color: turn.heardFinal ? Aurora.textPrimary : Aurora.textMuted,
+              // Dimmer still until the sentence is finalised, so "still
+              // hearing this" and "this is settled" look different.
+              color: turn.heardFinal
+                  ? Aurora.purpleSoft
+                  : Aurora.purpleSoft.withValues(alpha: 0.55),
               fontSize: 14,
               height: 1.45,
             ),
@@ -356,12 +367,17 @@ class _TurnTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _label(translateLanguageName(target)),
+                  _label(translateLanguageName(target), Aurora.mint),
                   const SizedBox(height: 4),
-                  Text(
+                  // The translation: brighter, larger, and the only white text
+                  // in the card.
+                  _DirectionalText(
                     turn.translated,
+                    rtl: targetRtl,
                     style: const TextStyle(
-                        color: Aurora.textPrimary, fontSize: 15, height: 1.45),
+                        color: Aurora.textPrimary,
+                        fontSize: 15.5,
+                        height: 1.5),
                   ),
                 ],
               ),
@@ -372,10 +388,10 @@ class _TurnTile extends StatelessWidget {
     );
   }
 
-  static Widget _label(String text) => Text(
+  static Widget _label(String text, Color color) => Text(
         text.toUpperCase(),
-        style: const TextStyle(
-          color: Aurora.textMuted,
+        style: TextStyle(
+          color: color,
           fontSize: 10,
           letterSpacing: 0.7,
         ),
@@ -542,6 +558,31 @@ class _GlassesRequiredPanel extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      );
+}
+
+/// Text laid out in the direction its language is actually written.
+///
+/// Arabic, Urdu, Persian, Hebrew and Sindhi all read right-to-left. Left-
+/// aligning them is what made a correct Urdu translation look broken — the
+/// words were right, but the line began on the wrong side and the sentence
+/// ended at the wrong end.
+class _DirectionalText extends StatelessWidget {
+  const _DirectionalText(this.text, {required this.rtl, required this.style});
+
+  final String text;
+  final bool rtl;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: double.infinity,
+        child: Text(
+          text,
+          textDirection: rtl ? TextDirection.rtl : TextDirection.ltr,
+          textAlign: rtl ? TextAlign.right : TextAlign.left,
+          style: style,
         ),
       );
 }
