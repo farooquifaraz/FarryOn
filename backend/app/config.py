@@ -82,10 +82,24 @@ class Settings(BaseSettings):
     # Target languages the UI may request. A client-supplied code lands in the
     # upstream setup message, so it is validated against this list rather than
     # forwarded verbatim.
+    # Target languages the UI may request — Google's supported list for
+    # gemini-3.5-live-translate-preview, checked 2026-08-10. A client-supplied
+    # code lands in the upstream setup message, so it is validated against this
+    # rather than forwarded; a code the model does not know is silently replaced
+    # with English, which looks exactly like the picker doing nothing.
+    #
+    # Kept in step with mobile/lib/features/translate/translate_languages.dart —
+    # if the two drift, the app offers a language the server then refuses.
     translate_allowed_target_langs: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
-            "en", "hi", "ur", "ar", "bn", "pa", "ta", "te", "mr", "gu",
-            "es", "fr", "de", "pt", "ru", "zh", "ja", "ko", "tr", "id",
+            "hi", "en", "ur", "ar", "af", "ak", "sq", "am", "hy", "az",
+            "eu", "be", "bn", "bg", "my", "ca", "zh-Hans", "zh-Hant", "hr",
+            "cs", "da", "nl", "et", "fil", "fi", "fr", "gl", "ka", "de",
+            "el", "gu", "ha", "he", "hu", "is", "id", "it", "ja", "jv",
+            "kn", "kk", "km", "rw", "ko", "lo", "lv", "lt", "mk", "ms",
+            "ml", "mr", "mn", "ne", "nb", "fa", "pl", "pt-BR", "pt-PT",
+            "pa", "ro", "ru", "sr", "sd", "si", "sk", "sl", "es", "su",
+            "sw", "sv", "ta", "te", "th", "tr", "uk", "uz", "vi", "zu",
         ],
         description="Comma-separated BCP-47 allow-list for hello.translate.",
     )

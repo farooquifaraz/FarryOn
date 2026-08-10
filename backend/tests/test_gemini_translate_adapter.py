@@ -28,6 +28,7 @@ import pytest
 
 from app.ai.events import EventType
 from app.ai.gemini_translate import (
+    _SENTENCE_GAP_S,
     _SILENCE_GRACE_CHUNKS,
     _UTTERANCE_GAP_S,
     GeminiTranslateGateway,
@@ -271,3 +272,45 @@ class TestConcurrency:
         gw = _gw()
         await gw._finalize(turn_complete=True)
         assert await _drain(gw) == []
+
+class TestWhenAnUtteranceIsFinished:
+    """A pause to think is not the same as a full stop.
+
+    One timeout for both is what chopped a long sentence into
+    "register account in all three services and" / "generate" / "or time to
+    register" / "account in" — four cards, device-seen 2026-08-10. The model
+    does emit punctuation, so it can be asked.
+    """
+
+    async def test_a_finished_sentence_closes_quickly(self) -> None:
+        gw = _gw()
+        await gw._handle_message(_msg(heard="Good morning, everyone.", heard_lang="en"))
+        assert gw._gap_needed() == _SENTENCE_GAP_S
+
+    async def test_an_unfinished_one_is_given_time(self) -> None:
+        gw = _gw()
+        await gw._handle_message(
+            _msg(heard="The meeting will start at", heard_lang="en")
+        )
+        assert gw._gap_needed() == _UTTERANCE_GAP_S
+        assert _UTTERANCE_GAP_S > _SENTENCE_GAP_S * 2, (
+            "the whole point is that an unfinished sentence waits materially "
+            "longer"
+        )
+
+    async def test_trailing_space_does_not_hide_the_full_stop(self) -> None:
+        # The deltas arrive with leading and trailing spaces.
+        gw = _gw()
+        await gw._handle_message(_msg(heard="Yes, of course.  ", heard_lang="en"))
+        assert gw._gap_needed() == _SENTENCE_GAP_S
+
+    async def test_it_reads_the_scripts_this_is_used_in(self) -> None:
+        for text in ("बैठक शुरू होगी।", "هل انت بخير؟", "会議は四時です。"):
+            gw = _gw()
+            await gw._handle_message(_msg(heard=text, heard_lang="xx"))
+            assert gw._gap_needed() == _SENTENCE_GAP_S, text
+
+    async def test_a_comma_is_not_the_end_of_anything(self) -> None:
+        gw = _gw()
+        await gw._handle_message(_msg(heard="First of all,", heard_lang="en"))
+        assert gw._gap_needed() == _UTTERANCE_GAP_S

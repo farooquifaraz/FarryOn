@@ -142,7 +142,15 @@ void main() {
       ];
 
   /// Bring a session up to `listening`.
+  ///
+  /// Primes the glasses as connected: live translation refuses to start
+  /// without them, because the translation has to play somewhere the listening
+  /// microphone cannot hear it.
   Future<void> connect({String target = 'hi'}) async {
+    controller.primeFromConfig(
+      const AppConfig(host: 'h', port: 8000, secure: false),
+      glassesConnected: true,
+    );
     await controller.setTargetLanguage(target);
     await controller.start();
     await pump();
@@ -200,6 +208,10 @@ void main() {
     });
 
     test('opens the microphone only once the server is ready', () async {
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: true,
+      );
       await controller.setTargetLanguage('hi');
       await controller.start();
       await pump();
@@ -346,6 +358,10 @@ void main() {
         () async {
       // A server without translate support would hand back the assistant.
       // Presenting its answers as translations is the worst possible failure.
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: true,
+      );
       await controller.setTargetLanguage('hi');
       await controller.start();
       await pump();
@@ -418,18 +434,19 @@ void main() {
     });
   });
 
-  group('the glasses dropping while they are the microphone', () {
+  group('the glasses', () {
     late _FakeGlasses glasses;
 
-    setUp(() {
+    setUp(() async {
       glasses = _FakeGlasses();
-      registry.setAudioKind(CaptureDeviceKind.glasses);
+      await controller.dispose();
       controller = TranslateController(
         config: const AppConfig(host: 'h', port: 8000, secure: false),
         registry: registry,
         player: player,
         permissions: _GrantingPermissions(),
         glasses: glasses,
+        voiceAudioMode: _FakeVoiceAudioMode('skipped_external_route'),
         clientFactory: factory,
       );
     });
@@ -438,27 +455,49 @@ void main() {
       await glasses.controller.close();
     });
 
-    test('falls back to the phone instead of going deaf', () async {
+    test('without them it refuses to start, and says why', () async {
+      // Not an arbitrary lock. On the phone's speaker the translation loops
+      // back into the microphone listening to the room.
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: false,
+      );
+      final ok = await controller.start();
+
+      expect(ok, isFalse);
+      expect(controller.state.error, contains('glasses'));
+      expect(controller.state.error, contains('loops'),
+          reason: 'saying no without the reason reads as an arbitrary lock');
+      expect(fake.sentLog, isEmpty, reason: 'no socket should be opened');
+    });
+
+    test('connecting them mid-refusal makes it startable', () async {
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: false,
+      );
+      expect(await controller.start(), isFalse);
+
+      // The bridge reports them arriving.
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: true,
+      );
+      expect(await controller.start(), isTrue);
+    });
+
+    test('losing them mid-session ends it rather than falling back', () async {
+      // Carrying on would put the translation back on the loudspeaker and
+      // straight into the microphone — the loop this feature exists to avoid.
       await connect();
-      expect(registry.audioKind, CaptureDeviceKind.glasses);
+      expect(controller.state.isRunning, isTrue);
 
       glasses.emit('connectionState', {'state': 'disconnected'});
       await pump(5);
 
-      expect(registry.audioKind, CaptureDeviceKind.phone);
-      expect(controller.state.notice, contains('phone'));
-      expect(controller.state.isRunning, isTrue,
-          reason: 'the conversation is still happening — keep translating');
-    });
-
-    test('a glasses drop while the phone is the mic changes nothing', () async {
-      registry.setAudioKind(CaptureDeviceKind.phone);
-      await connect();
-      glasses.emit('connectionState', {'state': 'disconnected'});
-      await pump(3);
-      // The speaker-route heads-up is expected here; a GLASSES notice is not.
-      expect(controller.state.notice, isNot(contains('glasses disconnected')));
-      expect(controller.state.isRunning, isTrue);
+      expect(controller.state.isRunning, isFalse);
+      expect(controller.state.error, contains('glasses'));
+      expect(source.audioStarted, isFalse, reason: 'the mic must be released');
     });
   });
 

@@ -25,9 +25,11 @@ void main() {
     );
     await tester.pump();
     expect(find.text('Live translation'), findsOneWidget);
-    // The promise the teardown has to keep.
+    // With no glasses connected — which is what a test binding has — the
+    // screen explains why it cannot run rather than offering a button that
+    // would fail.
     expect(
-      find.textContaining('comes back on her own'),
+      find.textContaining('Connect your glasses'),
       findsOneWidget,
     );
 

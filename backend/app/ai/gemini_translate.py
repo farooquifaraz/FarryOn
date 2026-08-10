@@ -67,7 +67,19 @@ _INPUT_MIME = "audio/pcm;rate=16000"
 #: 1.2 s is long enough to ride out the gap between two clauses (the deltas
 #: measured arrived ~0.6-1.0 s apart mid-sentence) and short enough that the
 #: screen settles while the speaker is still in the room.
-_UTTERANCE_GAP_S = 1.2
+_UTTERANCE_GAP_S = 2.6
+
+#: The shorter gap used when the text already ENDS in sentence punctuation.
+#:
+#: Waiting the full gap after a finished sentence just makes the screen feel
+#: slow; waiting only this long after an unfinished one is what was chopping
+#: sentences into fragments. So the wait depends on whether the sentence looks
+#: finished, rather than being one compromise value for both.
+_SENTENCE_GAP_S = 0.7
+
+#: Characters that end a sentence, across the scripts this product is used in:
+#: Latin, Devanagari danda, Arabic/Urdu question mark, CJK full stops.
+_SENTENCE_ENDINGS = ".?!।॥؟。！？…"
 
 #: Force a break in a monologue that never pauses, so the UI keeps moving and
 #: one <p> does not grow without bound.
@@ -339,7 +351,7 @@ class GeminiTranslateGateway(AIGateway):
                 await asyncio.sleep(0.25)
                 if not (self._heard_buf or self._translated_buf):
                     continue
-                if time.monotonic() - self._last_delta_at >= _UTTERANCE_GAP_S:
+                if time.monotonic() - self._last_delta_at >= self._gap_needed():
                     await self._finalize(turn_complete=True)
         except asyncio.CancelledError:  # pragma: no cover - cancellation path
             raise
@@ -352,6 +364,24 @@ class GeminiTranslateGateway(AIGateway):
                 self._watchdog_task = asyncio.create_task(
                     self._utterance_watchdog()
                 )
+
+    def _gap_needed(self) -> float:
+        """How long the transcript must be quiet before this utterance closes.
+
+        A speaker pausing to think is not the same as a speaker finishing, and
+        one timeout cannot tell them apart — which is why a long sentence used
+        to arrive as "register account in all three services and" / "generate"
+        / "or time to register" / "account in", each its own card.
+
+        So the punctuation decides. The model does emit it (measured: "Good
+        morning, everyone." arrived with the full stop), and text that already
+        ends a sentence needs only a short confirmation gap, while text that
+        stops mid-clause is given real time to continue.
+        """
+        text = (self._heard_buf or self._translated_buf).rstrip()
+        if text and text[-1] in _SENTENCE_ENDINGS:
+            return _SENTENCE_GAP_S
+        return _UTTERANCE_GAP_S
 
     @staticmethod
     def _detected_lang(transcription: Any) -> str | None:

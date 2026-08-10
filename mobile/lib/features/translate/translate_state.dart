@@ -147,39 +147,3 @@ class TranslateState {
         notice: clearNotice ? null : (notice ?? this.notice),
       );
 }
-
-/// The languages the picker offers, as (code, native name).
-///
-/// Codes must be on the backend's `translate_allowed_target_langs` list — a
-/// code it does not know is silently replaced with English, which would look
-/// like the picker doing nothing.
-const List<(String, String)> kTranslateLanguages = [
-  ('hi', 'हिन्दी'),
-  ('en', 'English'),
-  ('ur', 'اردو'),
-  ('ar', 'العربية'),
-  ('bn', 'বাংলা'),
-  ('pa', 'ਪੰਜਾਬੀ'),
-  ('ta', 'தமிழ்'),
-  ('te', 'తెలుగు'),
-  ('mr', 'मराठी'),
-  ('gu', 'ગુજરાતી'),
-  ('es', 'Español'),
-  ('fr', 'Français'),
-  ('de', 'Deutsch'),
-  ('pt', 'Português'),
-  ('ru', 'Русский'),
-  ('zh', '中文'),
-  ('ja', '日本語'),
-  ('ko', '한국어'),
-  ('tr', 'Türkçe'),
-  ('id', 'Indonesia'),
-];
-
-/// Native name for a code, falling back to the code itself.
-String translateLanguageName(String code) {
-  for (final (c, name) in kTranslateLanguages) {
-    if (c == code) return name;
-  }
-  return code;
-}

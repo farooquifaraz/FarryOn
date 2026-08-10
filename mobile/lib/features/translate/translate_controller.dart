@@ -14,6 +14,7 @@ import '../../protocol/messages.dart';
 import '../../protocol/protocol.dart';
 import '../../state/permissions.dart';
 import '../glasses_lab/bridge/glasses_channel.dart';
+import 'translate_languages.dart';
 import 'translate_state.dart';
 
 /// Drives one live-translation session.
@@ -134,6 +135,10 @@ class TranslateController {
   DateTime? _lastChunkAt;
   final VoiceAudioMode _voiceAudioMode;
 
+  /// Whether the glasses are connected right now. Seeded when the screen opens
+  /// and kept current from the bridge's own connection events.
+  bool _glassesConnected = false;
+
   /// True when the translated audio comes out somewhere that cannot loop back
   /// into the microphone — a headset, earbuds, or the glasses. Reported by the
   /// platform when it declines to switch paths, which is a far better signal
@@ -147,9 +152,10 @@ class TranslateController {
     if (!_stateController.isClosed) _stateController.add(next);
   }
 
-  /// Seed the target language / captions setting from config.
-  void primeFromConfig(AppConfig cfg) {
+  /// Seed the target language, captions setting and glasses state.
+  void primeFromConfig(AppConfig cfg, {bool glassesConnected = false}) {
     _config = cfg;
+    _glassesConnected = glassesConnected;
     _emit(_state.copyWith(
       targetLanguage: cfg.translateTargetLanguage,
       captionsOnly: cfg.translateCaptionsOnly,
@@ -175,9 +181,36 @@ class TranslateController {
     if (value) unawaited(_player.flush());
   }
 
-  /// Begin translating. Returns false when the microphone was refused.
+  /// Whether the glasses are connected, which live translation requires.
+  ///
+  /// Not a limitation to work around — it is the design. The translation has
+  /// to come out somewhere that cannot be heard by the microphone that is
+  /// listening to the room, or it loops: on the phone's own speaker one
+  /// English sentence came back as fourteen translations of itself
+  /// (device-proven 2026-08-10), and the only way to stop that on a
+  /// loudspeaker was to hold the microphone — which then swallowed whatever
+  /// was said during the translation and chopped sentences into fragments.
+  ///
+  /// With the glasses on, the speaker is in the wearer's ear. Nothing has to
+  /// be held, nothing is missed, and the room can keep talking over the
+  /// translation — which is the entire point of a simultaneous interpreter.
+  ///
+  /// The same reasoning is visible in every product that does this: Google
+  /// Translate's continuous Listening mode is headphones-only on iOS, and
+  /// HeyCyan's own translator reads its audio off the glasses.
+  bool get glassesRequired => true;
+
+  /// Begin translating. Returns false when it could not start.
   Future<bool> start() async {
     if (_disposed || _state.isRunning) return true;
+    if (!_glassesConnected) {
+      _emit(_state.copyWith(
+        status: TranslateStatus.idle,
+        error: 'Connect your glasses first. The translation plays in your ear '
+            'so it never loops back into the microphone.',
+      ));
+      return false;
+    }
     final outcome = await _permissions.requestMicrophone();
     if (outcome != PermissionOutcome.granted) {
       _emit(_state.copyWith(
@@ -435,27 +468,25 @@ class TranslateController {
     _glassesSub ??= _glasses?.events().listen((event) {
       if (event.type != 'connectionState') return;
       final connected = event.data['state'] == 'connected';
+      _glassesConnected = connected;
       // Mid-session the route really does change under us: glasses arriving
       // move the sound into the wearer's ear, glasses leaving bring it back to
       // the phone's speaker and the echo path with it.
       _outputIsInEar = connected;
       if (connected) return;
       if (!_state.isRunning) return;
-      if (_registry.audioKind != CaptureDeviceKind.glasses) return;
-      unawaited(_fallBackToPhoneMic());
+      // Losing the glasses mid-session ends it. Carrying on would put the
+      // translation back on the loudspeaker and straight into the microphone
+      // it is listening with — the loop this feature is built to avoid.
+      _emit(_state.copyWith(
+        error: 'The glasses disconnected, so translation stopped. '
+            'Reconnect them and start again.',
+      ));
+      unawaited(stop());
     });
   }
 
-  Future<void> _fallBackToPhoneMic() async {
-    _log.warn('glasses dropped mid-translation → phone mic');
-    await _stopAudio();
-    _registry.setAudioKind(CaptureDeviceKind.phone);
-    _outputIsInEar = false;
-    _emit(_state.copyWith(
-      notice: 'The glasses disconnected. Listening on the phone instead.',
-    ));
-    if (_state.isRunning) await _startAudio();
-  }
+
 
   // -- Server events --------------------------------------------------------
 
@@ -560,10 +591,10 @@ class TranslateController {
       await Notifications.showActivity(
         'Live translation',
         'Listening — translating into '
-            '\${translateLanguageName(_state.targetLanguage)}',
+            '${translateLanguageName(_state.targetLanguage)}',
       );
     } catch (e) {
-      _log.warn('translate notification failed: \$e');
+      _log.warn('translate notification failed: $e');
     }
   }
 }

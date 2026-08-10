@@ -7,6 +7,8 @@ import '../../core/theme.dart';
 import '../../data/live_client.dart' show ConnectionStatus;
 import '../../state/providers.dart';
 import 'translate_controller.dart';
+import 'translate_language_picker.dart';
+import 'translate_languages.dart';
 import 'translate_providers.dart';
 import 'translate_state.dart';
 
@@ -60,9 +62,10 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
     if (_wasLiveConnected) {
       await ref.read(liveProvider.notifier).disconnect();
     }
-    ref
-        .read(translateControllerProvider)
-        .primeFromConfig(ref.read(configProvider));
+    ref.read(translateControllerProvider).primeFromConfig(
+          ref.read(configProvider),
+          glassesConnected: live.glassesConnected,
+        );
   }
 
   @override
@@ -106,16 +109,11 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
   }
 
   Future<String?> _pickLanguage() async {
-    final current = ref.read(translateProvider).targetLanguage;
-    final picked = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: Aurora.surfaceHigh,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => _LanguageSheet(selected: current),
+    final picked = await TranslateLanguagePicker.open(
+      context,
+      ref.read(translateProvider).targetLanguage,
     );
-    if (picked == null) return null;
+    if (picked == null || !mounted) return null;
     await _controller.setTargetLanguage(picked);
     final cfg = ref.read(configProvider);
     ref.read(configProvider.notifier).state =
@@ -126,6 +124,10 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(translateProvider);
+    // Watched, not read: plugging the glasses in should light the screen up
+    // without the user having to back out and come in again.
+    final glassesOn =
+        ref.watch(liveProvider.select((l) => l.glassesConnected));
     return Scaffold(
       backgroundColor: Aurora.base,
       appBar: AppBar(
@@ -152,7 +154,9 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            if (!s.isRunning && s.turns.isEmpty) const _FarryPausedNotice(),
+            if (!glassesOn) const _GlassesRequiredPanel(),
+            if (glassesOn && !s.isRunning && s.turns.isEmpty)
+              const _FarryPausedNotice(),
             if (s.status == TranslateStatus.reconnecting) const _ReconnectBar(),
             if (s.error != null) _ErrorBar(s.error!),
             if (s.notice != null) _NoticeBar(s.notice!),
@@ -163,6 +167,7 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
             ),
             _Controls(
               state: s,
+              enabled: glassesOn,
               onToggle: _toggle,
               onCaptionsOnly: (v) {
                 _controller.setCaptionsOnly(v);
@@ -402,11 +407,13 @@ class _SameLanguageNote extends StatelessWidget {
 class _Controls extends StatelessWidget {
   const _Controls({
     required this.state,
+    required this.enabled,
     required this.onToggle,
     required this.onCaptionsOnly,
   });
 
   final TranslateState state;
+  final bool enabled;
   final Future<void> Function() onToggle;
   final ValueChanged<bool> onCaptionsOnly;
 
@@ -423,7 +430,7 @@ class _Controls extends StatelessWidget {
           Row(
             children: [
               GestureDetector(
-                onTap: onToggle,
+                onTap: enabled ? onToggle : null,
                 child: Container(
                   width: 52,
                   height: 52,
@@ -431,11 +438,17 @@ class _Controls extends StatelessWidget {
                     shape: BoxShape.circle,
                     color: running ? Aurora.teal : Colors.transparent,
                     border: Border.all(
-                        color: running ? Aurora.teal : Aurora.glassBorder),
+                        color: running
+                            ? Aurora.teal
+                            : (enabled
+                                ? Aurora.glassBorder
+                                : Aurora.glassBorder.withValues(alpha: 0.04))),
                   ),
                   child: Icon(
                     running ? Icons.stop_rounded : Icons.mic_none_rounded,
-                    color: running ? Aurora.tealInk : Aurora.mint,
+                    color: running
+                        ? Aurora.tealInk
+                        : (enabled ? Aurora.mint : Aurora.textMuted),
                     size: 24,
                   ),
                 ),
@@ -450,7 +463,7 @@ class _Controls extends StatelessWidget {
                         TranslateStatus.listening => 'Listening…',
                         TranslateStatus.starting => 'Starting…',
                         TranslateStatus.reconnecting => 'Reconnecting…',
-                        _ => 'Tap to start',
+                        _ => enabled ? 'Tap to start' : 'Glasses needed',
                       },
                       style: const TextStyle(
                           color: Aurora.textPrimary, fontSize: 14),
@@ -487,65 +500,48 @@ class _Controls extends StatelessWidget {
   }
 }
 
-class _LanguageSheet extends StatelessWidget {
-  const _LanguageSheet({required this.selected});
-  final String selected;
+/// Shown whenever the glasses are not connected — which is whenever live
+/// translation cannot work.
+///
+/// Says WHY, not just no. "Connect your glasses" on its own reads like an
+/// arbitrary lock; the reason is that the translation has to come out
+/// somewhere the listening microphone cannot hear it.
+class _GlassesRequiredPanel extends StatelessWidget {
+  const _GlassesRequiredPanel();
 
   @override
-  Widget build(BuildContext context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Which language do you want to hear?',
-                  style:
-                      TextStyle(color: Aurora.textPrimary, fontSize: 15)),
-              const SizedBox(height: 6),
-              const Text(
-                "The speaker's language is detected on its own — you never "
-                'have to say what it is.',
-                style: TextStyle(
-                    color: Aurora.textMuted, fontSize: 12, height: 1.4),
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Aurora.tint(Aurora.amber, 0.12),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.visibility_outlined, size: 18, color: Aurora.amber),
+            SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (final (code, name) in kTranslateLanguages)
-                    GestureDetector(
-                      onTap: () => Navigator.pop(context, code),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: code == selected
-                              ? Aurora.teal
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: code == selected
-                                ? Aurora.teal
-                                : Aurora.glassBorder,
-                          ),
-                        ),
-                        child: Text(
-                          name,
-                          style: TextStyle(
-                            color: code == selected
-                                ? Aurora.tealInk
-                                : Aurora.textPrimary,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ),
-                    ),
+                  Text(
+                    'Connect your glasses to translate',
+                    style: TextStyle(color: Aurora.amber, fontSize: 13.5),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'The translation plays in your ear, so the microphone can '
+                    'keep listening to the room without hearing it. On the '
+                    "phone's speaker it would translate itself, over and over.",
+                    style: TextStyle(
+                        color: Aurora.textMuted, fontSize: 12, height: 1.45),
+                  ),
                 ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       );
 }
