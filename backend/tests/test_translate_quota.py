@@ -19,7 +19,11 @@ import pytest
 from app.config import get_settings
 from app.db import repo
 from app.db.base import get_sessionmaker
-from app.ws.session import _MIC_BYTES_PER_SECOND, Session
+from app.ws.session import (
+    _MIC_BYTES_PER_SECOND,
+    _USAGE_RETRY_AFTER_S,
+    Session,
+)
 
 _TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -39,6 +43,8 @@ def _session(user_id: int | None = 11) -> Session:
     s._translate_pending_s = 0.0
     s._translate_capped = False
     s._translate_warned = False
+    s._voice_flush_retry_at = 0.0
+    s._translate_flush_retry_at = 0.0
     s._sent = []
 
     async def _send_error(code, message, fatal=False):  # noqa: ANN001
@@ -229,3 +235,68 @@ class TestFailureModes:
 
         await s._flush_translate_usage()
         assert await _translate_usage("u11") == 4
+
+class TestAFailingDatabaseIsNotHammered:
+    """Device-found, 2026-08-10.
+
+    A failed flush keeps its seconds pending on purpose, so the next flush
+    still bills them. But pending stays ABOVE the flush threshold, so without a
+    backoff the very next audio frame retries — and the next, and the next. One
+    real translate session against a database missing a column produced **2021
+    failed queries**, about fifty a second, for as long as it ran. SQLite
+    shrugged; Postgres would not have.
+    """
+
+    async def test_a_failed_write_is_not_retried_on_the_next_frame(
+        self, caps, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        caps(600)
+        s = _session()
+        attempts = 0
+
+        async def _boom(*a, **k):  # noqa: ANN001, ANN002, ANN003
+            nonlocal attempts
+            attempts += 1
+            raise RuntimeError("no such column")
+
+        monkeypatch.setattr(repo, "bump_daily_usage", _boom)
+
+        # 60 seconds of audio: four flush thresholds' worth.
+        for _ in range(60):
+            await s._meter_translate(_MIC_BYTES_PER_SECOND)
+
+        assert attempts == 1, (
+            f"{attempts} database round-trips for one outage — the backoff is "
+            "not holding"
+        )
+        assert s._translate_pending_s >= 15, "the seconds must stay billable"
+
+    async def test_it_recovers_once_the_database_does(
+        self, caps, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        caps(600)
+        s = _session()
+        broken = True
+
+        original = repo.bump_daily_usage
+
+        async def _flaky(*a, **k):  # noqa: ANN001, ANN002, ANN003
+            if broken:
+                raise RuntimeError("down")
+            return await original(*a, **k)
+
+        monkeypatch.setattr(repo, "bump_daily_usage", _flaky)
+
+        for _ in range(20):
+            await s._meter_translate(_MIC_BYTES_PER_SECOND)
+        assert await _translate_usage("u11") == 0
+
+        broken = False
+        # Pretend the backoff has elapsed rather than sleeping 30 s.
+        s._translate_flush_retry_at -= _USAGE_RETRY_AFTER_S + 1
+        await s._flush_translate_usage()
+
+        assert await _translate_usage("u11") == 20, (
+            "the seconds withheld during the outage were never billed"
+        )
+        assert s._translate_flush_retry_at == 0.0

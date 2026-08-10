@@ -73,6 +73,16 @@ _MIC_BYTES_PER_SECOND = 16_000 * 2
 #: most this much unbilled, which is the right side of that trade.
 _VOICE_FLUSH_EVERY_S = 15.0
 
+#: How long to wait before retrying a usage write that failed.
+#:
+#: A failed flush deliberately keeps its seconds PENDING so a later flush still
+#: bills them — but pending stays above the flush threshold, so without a
+#: backoff the very next audio frame tries again, and the next, and the next.
+#: Device-seen 2026-08-10: one translate session against a database missing a
+#: column produced **2021 failed queries**, roughly fifty a second, for as long
+#: as it ran. Postgres would have felt that a great deal more than SQLite did.
+_USAGE_RETRY_AFTER_S = 30.0
+
 
 class Session:
     """Owns the lifecycle and concurrency for a single live connection."""
@@ -150,6 +160,9 @@ class Session:
         self._voice_used_s: float = 0.0
         self._voice_pending_s: float = 0.0
         self._voice_capped: bool = False
+        # Monotonic time before which a failed usage write must not be retried.
+        self._voice_flush_retry_at: float = 0.0
+        self._translate_flush_retry_at: float = 0.0
         # Translation metering — the same three counters, kept apart from the
         # voice ones so neither can spend the other's budget. `_translate_warned`
         # makes the 80% heads-up fire once rather than on every frame.
@@ -1010,6 +1023,8 @@ class Session:
         flush still bills them."""
         if self._voice_pending_s < 1:
             return
+        if time.monotonic() < self._voice_flush_retry_at:
+            return  # a recent write failed; don't hammer the database
         whole = int(self._voice_pending_s)
         sessionmaker = get_sessionmaker()
         try:
@@ -1022,8 +1037,10 @@ class Session:
                 )
                 await db.commit()
         except Exception as exc:  # noqa: BLE001 - never break the call over this
+            self._voice_flush_retry_at = time.monotonic() + _USAGE_RETRY_AFTER_S
             logger.warning("quota.voice_flush_failed", error=str(exc))
             return
+        self._voice_flush_retry_at = 0.0
         self._voice_used_s += whole
         self._voice_pending_s -= whole
 
@@ -1098,6 +1115,8 @@ class Session:
         """Write translation seconds counted since the last flush."""
         if self._translate_pending_s < 1:
             return
+        if time.monotonic() < self._translate_flush_retry_at:
+            return  # a recent write failed; don't hammer the database
         whole = int(self._translate_pending_s)
         try:
             async with get_sessionmaker()() as db:
@@ -1109,8 +1128,12 @@ class Session:
                 )
                 await db.commit()
         except Exception as exc:  # noqa: BLE001 - never break the call over this
+            self._translate_flush_retry_at = (
+                time.monotonic() + _USAGE_RETRY_AFTER_S
+            )
             logger.warning("quota.translate_flush_failed", error=str(exc))
             return
+        self._translate_flush_retry_at = 0.0
         self._translate_used_s += whole
         self._translate_pending_s -= whole
 
