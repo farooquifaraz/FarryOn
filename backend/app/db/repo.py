@@ -46,7 +46,8 @@ def _live(stmt, model):
 
 #: Counter columns on :class:`DailyUsage` that ``bump_daily_usage`` may touch.
 _USAGE_COUNTERS = (
-    "voice_seconds", "frames_sent", "text_turns", "web_searches", "image_scans",
+    "voice_seconds", "translate_seconds", "frames_sent", "text_turns",
+    "web_searches", "image_scans",
 )
 
 

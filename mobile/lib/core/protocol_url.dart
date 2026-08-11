@@ -21,6 +21,11 @@ Uri buildLiveUri({
   var h = host.trim();
   h = h.replaceFirst(RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://'), '');
   h = h.split('/').first;
+  // Last line of defence. An empty host yields `ws://:8000/ws/live`, which can
+  // never connect and sends the client into a reconnect loop it cannot be
+  // talked out of. Falling back to localhost fails visibly and recoverably
+  // instead — and the settings screen stays reachable to fix the real value.
+  if (h.isEmpty) h = 'localhost';
   return Uri(
     scheme: secure ? 'wss' : 'ws',
     host: h,

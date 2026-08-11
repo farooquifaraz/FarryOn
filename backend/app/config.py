@@ -82,10 +82,24 @@ class Settings(BaseSettings):
     # Target languages the UI may request. A client-supplied code lands in the
     # upstream setup message, so it is validated against this list rather than
     # forwarded verbatim.
+    # Target languages the UI may request — Google's supported list for
+    # gemini-3.5-live-translate-preview, checked 2026-08-10. A client-supplied
+    # code lands in the upstream setup message, so it is validated against this
+    # rather than forwarded; a code the model does not know is silently replaced
+    # with English, which looks exactly like the picker doing nothing.
+    #
+    # Kept in step with mobile/lib/features/translate/translate_languages.dart —
+    # if the two drift, the app offers a language the server then refuses.
     translate_allowed_target_langs: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
-            "en", "hi", "ur", "ar", "bn", "pa", "ta", "te", "mr", "gu",
-            "es", "fr", "de", "pt", "ru", "zh", "ja", "ko", "tr", "id",
+            "hi", "en", "ur", "ar", "af", "ak", "sq", "am", "hy", "az",
+            "eu", "be", "bn", "bg", "my", "ca", "zh-Hans", "zh-Hant", "hr",
+            "cs", "da", "nl", "et", "fil", "fi", "fr", "gl", "ka", "de",
+            "el", "gu", "ha", "he", "hu", "is", "id", "it", "ja", "jv",
+            "kn", "kk", "km", "rw", "ko", "lo", "lv", "lt", "mk", "ms",
+            "ml", "mr", "mn", "ne", "nb", "fa", "pl", "pt-BR", "pt-PT",
+            "pa", "ro", "ru", "sr", "sd", "si", "sk", "sl", "es", "su",
+            "sw", "sv", "ta", "te", "th", "tr", "uk", "uz", "vi", "zu",
         ],
         description="Comma-separated BCP-47 allow-list for hello.translate.",
     )
@@ -317,11 +331,11 @@ class Settings(BaseSettings):
     # abuse, not unit economics.
     plan_catalog: dict[str, dict[str, float | int | str]] = Field(
         default_factory=lambda: {
-            #        price  period     voice_min  scans  searches
-            "free": {"price_usd": 0.0,  "period": "trial", "voice_minutes": 60,  "image_scans": 3,  "web_searches": 10},   # noqa: E501
-            "lite": {"price_usd": 5.0,  "period": "month", "voice_minutes": 150, "image_scans": 20, "web_searches": 50},   # noqa: E501
-            "plus": {"price_usd": 10.0, "period": "month", "voice_minutes": 360, "image_scans": 50, "web_searches": 100},  # noqa: E501
-            "pro":  {"price_usd": 20.0, "period": "month", "voice_minutes": 900, "image_scans": -1, "web_searches": 200},  # noqa: E501
+            #        price  period     voice_min  scans  searches  translate/day
+            "free": {"price_usd": 0.0,  "period": "trial", "voice_minutes": 60,  "image_scans": 3,  "web_searches": 10,  "translate_minutes_per_day": 5},    # noqa: E501
+            "lite": {"price_usd": 5.0,  "period": "month", "voice_minutes": 150, "image_scans": 20, "web_searches": 50,  "translate_minutes_per_day": 15},   # noqa: E501
+            "plus": {"price_usd": 10.0, "period": "month", "voice_minutes": 360, "image_scans": 50, "web_searches": 100, "translate_minutes_per_day": 45},   # noqa: E501
+            "pro":  {"price_usd": 20.0, "period": "month", "voice_minutes": 900, "image_scans": -1, "web_searches": 200, "translate_minutes_per_day": 120},  # noqa: E501
         }
     )
     # Days used to spread a monthly voice budget into a daily cap. 30 is the
@@ -466,6 +480,15 @@ class Settings(BaseSettings):
                 "voice_seconds": voice_seconds,
                 "image_scans": int(p.get("image_scans", 0)),
                 "web_searches": int(p.get("web_searches", 0)),
+                # Stated per DAY in the catalog rather than derived from a
+                # monthly budget like voice. Voice needs the trial/monthly
+                # split because the free plan's 60 minutes are a one-time
+                # allowance; giving translation a second lifetime meter would
+                # mean two ways to run out, two places to get it wrong, and a
+                # user who cannot tell which one stopped them.
+                "translate_seconds": int(
+                    p.get("translate_minutes_per_day", 0)
+                ) * 60,
             }
         return out
 

@@ -245,14 +245,21 @@ def test_an_unknown_target_language_falls_back_rather_than_failing() -> None:
 def test_a_missing_translate_provider_is_answered_not_dropped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The exact shape of production today.
+    """A translate provider that cannot start must say so, not go quiet.
 
-    `TRANSLATE_PROVIDER` is unset, so it follows `AI_PROVIDER` — which is
-    `gemini` on the server, resolving to a `gemini_translate` module this build
-    does not ship yet. That must reach the user as a sentence, not as a socket
-    that dies without saying why.
+    Originally this covered a `gemini_translate` module that did not exist yet.
+    It does now, so the case it pins is the one that outlives that: the adapter
+    is present but cannot open — here because the test environment has no
+    `GEMINI_API_KEY`, in production because a key expired, a model id changed,
+    or an operator set `TRANSLATE_PROVIDER` to something unrecognised.
+
+    All of those must reach the user as a sentence. The gateway is built
+    OUTSIDE the try that guards `connect()`, so before this was fixed the
+    failure fell through to the top-level handler and the socket died with
+    nothing said — the one outcome a user can do nothing about.
     """
     monkeypatch.setattr(get_settings(), "translate_provider", "gemini_translate")
+    monkeypatch.setattr(get_settings(), "gemini_api_key", None)
 
     app = create_app()
     with TestClient(app) as client:
@@ -261,6 +268,20 @@ def test_a_missing_translate_provider_is_answered_not_dropped(
             assert ready["type"] == "error"
             assert ready["code"] == "translate_unavailable"
             assert ready["fatal"] is True
+
+
+def test_an_unrecognised_translate_provider_is_answered_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A typo in TRANSLATE_PROVIDER must not present as a dead socket."""
+    monkeypatch.setattr(get_settings(), "translate_provider", "gemini-translate")
+
+    app = create_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/live") as ws:
+            msg = _translate_handshake(ws)
+            assert msg["type"] == "error"
+            assert msg["code"] == "translate_unavailable"
 
 
 def test_an_unsupported_mode_is_refused_loudly() -> None:

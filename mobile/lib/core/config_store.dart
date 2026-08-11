@@ -112,7 +112,13 @@ class ConfigStore {
     var provider = p.getString('cfg.provider');
     if (provider == 'grok') provider = 'gemini';
     return base.copyWith(
-      host: p.getString('cfg.host'),
+      // A BLANK host is treated as absent, not obeyed. Saving one leaves the
+      // app pointed at `ws://:8000` — a URI that can never resolve — and it
+      // then spins in its reconnect loop hard enough to trip Android's
+      // "isn't responding" dialog on every launch, with no way back in through
+      // the UI to fix the setting. Device-seen 2026-08-11, while retyping a
+      // server address.
+      host: _nonBlank(p.getString('cfg.host')),
       port: p.getInt('cfg.port'),
       secure: p.getBool('cfg.secure'),
       provider: provider,
@@ -137,10 +143,15 @@ class ConfigStore {
     );
   }
 
+  /// Null for a missing OR blank string, so a blank falls back to the default.
+  static String? _nonBlank(String? v) =>
+      (v == null || v.trim().isEmpty) ? null : v;
+
   static Future<void> save(AppConfig c) async {
     final p = _prefs;
     if (p == null) return;
-    await p.setString('cfg.host', c.host);
+    // Never persist a blank host — see the note in load().
+    if (c.host.trim().isNotEmpty) await p.setString('cfg.host', c.host);
     await p.setInt('cfg.port', c.port);
     await p.setBool('cfg.secure', c.secure);
     await p.setString('cfg.provider', c.provider);

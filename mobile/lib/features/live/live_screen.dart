@@ -87,6 +87,11 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
       unawaited(controller.handleAppBackground());
     } else if (lifecycle == AppLifecycleState.resumed) {
       unawaited(controller.handleAppForeground());
+      // A phone that sat in a pocket comes back with an expired access token
+      // and no timer pending — Android freezes the process, and frozen timers
+      // do not fire. Without this the socket reconnects forever on a token the
+      // server refuses. See AuthNotifier.ensureFreshToken.
+      unawaited(ref.read(authProvider.notifier).ensureFreshToken());
     }
   }
 

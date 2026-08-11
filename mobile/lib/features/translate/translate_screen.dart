@@ -7,6 +7,8 @@ import '../../core/theme.dart';
 import '../../data/live_client.dart' show ConnectionStatus;
 import '../../state/providers.dart';
 import 'translate_controller.dart';
+import 'translate_language_picker.dart';
+import 'translate_languages.dart';
 import 'translate_providers.dart';
 import 'translate_state.dart';
 
@@ -32,9 +34,21 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
   Timer? _clock;
   bool _wasLiveConnected = false;
 
+  // Captured EAGERLY in initState, never with a lazy `late` initializer.
+  //
+  // `dispose()` is where the assistant gets handed back, and by then `ref` is
+  // dead — a `late final x = ref.read(...)` field resolves on FIRST ACCESS,
+  // which for these two is inside dispose. That threw, `_restore()` died before
+  // reconnecting, and the user was left staring at "Session ended" under a
+  // banner promising Farry would come back on her own.
+  late final TranslateController _controller;
+  late final LiveNotifier _liveNotifier;
+
   @override
   void initState() {
     super.initState();
+    _controller = ref.read(translateControllerProvider);
+    _liveNotifier = ref.read(liveProvider.notifier);
     // The elapsed label is derived from startedAt; this only forces a repaint.
     _clock = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && ref.read(translateProvider).isRunning) setState(() {});
@@ -48,29 +62,38 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
     if (_wasLiveConnected) {
       await ref.read(liveProvider.notifier).disconnect();
     }
-    ref
-        .read(translateControllerProvider)
-        .primeFromConfig(ref.read(configProvider));
+    ref.read(translateControllerProvider).primeFromConfig(
+          ref.read(configProvider),
+          glassesConnected: live.glassesConnected,
+        );
   }
 
   @override
   void dispose() {
     _clock?.cancel();
-    // Hand the microphone back. Read the controller off the container rather
-    // than `ref` — this runs during teardown, when `ref.read` is no longer
-    // safe, and leaving the assistant disconnected would look like a crash.
     unawaited(_restore());
     super.dispose();
   }
 
+  /// Hand the microphone back and bring Farry with it.
+  ///
+  /// Nothing here may throw: this runs detached during teardown, so an
+  /// exception has no one to catch it and simply leaves the assistant off.
   Future<void> _restore() async {
-    await _controller.stop();
-    if (_wasLiveConnected) await _liveNotifier.connect();
+    try {
+      await _controller.stop();
+    } catch (_) {
+      // Even a failed stop must not block the reconnect below — an assistant
+      // that never comes back is the worse of the two failures.
+    }
+    if (_wasLiveConnected) {
+      try {
+        await _liveNotifier.connect();
+      } catch (_) {
+        // The live screen's own reconnect overlay covers this.
+      }
+    }
   }
-
-  late final TranslateController _controller =
-      ref.read(translateControllerProvider);
-  late final LiveNotifier _liveNotifier = ref.read(liveProvider.notifier);
 
   Future<void> _toggle() async {
     final state = ref.read(translateProvider);
@@ -86,16 +109,11 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
   }
 
   Future<String?> _pickLanguage() async {
-    final current = ref.read(translateProvider).targetLanguage;
-    final picked = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: Aurora.surfaceHigh,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => _LanguageSheet(selected: current),
+    final picked = await TranslateLanguagePicker.open(
+      context,
+      ref.read(translateProvider).targetLanguage,
     );
-    if (picked == null) return null;
+    if (picked == null || !mounted) return null;
     await _controller.setTargetLanguage(picked);
     final cfg = ref.read(configProvider);
     ref.read(configProvider.notifier).state =
@@ -106,6 +124,10 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(translateProvider);
+    // Watched, not read: plugging the glasses in should light the screen up
+    // without the user having to back out and come in again.
+    final glassesOn =
+        ref.watch(liveProvider.select((l) => l.glassesConnected));
     return Scaffold(
       backgroundColor: Aurora.base,
       appBar: AppBar(
@@ -132,9 +154,12 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            if (!s.isRunning && s.turns.isEmpty) const _FarryPausedNotice(),
+            if (!glassesOn) const _GlassesRequiredPanel(),
+            if (glassesOn && !s.isRunning && s.turns.isEmpty)
+              const _FarryPausedNotice(),
             if (s.status == TranslateStatus.reconnecting) const _ReconnectBar(),
             if (s.error != null) _ErrorBar(s.error!),
+            if (s.notice != null) _NoticeBar(s.notice!),
             Expanded(
               child: s.turns.isEmpty
                   ? _EmptyState(running: s.isRunning)
@@ -142,6 +167,7 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
             ),
             _Controls(
               state: s,
+              enabled: glassesOn,
               onToggle: _toggle,
               onCaptionsOnly: (v) {
                 _controller.setCaptionsOnly(v);
@@ -202,6 +228,29 @@ class _ReconnectBar extends StatelessWidget {
           'Reconnecting… what you already have is kept.',
           style: TextStyle(color: Aurora.amber, fontSize: 12),
         ),
+      );
+}
+
+/// A heads-up, not a failure.
+///
+/// Deliberately a different colour from [_ErrorBar]: "10 minutes of
+/// translation left" and "translation is unavailable" are not the same news,
+/// and painting them alike teaches people to skip both.
+class _NoticeBar extends StatelessWidget {
+  const _NoticeBar(this.message);
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: Aurora.tint(Aurora.amber, 0.12),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(message,
+            style: const TextStyle(color: Aurora.amber, fontSize: 12)),
       );
 }
 
@@ -269,6 +318,8 @@ class _TurnTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final heardRtl = isRtlLanguage(turn.heardLang);
+    final targetRtl = isRtlLanguage(target);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -279,15 +330,24 @@ class _TurnTile extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _label('Heard${turn.heardLang != null ? ' · '
-              '${translateLanguageName(turn.heardLang!)}' : ''}'),
+          _label(
+            'Heard${turn.heardLang != null ? ' · '
+                '${translateLanguageName(turn.heardLang!)}' : ''}',
+            Aurora.purpleSoft,
+          ),
           const SizedBox(height: 4),
-          Text(
+          // What was SAID, in the speaker's own words — a reference, kept
+          // visually quieter than the translation so the eye lands on the
+          // thing the user actually came for.
+          _DirectionalText(
             turn.heard,
+            rtl: heardRtl,
             style: TextStyle(
-              // Muted until the sentence is finalised, so the user can see the
-              // difference between "still hearing this" and "this is settled".
-              color: turn.heardFinal ? Aurora.textPrimary : Aurora.textMuted,
+              // Dimmer still until the sentence is finalised, so "still
+              // hearing this" and "this is settled" look different.
+              color: turn.heardFinal
+                  ? Aurora.purpleSoft
+                  : Aurora.purpleSoft.withValues(alpha: 0.55),
               fontSize: 14,
               height: 1.45,
             ),
@@ -307,12 +367,17 @@ class _TurnTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _label(translateLanguageName(target)),
+                  _label(translateLanguageName(target), Aurora.mint),
                   const SizedBox(height: 4),
-                  Text(
+                  // The translation: brighter, larger, and the only white text
+                  // in the card.
+                  _DirectionalText(
                     turn.translated,
+                    rtl: targetRtl,
                     style: const TextStyle(
-                        color: Aurora.textPrimary, fontSize: 15, height: 1.45),
+                        color: Aurora.textPrimary,
+                        fontSize: 15.5,
+                        height: 1.5),
                   ),
                 ],
               ),
@@ -323,10 +388,10 @@ class _TurnTile extends StatelessWidget {
     );
   }
 
-  static Widget _label(String text) => Text(
+  static Widget _label(String text, Color color) => Text(
         text.toUpperCase(),
-        style: const TextStyle(
-          color: Aurora.textMuted,
+        style: TextStyle(
+          color: color,
           fontSize: 10,
           letterSpacing: 0.7,
         ),
@@ -358,11 +423,13 @@ class _SameLanguageNote extends StatelessWidget {
 class _Controls extends StatelessWidget {
   const _Controls({
     required this.state,
+    required this.enabled,
     required this.onToggle,
     required this.onCaptionsOnly,
   });
 
   final TranslateState state;
+  final bool enabled;
   final Future<void> Function() onToggle;
   final ValueChanged<bool> onCaptionsOnly;
 
@@ -379,7 +446,7 @@ class _Controls extends StatelessWidget {
           Row(
             children: [
               GestureDetector(
-                onTap: onToggle,
+                onTap: enabled ? onToggle : null,
                 child: Container(
                   width: 52,
                   height: 52,
@@ -387,11 +454,17 @@ class _Controls extends StatelessWidget {
                     shape: BoxShape.circle,
                     color: running ? Aurora.teal : Colors.transparent,
                     border: Border.all(
-                        color: running ? Aurora.teal : Aurora.glassBorder),
+                        color: running
+                            ? Aurora.teal
+                            : (enabled
+                                ? Aurora.glassBorder
+                                : Aurora.glassBorder.withValues(alpha: 0.04))),
                   ),
                   child: Icon(
                     running ? Icons.stop_rounded : Icons.mic_none_rounded,
-                    color: running ? Aurora.tealInk : Aurora.mint,
+                    color: running
+                        ? Aurora.tealInk
+                        : (enabled ? Aurora.mint : Aurora.textMuted),
                     size: 24,
                   ),
                 ),
@@ -406,7 +479,7 @@ class _Controls extends StatelessWidget {
                         TranslateStatus.listening => 'Listening…',
                         TranslateStatus.starting => 'Starting…',
                         TranslateStatus.reconnecting => 'Reconnecting…',
-                        _ => 'Tap to start',
+                        _ => enabled ? 'Tap to start' : 'Glasses needed',
                       },
                       style: const TextStyle(
                           color: Aurora.textPrimary, fontSize: 14),
@@ -443,65 +516,73 @@ class _Controls extends StatelessWidget {
   }
 }
 
-class _LanguageSheet extends StatelessWidget {
-  const _LanguageSheet({required this.selected});
-  final String selected;
+/// Shown whenever the glasses are not connected — which is whenever live
+/// translation cannot work.
+///
+/// Says WHY, not just no. "Connect your glasses" on its own reads like an
+/// arbitrary lock; the reason is that the translation has to come out
+/// somewhere the listening microphone cannot hear it.
+class _GlassesRequiredPanel extends StatelessWidget {
+  const _GlassesRequiredPanel();
 
   @override
-  Widget build(BuildContext context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Which language do you want to hear?',
-                  style:
-                      TextStyle(color: Aurora.textPrimary, fontSize: 15)),
-              const SizedBox(height: 6),
-              const Text(
-                "The speaker's language is detected on its own — you never "
-                'have to say what it is.',
-                style: TextStyle(
-                    color: Aurora.textMuted, fontSize: 12, height: 1.4),
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Aurora.tint(Aurora.amber, 0.12),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.visibility_outlined, size: 18, color: Aurora.amber),
+            SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (final (code, name) in kTranslateLanguages)
-                    GestureDetector(
-                      onTap: () => Navigator.pop(context, code),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: code == selected
-                              ? Aurora.teal
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: code == selected
-                                ? Aurora.teal
-                                : Aurora.glassBorder,
-                          ),
-                        ),
-                        child: Text(
-                          name,
-                          style: TextStyle(
-                            color: code == selected
-                                ? Aurora.tealInk
-                                : Aurora.textPrimary,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ),
-                    ),
+                  Text(
+                    'Connect your glasses to translate',
+                    style: TextStyle(color: Aurora.amber, fontSize: 13.5),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'The translation plays in your ear, so the microphone can '
+                    'keep listening to the room without hearing it. On the '
+                    "phone's speaker it would translate itself, over and over.",
+                    style: TextStyle(
+                        color: Aurora.textMuted, fontSize: 12, height: 1.45),
+                  ),
                 ],
               ),
-            ],
-          ),
+            ),
+          ],
+        ),
+      );
+}
+
+/// Text laid out in the direction its language is actually written.
+///
+/// Arabic, Urdu, Persian, Hebrew and Sindhi all read right-to-left. Left-
+/// aligning them is what made a correct Urdu translation look broken — the
+/// words were right, but the line began on the wrong side and the sentence
+/// ended at the wrong end.
+class _DirectionalText extends StatelessWidget {
+  const _DirectionalText(this.text, {required this.rtl, required this.style});
+
+  final String text;
+  final bool rtl;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: double.infinity,
+        child: Text(
+          text,
+          textDirection: rtl ? TextDirection.rtl : TextDirection.ltr,
+          textAlign: rtl ? TextAlign.right : TextAlign.left,
+          style: style,
         ),
       );
 }

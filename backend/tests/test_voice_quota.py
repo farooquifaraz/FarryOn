@@ -29,7 +29,11 @@ import pytest
 from app.config import get_settings
 from app.db import repo
 from app.db.base import get_sessionmaker
-from app.ws.session import _MIC_BYTES_PER_SECOND, Session
+from app.ws.session import (
+    _MIC_BYTES_PER_SECOND,
+    _USAGE_RETRY_AFTER_S,
+    Session,
+)
 
 _TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -46,6 +50,8 @@ def _session(user_id: int | None = 7) -> Session:
     s._voice_used_s = 0.0
     s._voice_pending_s = 0.0
     s._voice_capped = False
+    # A failed write backs off before retrying, so the meter needs its clock.
+    s._voice_flush_retry_at = 0.0
     s._sent = []
 
     async def _send_error(code, message, fatal=False):  # noqa: ANN001
@@ -181,6 +187,16 @@ async def test_a_failed_write_never_cuts_the_call(cap_of, monkeypatch) -> None:
     assert s._voice_pending_s == 20.0, "unbilled seconds must not be dropped"
 
     monkeypatch.undo()
+    # A failure now backs off before retrying: the seconds stay pending and
+    # ABOVE the flush threshold, so retrying on the next frame would mean a
+    # database round-trip per frame for as long as the outage lasted (one real
+    # session did 2021 of them, device-seen 2026-08-10). So the immediate
+    # retry is expected to do nothing...
+    await s._flush_voice_usage()
+    assert await _usage("u7") == 0, "retried straight into a failing database"
+
+    # ...and the seconds are billed once the backoff has elapsed.
+    s._voice_flush_retry_at -= _USAGE_RETRY_AFTER_S + 1
     await s._flush_voice_usage()
     assert await _usage("u7") == 20
 

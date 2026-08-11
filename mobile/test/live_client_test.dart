@@ -276,6 +276,64 @@ void main() {
       expect(hello['session']['resumeId'], 'sess-1');
     });
 
+    test('a renewed token does not drop the socket', () async {
+      // Token renewal runs every few minutes. Rebuilding the socket for it cost
+      // six reconnects in nine minutes on the S23 (2026-08-11) — each one
+      // landing mid-conversation — because the token rides in the query string
+      // and any config change used to force a reconnect.
+      var connectCount = 0;
+      Uri? dialled;
+      final client = WebSocketLiveClient(
+        config: _config(),
+        platform: 'android',
+        deviceInfoProvider: _device,
+        channelFactory: (uri) {
+          connectCount++;
+          dialled = uri;
+          return FakeChannel();
+        },
+      );
+      addTearDown(client.dispose);
+
+      client.start();
+      await Future<void>.delayed(Duration.zero);
+      expect(connectCount, 1);
+
+      client.updateConfig(_config().copyWith(authToken: 'renewed-token'));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(connectCount, 1, reason: 'a new token is not a new endpoint');
+
+      // It must still be *used*: the next connect has to carry it, or renewal
+      // would be silently pointless and the socket would 403 on reconnect.
+      client.stop();
+      client.start();
+      await Future<void>.delayed(Duration.zero);
+      expect(connectCount, 2);
+      expect(dialled?.queryParameters['token'], 'renewed-token');
+    });
+
+    test('a moved backend does drop the socket', () async {
+      var connectCount = 0;
+      final client = WebSocketLiveClient(
+        config: _config(),
+        platform: 'android',
+        deviceInfoProvider: _device,
+        channelFactory: (_) {
+          connectCount++;
+          return FakeChannel();
+        },
+      );
+      addTearDown(client.dispose);
+
+      client.start();
+      await Future<void>.delayed(Duration.zero);
+      expect(connectCount, 1);
+
+      client.updateConfig(_config().copyWith(host: 'example.test'));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(connectCount, 2, reason: 'a different server has to be dialled');
+    });
+
     test('stop() prevents further reconnects', () async {
       var connectCount = 0;
       FakeChannel? latest;

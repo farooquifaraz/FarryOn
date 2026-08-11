@@ -142,16 +142,29 @@ class WebSocketLiveClient {
   bool _started = false; // user wants to be connected
   bool _disposed = false;
 
-  /// Update the backend target. If currently started, this forces a clean
-  /// reconnect against the new endpoint.
+  /// Update the backend target. If currently started, and the **endpoint**
+  /// actually moved, this forces a clean reconnect against the new one.
+  ///
+  /// A renewed access token is deliberately not an endpoint change. The token
+  /// rides in the query string, so a renewal every few minutes used to drop the
+  /// socket and rebuild it — measured on the S23, 2026-08-11: six reconnects in
+  /// nine minutes, one per renewal, each one landing mid-conversation. The open
+  /// socket was authenticated when it was opened and stays valid; the fresh
+  /// token is only needed by the *next* connect, which now picks it up from the
+  /// stored config.
   void updateConfig(AppConfig config) {
+    final moved = _endpointOf(config) != _endpointOf(_config);
     _config = config;
-    if (_started && !_disposed) {
+    if (_started && !_disposed && moved) {
       _log.info('config updated → reconnecting to ${config.liveUri}');
       _teardownSocket();
       _connect();
     }
   }
+
+  /// The live URI with the token removed — everything a reconnect would be for.
+  static Uri _endpointOf(AppConfig c) =>
+      c.liveUri.replace(queryParameters: const <String, String>{});
 
   /// Begin connecting and keep the connection alive (auto-reconnect) until
   /// [stop] or [dispose] is called. Idempotent.

@@ -6,6 +6,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import '../core/config.dart';
 import '../core/config_store.dart';
 import '../core/data_cache.dart';
+import '../core/jwt.dart';
 import '../core/logger.dart';
 import '../core/outbox.dart';
 import '../data/auth_api.dart';
@@ -98,6 +99,10 @@ class AuthNotifier extends Notifier<AuthState> {
 
   @override
   AuthState build() {
+    ref.onDispose(() {
+      _renewTimer?.cancel();
+      _renewTimer = null;
+    });
     final session = ConfigStore.authSession();
     if (session == null) return const AuthState.signedOut();
 
@@ -160,6 +165,91 @@ class AuthNotifier extends Notifier<AuthState> {
     if (cfg.authToken != accessToken) {
       ref.read(configProvider.notifier).state =
           cfg.copyWith(authToken: accessToken);
+    }
+    _armRenewal(accessToken);
+  }
+
+  // ---- Keeping the access token alive ------------------------------------
+  //
+  // Access tokens live 15 minutes. Until this existed, `refresh` was called
+  // from exactly one place — cold start — so a session simply stopped working
+  // a quarter of an hour in: the WS handshake started coming back 403, the
+  // client reconnected on its 8-second backoff forever with the same dead
+  // token, and the screen went on saying "Listening…" the whole time. Seen on
+  // the S23 on 2026-08-11 while testing translation; it affects the assistant
+  // just the same, and only a full restart cleared it.
+
+  Timer? _renewTimer;
+
+  /// Renew this long before the token actually expires, so a slow network or a
+  /// device that woke up late still lands inside the valid window.
+  static const _renewMargin = Duration(minutes: 3);
+
+  /// Floor on the timer, so a token that is already near expiry (or has a
+  /// lifetime shorter than the margin) schedules a prompt renewal instead of a
+  /// busy loop of immediate ones.
+  static const _minRenewDelay = Duration(seconds: 20);
+
+  void _armRenewal(String accessToken) {
+    _renewTimer?.cancel();
+    _renewTimer = null;
+    final exp = jwtExpiry(accessToken);
+    if (exp == null) return; // unreadable: leave the old behaviour alone
+    final due = exp.subtract(_renewMargin).difference(DateTime.now().toUtc());
+    final delay = due < _minRenewDelay ? _minRenewDelay : due;
+    _renewTimer = Timer(delay, () => unawaited(_renew()));
+  }
+
+  /// Trade the stored refresh token for a fresh pair. Silent by design: a
+  /// failure here must not sign anyone out — the refresh token is good for 30
+  /// days, so a renewal that fails because the network is down should simply
+  /// be tried again, and [ensureFreshToken] will do that on the next resume.
+  Future<void> _renew() async {
+    final session = ConfigStore.authSession();
+    if (session == null) return;
+    final epoch = _sessionEpoch;
+    final outcome = await ref.read(authApiProvider).refresh(session.refresh);
+    if (epoch != _sessionEpoch) return; // signed out while we waited
+
+    if (outcome.invalid) {
+      // The server disowned the session (revoked, or signed out elsewhere).
+      // Staying "signed in" with tokens the server rejects is the state that
+      // produced the endless silent reconnect, so end it honestly.
+      _log.warn('refresh token rejected — signing out');
+      await _clearLocal();
+      return;
+    }
+    final tokens = outcome.tokens;
+    if (tokens == null) {
+      // Unreachable. Retry once the token is nearly out rather than giving up.
+      _renewTimer?.cancel();
+      _renewTimer = Timer(_minRenewDelay, () => unawaited(_renew()));
+      return;
+    }
+    await _persist(
+      () => ConfigStore.saveAuthSession(
+        access: tokens.accessToken,
+        refresh: tokens.refreshToken,
+      ),
+      'Renewing the session',
+    );
+    if (epoch != _sessionEpoch) return;
+    _applyTokenToConfig(tokens.accessToken); // re-arms the timer
+  }
+
+  /// Renew now if the token is spent, and re-arm the timer either way.
+  ///
+  /// Call this when the app comes back to the foreground: [Timer]s do not fire
+  /// reliably while Android has the process frozen, so a phone left in a pocket
+  /// for an hour comes back with a dead token and no pending renewal.
+  Future<void> ensureFreshToken() async {
+    if (!state.isSignedIn) return;
+    final session = ConfigStore.authSession();
+    if (session == null) return;
+    if (jwtExpiresWithin(session.access, _renewMargin)) {
+      await _renew();
+    } else {
+      _armRenewal(session.access);
     }
   }
 
@@ -299,6 +389,10 @@ class AuthNotifier extends Notifier<AuthState> {
     // would write the rotated tokens back, leaving a signed-out user with a
     // live session in the keystore that signs them in again next launch.
     _sessionEpoch++;
+    // The renewal timer is the same hazard on a longer fuse: left armed, it
+    // would refresh a session nobody is signed into and write it back.
+    _renewTimer?.cancel();
+    _renewTimer = null;
 
     // Stop the live session — it outlives the home screen (LiveController is a
     // plain Provider), so sign-out would otherwise leave the mic and a

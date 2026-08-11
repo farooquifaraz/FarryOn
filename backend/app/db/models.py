@@ -651,6 +651,13 @@ class DailyUsage(Base):
     user_key: Mapped[str] = mapped_column(String(64), primary_key=True)
     day: Mapped[str] = mapped_column(String(10), primary_key=True)  # YYYY-MM-DD
     voice_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    # Live translation is metered apart from `voice_seconds` on purpose: that
+    # column is the assistant's allowance, and half an hour of translating a
+    # meeting would empty it, leaving someone unable to talk to Farry because
+    # they listened to a talk.
+    translate_seconds: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     frames_sent: Mapped[int] = mapped_column(Integer, default=0)
     text_turns: Mapped[int] = mapped_column(Integer, default=0)
     web_searches: Mapped[int] = mapped_column(Integer, default=0)

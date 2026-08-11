@@ -5,8 +5,10 @@ import 'dart:typed_data';
 import 'package:farryon/capture/device_registry.dart';
 import 'package:farryon/core/config.dart';
 import 'package:farryon/data/live_client.dart';
+import 'package:farryon/features/glasses_lab/bridge/glasses_channel.dart';
 import 'package:farryon/features/translate/translate_controller.dart';
 import 'package:farryon/features/translate/translate_state.dart';
+import 'package:farryon/playback/voice_audio_mode.dart';
 import 'package:farryon/protocol/frames.dart';
 import 'package:farryon/protocol/messages.dart';
 import 'package:farryon/protocol/protocol.dart';
@@ -27,6 +29,48 @@ class _GrantingPermissions implements PermissionsService {
   @override
   Future<PermissionOutcome> requestMicrophone() async =>
       PermissionOutcome.granted;
+}
+
+/// Only the event stream is used — the translate session never drives the
+/// glasses, it just needs to hear them drop.
+class _FakeGlasses implements GlassesBridgeApi {
+  final controller = StreamController<GlassesLabEvent>.broadcast();
+
+  void emit(String type, Map<String, Object?> data) =>
+      controller.add(GlassesLabEvent(type: type, data: data));
+
+  @override
+  Stream<GlassesLabEvent> events() => controller.stream;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('the translate session must not drive the glasses');
+}
+
+/// Stands in for the platform audio-route switch. `route` is what the OS
+/// would answer: `applied` (voice path taken, echo canceller has its
+/// reference), `skipped_external_route` (already on a headset), or
+/// `unavailable`.
+class _FakeVoiceAudioMode implements VoiceAudioMode {
+  _FakeVoiceAudioMode(this.route);
+  final String route;
+  int enters = 0;
+  int exits = 0;
+
+  @override
+  Future<String> enter() async {
+    enters++;
+    return route;
+  }
+
+  @override
+  Future<void> exit() async => exits++;
+
+  @override
+  bool get isActive => route == 'applied';
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
 }
 
 class _DenyingPermissions extends _GrantingPermissions {
@@ -58,12 +102,18 @@ void main() {
         channelFactory: (_) => fake,
       );
 
-  TranslateController build({PermissionsService? permissions}) =>
+  TranslateController build({
+    PermissionsService? permissions,
+    VoiceAudioMode? voiceAudioMode,
+  }) =>
       TranslateController(
         config: const AppConfig(host: 'h', port: 8000, secure: false),
         registry: registry,
         player: player,
         permissions: permissions ?? _GrantingPermissions(),
+        // Default: the platform could not switch paths, so the echo canceller
+        // has no reference and the hold is the only defence left.
+        voiceAudioMode: voiceAudioMode ?? _FakeVoiceAudioMode('unavailable'),
         clientFactory: factory,
       );
 
@@ -92,7 +142,15 @@ void main() {
       ];
 
   /// Bring a session up to `listening`.
+  ///
+  /// Primes the glasses as connected: live translation refuses to start
+  /// without them, because the translation has to play somewhere the listening
+  /// microphone cannot hear it.
   Future<void> connect({String target = 'hi'}) async {
+    controller.primeFromConfig(
+      const AppConfig(host: 'h', port: 8000, secure: false),
+      glassesConnected: true,
+    );
     await controller.setTargetLanguage(target);
     await controller.start();
     await pump();
@@ -150,6 +208,10 @@ void main() {
     });
 
     test('opens the microphone only once the server is ready', () async {
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: true,
+      );
       await controller.setTargetLanguage('hi');
       await controller.start();
       await pump();
@@ -236,11 +298,13 @@ void main() {
   });
 
   group('audio', () {
-    test('every mic chunk goes up — no gate, no echo guard', () async {
+    test('every mic chunk goes up — no energy gate', () async {
       await connect();
-      // The assistant mutes its mic while the speaker is busy. A translator
-      // must not: the room keeps talking over the translation.
-      player.playing = true;
+      // No GATE: quiet speech from across a room is exactly who a translator
+      // exists to hear, so nothing is judged on loudness. (The echo guard is a
+      // separate thing and has its own group below — it withholds only while
+      // OUR audio is playing, which device testing proved is not optional.)
+      player.playing = false;
       source.audioCtl.add(Uint8List.fromList([1, 2, 3, 4]));
       source.audioCtl.add(Uint8List.fromList([5, 6, 7, 8]));
       await pump();
@@ -294,6 +358,10 @@ void main() {
         () async {
       // A server without translate support would hand back the assistant.
       // Presenting its answers as translations is the worst possible failure.
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: true,
+      );
       await controller.setTargetLanguage('hi');
       await controller.start();
       await pump();
@@ -306,6 +374,263 @@ void main() {
       await pump();
       expect(controller.state.error, isNotNull);
       expect(controller.state.status, isNot(TranslateStatus.listening));
+    });
+  });
+
+  group('the microphone going away mid-session', () {
+    test('a stream that ends is reported, not ignored', () async {
+      // This is the shape a phone call takes: Android hands the mic to the
+      // dialer and the capture stream simply stops. A screen that keeps saying
+      // "Listening" to a mic it no longer has is the worst outcome.
+      await connect();
+      expect(controller.state.status, TranslateStatus.listening);
+
+      await source.audioCtl.close();
+      await pump(5);
+
+      expect(controller.state.error, contains('microphone stopped'));
+      expect(controller.state.isRunning, isFalse);
+    });
+
+    test('a stream that errors is reported too', () async {
+      await connect();
+      source.audioCtl.addError(StateError('mic seized'));
+      await pump(5);
+      expect(controller.state.error, isNotNull);
+      expect(controller.state.isRunning, isFalse);
+    });
+  });
+
+  group('quota messages', () {
+    test('a warning is a notice, not an error', () async {
+      // "10 minutes left" painted in failure-red teaches people to skip both
+      // that and the message that actually ends the session.
+      await connect();
+      fake.pushJson({
+        'type': 'error',
+        'code': 'quota_warning',
+        'message': 'About 5 minutes of translation left today.',
+        'fatal': false,
+      });
+      await pump();
+      expect(controller.state.notice, contains('5 minutes'));
+      expect(controller.state.error, isNull);
+      expect(controller.state.isRunning, isTrue,
+          reason: 'a warning must not end the session');
+    });
+
+    test('running out ends the session with the reason on screen', () async {
+      await connect();
+      fake.pushJson({
+        'type': 'error',
+        'code': 'quota_exceeded',
+        'message': "You've used today's 5 minutes of live translation.",
+        'fatal': true,
+      });
+      await pump(4);
+      expect(controller.state.error, contains('5 minutes'));
+      expect(controller.state.isRunning, isFalse);
+      expect(source.audioStarted, isFalse, reason: 'the mic must be released');
+    });
+  });
+
+  group('the glasses', () {
+    late _FakeGlasses glasses;
+
+    setUp(() async {
+      glasses = _FakeGlasses();
+      await controller.dispose();
+      controller = TranslateController(
+        config: const AppConfig(host: 'h', port: 8000, secure: false),
+        registry: registry,
+        player: player,
+        permissions: _GrantingPermissions(),
+        glasses: glasses,
+        voiceAudioMode: _FakeVoiceAudioMode('skipped_external_route'),
+        clientFactory: factory,
+      );
+    });
+
+    tearDown(() async {
+      await glasses.controller.close();
+    });
+
+    test('without them it refuses to start, and says why', () async {
+      // Not an arbitrary lock. On the phone's speaker the translation loops
+      // back into the microphone listening to the room.
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: false,
+      );
+      final ok = await controller.start();
+
+      expect(ok, isFalse);
+      expect(controller.state.error, contains('glasses'));
+      expect(controller.state.error, contains('loops'),
+          reason: 'saying no without the reason reads as an arbitrary lock');
+      expect(fake.sentLog, isEmpty, reason: 'no socket should be opened');
+    });
+
+    test('connecting them mid-refusal makes it startable', () async {
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: false,
+      );
+      expect(await controller.start(), isFalse);
+
+      // The bridge reports them arriving.
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: true,
+      );
+      expect(await controller.start(), isTrue);
+    });
+
+    test('losing them mid-session ends it rather than falling back', () async {
+      // Carrying on would put the translation back on the loudspeaker and
+      // straight into the microphone — the loop this feature exists to avoid.
+      await connect();
+      expect(controller.state.isRunning, isTrue);
+
+      glasses.emit('connectionState', {'state': 'disconnected'});
+      await pump(5);
+
+      expect(controller.state.isRunning, isFalse);
+      expect(controller.state.error, contains('glasses'));
+      expect(source.audioStarted, isFalse, reason: 'the mic must be released');
+    });
+  });
+
+  group('the feedback loop', () {
+    /// Device-proven 2026-08-10: one English sentence came back as FOURTEEN
+    /// translations, each the previous one looping in through the microphone
+    /// at speaker volume. The platform AEC was not enough, and
+    /// `echoTargetLanguage: false` did not catch a reverberated copy either.
+    Iterable<Uint8List> audioFramesSent() =>
+        fake.sentLog.whereType<Uint8List>().where(
+              (b) => MediaFrame.decode(b).tag == FrameTag.inputAudio,
+            );
+
+    test('the mic is withheld while our own audio is playing', () async {
+      await connect();
+      player.playing = true; // the translation is coming out of the speaker
+      source.audioCtl.add(Uint8List.fromList([1, 2, 3, 4]));
+      source.audioCtl.add(Uint8List.fromList([5, 6, 7, 8]));
+      await pump();
+      expect(audioFramesSent(), isEmpty,
+          reason: 'our own output was sent back up to be re-translated');
+    });
+
+    test('the mic returns the moment playback ends', () async {
+      await connect();
+      player.playing = true;
+      source.audioCtl.add(Uint8List.fromList([1, 2, 3, 4]));
+      await pump();
+      expect(audioFramesSent(), isEmpty);
+
+      player.playing = false;
+      source.audioCtl.add(Uint8List.fromList([5, 6, 7, 8]));
+      await pump();
+      expect(audioFramesSent(), hasLength(1),
+          reason: 'the room must be heard again as soon as we stop speaking');
+    });
+
+    test('captions-only never withholds — nothing is playing', () async {
+      await connect();
+      controller.setCaptionsOnly(true);
+      player.playing = true; // stale flag; captions-only feeds no audio
+      source.audioCtl.add(Uint8List.fromList([1, 2, 3, 4]));
+      await pump();
+      expect(audioFramesSent(), hasLength(1));
+    });
+
+    test('a mic that is held is still a LIVE mic', () async {
+      // The watchdog must not mistake a long translation for a dead
+      // microphone and end the session mid-sentence.
+      await connect();
+      player.playing = true;
+      for (var i = 0; i < 5; i++) {
+        source.audioCtl.add(Uint8List.fromList([1, 2, 3, 4]));
+      }
+      await pump();
+      expect(controller.state.isRunning, isTrue);
+      expect(controller.state.error, isNull);
+    });
+  });
+
+  group('the audio route', () {
+    /// The bug behind the loop: the session played the translation on the
+    /// MEDIA path, where the platform echo canceller has no reference signal
+    /// to subtract. `voice_audio_mode.dart` exists for exactly this and the
+    /// assistant has used it since August; this screen forgot to switch it on.
+    test('the voice path is claimed before anything plays', () async {
+      final voice = _FakeVoiceAudioMode('applied');
+      await controller.dispose();
+      controller = build(voiceAudioMode: voice);
+      await connect();
+      expect(voice.enters, 1);
+    });
+
+    test('and given back when the session stops', () async {
+      final voice = _FakeVoiceAudioMode('applied');
+      await controller.dispose();
+      controller = build(voiceAudioMode: voice);
+      await connect();
+      await controller.stop();
+      expect(voice.exits, greaterThanOrEqualTo(1));
+    });
+
+    test('the canceller alone does NOT earn the mic back', () async {
+      // Tried and disproved on device. With the voice path claimed and the
+      // hold removed, the loop returned immediately — the "heard" pane filled
+      // with our own Hindi, labelled English. At loudspeaker volume the
+      // platform canceller does not get close enough, so claiming the voice
+      // path is a help, not a substitute.
+      final voice = _FakeVoiceAudioMode('applied');
+      await controller.dispose();
+      controller = build(voiceAudioMode: voice);
+      await connect();
+
+      player.playing = true;
+      source.audioCtl.add(Uint8List.fromList([1, 2, 3, 4]));
+      await pump();
+      final sent = fake.sentLog.whereType<Uint8List>().where(
+            (b) => MediaFrame.decode(b).tag == FrameTag.inputAudio,
+          );
+      expect(sent, isEmpty,
+          reason: 'on the loudspeaker the mic must still be held');
+    });
+
+    test('the speaker route warns that speech will be missed', () async {
+      // Fragments on continuous speech read as a broken feature unless the
+      // user was told why.
+      final voice = _FakeVoiceAudioMode('applied');
+      await controller.dispose();
+      controller = build(voiceAudioMode: voice);
+      await connect();
+      expect(controller.state.notice, contains('phone speaker'));
+    });
+
+    test('on a headset the mic is not withheld either', () async {
+      // The platform declines to switch paths when sound already goes to a
+      // headset or the glasses — which is also when there is no acoustic path
+      // back into the microphone at all.
+      final voice = _FakeVoiceAudioMode('skipped_external_route');
+      await controller.dispose();
+      controller = build(voiceAudioMode: voice);
+      await connect();
+
+      player.playing = true;
+      source.audioCtl.add(Uint8List.fromList([1, 2, 3, 4]));
+      await pump();
+      expect(
+        fake.sentLog.whereType<Uint8List>().where(
+              (b) => MediaFrame.decode(b).tag == FrameTag.inputAudio,
+            ),
+        hasLength(1),
+      );
+      expect(controller.state.notice, isNull,
+          reason: 'on a headset nothing is missed, so say nothing');
     });
   });
 }
