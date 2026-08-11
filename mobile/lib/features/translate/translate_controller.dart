@@ -64,12 +64,14 @@ class TranslateController {
     VoiceAudioMode? voiceAudioMode,
     WebSocketLiveClient Function(AppConfig, TranslateSessionConfig, DeviceInfo Function())?
         clientFactory,
+    Duration? glassesGraceWindow,
   })  : _config = config,
         _voiceAudioMode = voiceAudioMode ?? VoiceAudioMode(),
         _registry = registry,
         _player = player,
         _permissions = permissions,
         _glasses = glasses,
+        _glassesGraceWindow = glassesGraceWindow ?? _defaultGlassesGrace,
         _clientFactory = clientFactory ?? _defaultClientFactory;
 
   static final _log = Logger('TranslateController');
@@ -130,6 +132,18 @@ class TranslateController {
   StreamSubscription<ConnectionStatus>? _statusSub;
   StreamSubscription<Uint8List>? _audioSub;
   StreamSubscription<GlassesLabEvent>? _glassesSub;
+
+  /// Running while the glasses are away and might still come back.
+  Timer? _glassesGrace;
+
+  /// How long a glasses drop is treated as a blip rather than the end.
+  ///
+  /// The observed reconnect took eleven seconds. Thirty gives that room twice
+  /// over without leaving someone staring at a held session for a minute when
+  /// the glasses are genuinely off. Injectable only so a test need not sit
+  /// through it.
+  static const Duration _defaultGlassesGrace = Duration(seconds: 30);
+  final Duration _glassesGraceWindow;
   CaptureSource? _audioSource;
   Timer? _micWatchdog;
   DateTime? _lastChunkAt;
@@ -262,6 +276,10 @@ class TranslateController {
 
   /// Stop translating and release the microphone.
   Future<void> stop() async {
+    // Cancel first: a pending grace timer would otherwise fire into a session
+    // that has already ended and paint a "glasses disconnected" error over it.
+    _glassesGrace?.cancel();
+    _glassesGrace = null;
     if (!_state.isRunning && _client == null) return;
     await _stopAudio();
     await _teardownSocket();
@@ -473,17 +491,61 @@ class TranslateController {
       // move the sound into the wearer's ear, glasses leaving bring it back to
       // the phone's speaker and the echo path with it.
       _outputIsInEar = connected;
-      if (connected) return;
       if (!_state.isRunning) return;
-      // Losing the glasses mid-session ends it. Carrying on would put the
-      // translation back on the loudspeaker and straight into the microphone
-      // it is listening with — the loop this feature is built to avoid.
+      if (connected) {
+        _onGlassesReturned();
+        return;
+      }
+      _onGlassesLost();
+    });
+  }
+
+  /// The glasses went away mid-session — wait a little before giving up.
+  ///
+  /// They come back on their own. Measured on the S23 (2026-08-11):
+  /// `disconnected` at 18:18:34, `connected` again at 18:18:45 — **eleven
+  /// seconds** — and the session had already ended for good. A blip like that
+  /// is ordinary when someone walks between rooms, and ending a conversation
+  /// over it is not something the wearer can do anything about.
+  ///
+  /// The microphone is released for the duration and nothing is played. That
+  /// is not politeness: with the glasses gone the sound would come out of the
+  /// loudspeaker, into the microphone it is listening with, and back around —
+  /// the loop this feature exists to avoid. So the session is *held*, not
+  /// continued.
+  void _onGlassesLost() {
+    if (_glassesGrace != null) return; // already waiting
+    unawaited(_stopAudio());
+    unawaited(_player.flush());
+    _emit(_state.copyWith(
+      status: TranslateStatus.reconnecting,
+      notice: 'The glasses dropped. Waiting for them to come back…',
+    ));
+    _glassesGrace = Timer(_glassesGraceWindow, () {
+      _glassesGrace = null;
+      if (!_state.isRunning && _state.status != TranslateStatus.reconnecting) {
+        return;
+      }
       _emit(_state.copyWith(
         error: 'The glasses disconnected, so translation stopped. '
             'Reconnect them and start again.',
+        clearNotice: true,
       ));
       unawaited(stop());
     });
+  }
+
+  /// They came back inside the window: pick up where the conversation was.
+  void _onGlassesReturned() {
+    final waiting = _glassesGrace;
+    if (waiting == null) return;
+    waiting.cancel();
+    _glassesGrace = null;
+    _emit(_state.copyWith(
+      status: TranslateStatus.listening,
+      clearNotice: true,
+    ));
+    unawaited(_startAudio());
   }
 
 
@@ -572,6 +634,8 @@ class TranslateController {
 
   Future<void> dispose() async {
     _disposed = true;
+    _glassesGrace?.cancel();
+    _glassesGrace = null;
     await _glassesSub?.cancel();
     _glassesSub = null;
     await _stopAudio();
