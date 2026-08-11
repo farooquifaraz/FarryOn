@@ -591,3 +591,52 @@ worth knowing before someone reports it as one.
 All three need only `GEMINI_API_KEY`.
 The rules they established are pinned in
 `backend/tests/test_gemini_translate_adapter.py`, which needs no key.
+
+### 6. Detection is fine over the wire and unreliable over the air
+
+Faraz played an Arabic clip and the first cards came back labelled ENGLISH,
+carrying fluent English prose. Five probes against Arabic alone could not
+reproduce it, so the net was widened — 2026-08-11, S23 Ultra + L802.
+
+**Feeding the audio straight to the model (no phone in the loop): 7/8 right.**
+
+| ar | hi | ur | es | fr | zh | ja | ru |
+|----|----|----|----|----|----|----|----|
+| ok | ok | **said `hi`** | ok | ok | ok | ok | ok |
+
+Urdu reported as Hindi, transcribed in Devanagari. Spoken Hindi and Urdu are
+near-identical, so this is close to unfixable and the *translation* was still
+correct — only the label and the script were wrong.
+
+**Same clips played into the phone's microphone: 4/7 right.**
+
+| played | reported | what the "heard" pane showed |
+|---|---|---|
+| Arabic | `ar` | Arabic ✓ |
+| Spanish | `es` | Spanish ✓ |
+| French | `fr` | French ✓ |
+| Chinese | `zh` | Chinese ✓ |
+| Japanese | `ja` | Japanese ✓ |
+| **Russian** | **`ja`** | fluent **Japanese**, correct meaning |
+| **Urdu** | **`en`** | fluent **English**, correct meaning |
+
+The Russian and Urdu rows are the answer to Faraz's report. The model did not
+mis-*hear*; it put a **translation into a third language** in the input
+transcription slot. Nothing was garbled — the text was well-formed Japanese and
+well-formed English that meant what was actually said.
+
+Two things follow:
+
+* **The translation itself was right in all 17 utterances across both runs.**
+  The feature works; it is the "heard" pane that occasionally lies. Presenting
+  it as authoritative is a product decision worth revisiting.
+* The wire is not the phone. Anything measured by feeding a WAV to the gateway
+  is a **best case** — the room, the speaker, the phone's AEC and the glasses
+  playing the previous translation all sit between the speaker and the model.
+  Future language QA has to go through a microphone or it proves nothing.
+
+`scratchpad/probe_multilang.py` runs the wire half (it also *makes* the audio:
+the model is the only speaker of these languages on the machine). The over-the-
+air half is a laptop speaker, the phone, and `gemini_translate.utterance` in the
+backend log — which now records the detected language, and did not before, which
+is why this needed an experiment rather than a log read.

@@ -141,11 +141,34 @@ const List<TranslateLanguage> kTranslateLanguages = [
   TranslateLanguage('zu', 'Zulu', 'isiZulu'),
 ];
 
+/// Names for the base codes this list only carries *variants* of.
+///
+/// The list above answers "what can I translate INTO", so it splits Chinese and
+/// Portuguese into the variants the model accepts as a target. Detection asks
+/// the opposite question and answers with a bare `zh` / `pt`, which matched no
+/// row and rendered on screen as the literal string "ZH" beside perfectly good
+/// Chinese — device-seen 2026-08-11. Naming the base explicitly is more honest
+/// than picking a variant: the model said "Chinese", not "Simplified Chinese".
+const Map<String, String> _kBaseNames = {
+  'zh': '中文',
+  'pt': 'Português',
+};
+
 /// Native name for a code, falling back to the code itself so an unknown one
 /// shows as something rather than as a blank.
+///
+/// Accepts detected codes as well as target codes, so `zh` and `en-US` both
+/// resolve. [isRtlLanguage] has always folded region subtags this way; this
+/// only brings the name lookup into line with it.
 String translateLanguageName(String code) {
   for (final l in kTranslateLanguages) {
     if (l.code == code) return l.native;
+  }
+  final base = code.split('-').first.toLowerCase();
+  final named = _kBaseNames[base];
+  if (named != null) return named;
+  for (final l in kTranslateLanguages) {
+    if (l.code.split('-').first.toLowerCase() == base) return l.native;
   }
   return code;
 }

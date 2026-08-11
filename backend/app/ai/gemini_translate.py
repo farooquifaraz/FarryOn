@@ -432,6 +432,19 @@ class GeminiTranslateGateway(AIGateway):
                     lang=self.target_language,
                 )
             )
+        if heard or translated:
+            # The LANGUAGE, never the words. A question like "why did it say my
+            # Arabic was English?" cannot be answered from a log that records
+            # neither — and a language code is not content, so recording it
+            # costs the speaker nothing. Lengths are there to tell a real
+            # utterance from a stray fragment without quoting either.
+            logger.info(
+                "gemini_translate.utterance",
+                heard_lang=heard_lang,
+                target=self.target_language,
+                heard_chars=len(heard),
+                translated_chars=len(translated),
+            )
         if turn_complete:
             await self._queue.put(TurnCompleteEvent())
 

@@ -93,4 +93,37 @@ void main() {
       expect(isRtlLanguage('xx'), isFalse);
     });
   });
+
+  group('naming a DETECTED language', () {
+    // The list answers "what can I translate INTO", so it splits Chinese and
+    // Portuguese into variants. Detection answers the opposite question with a
+    // bare code, which matched nothing and put the literal string "ZH" on
+    // screen next to perfectly good Chinese — device-seen 2026-08-11.
+    test('a bare code for a language the list only has variants of', () {
+      expect(translateLanguageName('zh'), '中文');
+      expect(translateLanguageName('pt'), 'Português');
+    });
+
+    test('the variants themselves still name themselves', () {
+      expect(translateLanguageName('zh-Hans'), '简体中文');
+      expect(translateLanguageName('zh-Hant'), '繁體中文');
+      expect(translateLanguageName('pt-BR'), 'Português (Brasil)');
+    });
+
+    test('a region subtag falls back to the base language', () {
+      // Nothing in the list is keyed `en-US`, but a detector may well say it.
+      expect(translateLanguageName('en-US'), translateLanguageName('en'));
+      expect(translateLanguageName('ar-EG'), translateLanguageName('ar'));
+    });
+
+    test('plain codes are unaffected', () {
+      expect(translateLanguageName('hi'), 'हिन्दी');
+      expect(translateLanguageName('ja'), '日本語');
+      expect(translateLanguageName('ru'), 'Русский');
+    });
+
+    test('a code nobody knows shows as itself rather than as a blank', () {
+      expect(translateLanguageName('xx'), 'xx');
+    });
+  });
 }

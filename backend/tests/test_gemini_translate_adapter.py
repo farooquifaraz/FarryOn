@@ -314,3 +314,84 @@ class TestWhenAnUtteranceIsFinished:
         gw = _gw()
         await gw._handle_message(_msg(heard="First of all,", heard_lang="en"))
         assert gw._gap_needed() == _UTTERANCE_GAP_S
+
+class _LogRecorder:
+    """Stands in for a structlog logger and keeps what it was handed.
+
+    Accepts any level, because the point is to see EVERYTHING the module writes
+    while a translation is in flight — a privacy assertion that only inspected
+    ``info`` would miss a stray ``warning`` carrying the same words.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def _record(self, event: str, **fields: object) -> None:
+        self.calls.append((event, fields))
+
+    debug = info = warning = error = exception = critical = _record
+
+    def by_event(self, event: str) -> list[dict]:
+        return [fields for name, fields in self.calls if name == event]
+
+    def everything_written(self) -> str:
+        """Event names and every field value, as one searchable string."""
+        return " ".join(
+            [name for name, _ in self.calls]
+            + [str(v) for _, fields in self.calls for v in fields.values()]
+        )
+
+
+class TestWhatTheLogsCanAnswer:
+    """A language question must be answerable without recording the words.
+
+    Faraz asked why Arabic came back labelled English. The server logs held
+    every timing and no language at all, so the only way to answer was to
+    reproduce it against the model. A language code is not content — the
+    speaker gives nothing away by having it written down — and it is exactly
+    the field that settles the question.
+    """
+
+    # Both tests stand in for the module's own logger rather than reading
+    # stdout. ``configure_logging`` sets ``cache_logger_on_first_use=True``, so
+    # once anything in the suite has started the app the module logger is frozen
+    # with a JSON renderer and the stream it was built on — neither ``capsys``
+    # nor ``structlog.testing.capture_logs`` can reach it after that. These two
+    # went green alone and red in the full suite until this was understood.
+    # Recording the call is also the more honest assertion: what matters is the
+    # fields we hand the logger, not how they are rendered today.
+
+    async def test_the_detected_language_is_logged(self, monkeypatch) -> None:
+        rec = _LogRecorder()
+        monkeypatch.setattr("app.ai.gemini_translate.logger", rec)
+        gw = _gw()
+        await gw._handle_message(_msg(heard="Bonjour tout le monde.", heard_lang="fr"))
+        await gw._handle_message(
+            _msg(translated="सभी को नमस्ते।", translated_lang="hi")
+        )
+        await gw._finalize(turn_complete=True)
+
+        said = rec.by_event("gemini_translate.utterance")
+        assert said, "no utterance record logged"
+        assert said[0]["heard_lang"] == "fr", "the detected language was not recorded"
+        assert said[0]["target"] == "hi"
+
+    async def test_the_words_themselves_are_never_logged(self, monkeypatch) -> None:
+        rec = _LogRecorder()
+        monkeypatch.setattr("app.ai.gemini_translate.logger", rec)
+        gw = _gw()
+        await gw._handle_message(
+            _msg(heard="my card number is four one one one", heard_lang="en")
+        )
+        await gw._handle_message(
+            _msg(translated="मेरा कार्ड नंबर चार एक एक एक है", translated_lang="hi")
+        )
+        await gw._finalize(turn_complete=True)
+
+        assert rec.by_event("gemini_translate.utterance"), "nothing was logged at all"
+        # Every field of every record, not just the ones we expect: a translator
+        # is pointed at other people's conversations, and they never agreed to
+        # anything.
+        written = rec.everything_written()
+        assert "card number" not in written, "heard content reached the log"
+        assert "कार्ड" not in written, "translated content reached the log"
