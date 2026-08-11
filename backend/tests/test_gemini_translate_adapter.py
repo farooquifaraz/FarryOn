@@ -28,6 +28,7 @@ import pytest
 
 from app.ai.events import EventType
 from app.ai.gemini_translate import (
+    _MAX_REOPENS,
     _SENTENCE_GAP_S,
     _SILENCE_GRACE_CHUNKS,
     _UTTERANCE_GAP_S,
@@ -395,3 +396,191 @@ class TestWhatTheLogsCanAnswer:
         written = rec.everything_written()
         assert "card number" not in written, "heard content reached the log"
         assert "कार्ड" not in written, "translated content reached the log"
+
+
+class _ScriptedUpstream:
+    """A ``receive()`` that plays one scripted batch per socket.
+
+    The real client re-enters ``receive()`` after every turn, so each call
+    returns a fresh generator — the same shape, minus the network.
+    """
+
+    def __init__(self, batch: list) -> None:
+        self._batch = batch
+
+    def receive(self):
+        batch, self._batch = self._batch, []
+
+        async def gen():
+            for message in batch:
+                yield message
+
+        return gen()
+
+
+def _goaway() -> SimpleNamespace:
+    """What the Live API sends shortly before it hangs up."""
+    return SimpleNamespace(go_away=SimpleNamespace(time_left="10s"))
+
+
+class TestTheSocketDoesNotLastTheConversation:
+    """The Live API caps how long one upstream socket may live.
+
+    It sends a GoAway first and expects the client to reconnect. We did not
+    know the word, so at about ten minutes the upstream hung up and its raw
+    protocol error was handed to the phone as fatal — the user read
+    *"1008 None. Connection aborted because the client failed to close the
+    connection after receiving a GoAway signal once the session durat"*, cut
+    off mid-word (S23, 2026-08-11, 9m43s into a session).
+
+    Ten minutes does not cover a conversation, a meeting, or an appointment.
+    """
+
+    def _wire(self, gw, monkeypatch, scripts: list[list]) -> dict:
+        """Give `gw` a sequence of scripted sockets; stop when they run out."""
+        state = {"opened": 0}
+
+        async def fake_open() -> None:
+            if state["opened"] >= len(scripts):
+                gw._closed = True  # nothing left to play; let the loop finish
+                gw._session = _ScriptedUpstream([])
+                return
+            gw._session = _ScriptedUpstream(list(scripts[state["opened"]]))
+            state["opened"] += 1
+
+        monkeypatch.setattr(gw, "_open_upstream", fake_open)
+        return state
+
+    async def test_a_goaway_rolls_the_socket_over_and_carries_on(
+        self, monkeypatch
+    ) -> None:
+        gw = _gw()
+        state = self._wire(
+            gw,
+            monkeypatch,
+            [
+                [_msg(heard="Buenos días.", heard_lang="es"), _goaway()],
+                [_msg(heard="La reunión empieza.", heard_lang="es")],
+            ],
+        )
+        await gw._open_upstream()
+        await gw._receive_loop()
+
+        assert state["opened"] >= 2, "the socket was never replaced"
+        errors = [e for e in await _drain(gw) if e is not None
+                  and e.type == EventType.ERROR]
+        assert not errors, "a rollover is not something the user should hear about"
+
+    async def test_the_words_in_flight_survive_the_rollover(
+        self, monkeypatch
+    ) -> None:
+        gw = _gw()
+        self._wire(gw, monkeypatch, [[_msg(heard="Buenos días.", heard_lang="es"),
+                                      _goaway()]])
+        await gw._open_upstream()
+        await gw._receive_loop()
+
+        finals = [
+            e for e in await _drain(gw)
+            if e is not None and e.type == EventType.TRANSCRIPT and e.final
+        ]
+        assert finals, "the last thing said was dropped when the socket rolled"
+        assert finals[-1].text == "Buenos días."
+
+    async def test_the_upstreams_own_words_never_reach_the_user(
+        self, monkeypatch
+    ) -> None:
+        gw = _gw()
+
+        class _Exploding:
+            def receive(self):
+                async def gen():
+                    raise RuntimeError(
+                        "1008 None. Connection aborted because the client "
+                        "failed to close the connection after receiving a "
+                        "GoAway signal once the session durat"
+                    )
+                    yield  # pragma: no cover - unreachable, keeps it a generator
+
+                return gen()
+
+        async def fake_open() -> None:
+            gw._session = _Exploding()
+
+        monkeypatch.setattr(gw, "_open_upstream", fake_open)
+        await gw._open_upstream()
+        await gw._receive_loop()
+
+        errors = [e for e in await _drain(gw) if e is not None
+                  and e.type == EventType.ERROR]
+        assert errors, "giving up silently is worse than saying so"
+        said = errors[-1].message
+        assert "GoAway" not in said and "1008" not in said, (
+            f"raw upstream text reached the user: {said!r}"
+        )
+        assert said.endswith("."), "and it was cut off mid-word"
+
+    async def test_it_stops_reopening_rather_than_billing_forever(
+        self, monkeypatch
+    ) -> None:
+        # A socket that dies the instant it opens is not a long conversation.
+        gw = _gw()
+        opens = {"n": 0}
+
+        async def fake_open() -> None:
+            opens["n"] += 1
+            gw._session = _ScriptedUpstream([])
+
+        monkeypatch.setattr(gw, "_open_upstream", fake_open)
+        await gw._open_upstream()
+        await gw._receive_loop()
+
+        assert opens["n"] <= _MAX_REOPENS + 2, (
+            f"reopened {opens['n']} times — that is a billing loop"
+        )
+        errors = [e for e in await _drain(gw) if e is not None
+                  and e.type == EventType.ERROR]
+        assert errors and errors[-1].fatal
+
+
+class TestTellingItWhatItIsHearing:
+    """`language_hints` — a lever that exists, was never pulled, and does not
+    help.
+
+    The model appears to route through English whenever the target is not
+    English: one Arabic paragraph through a phone microphone came back labelled
+    ENGLISH, phonetically garbled into English words ("the movie you know, the
+    one that ends on Saturday"), and the Hindi was translated from *that*.
+    The same audio with `target=en` was correct Arabic and an accurate
+    translation.
+
+    `AudioTranscriptionConfig` accepts hints and we passed none, so the obvious
+    cheap fix was to say "this is Arabic". It was tried on the S23 on
+    2026-08-11: the hint reached the wire and the first utterance came back
+    labelled English and garbled anyway.
+
+    The plumbing is kept — it is correct, it costs nothing switched off, and it
+    is one env var away when a future model revision honours it. These tests
+    pin what we send, which is the part we control. They do NOT claim the hint
+    works; it does not.
+    """
+
+    def test_by_default_we_say_nothing_and_let_it_detect(self) -> None:
+        gw = _gw()
+        assert gw.language_hints == []
+        cfg = gw._build_config()
+        assert cfg.input_audio_transcription.language_hints is None
+
+    def test_a_hint_reaches_the_wire_when_one_is_configured(self) -> None:
+        gw = GeminiTranslateGateway(target_language="hi", language_hints=["ar"])
+        cfg = gw._build_config()
+        hints = cfg.input_audio_transcription.language_hints
+        assert hints is not None, "the hint was dropped on the floor"
+        assert list(hints.language_codes) == ["ar"]
+
+    def test_hints_and_auto_detection_are_never_sent_together(self) -> None:
+        # The API rejects both at once; sending them would fail the connect and
+        # surface as "translation is unavailable" with no clue why.
+        gw = GeminiTranslateGateway(target_language="hi", language_hints=["ar"])
+        in_tx = gw._build_config().input_audio_transcription
+        assert in_tx.language_auto is None
