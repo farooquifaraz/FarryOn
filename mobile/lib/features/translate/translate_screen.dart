@@ -11,6 +11,7 @@ import 'translate_language_picker.dart';
 import 'translate_languages.dart';
 import 'translate_providers.dart';
 import 'translate_state.dart';
+import 'translate_transcript.dart';
 
 /// Live translation: hear a room in one language, read and hear it in yours.
 ///
@@ -33,6 +34,9 @@ class TranslateScreen extends ConsumerStatefulWidget {
 class _TranslateScreenState extends ConsumerState<TranslateScreen> {
   Timer? _clock;
   bool _wasLiveConnected = false;
+
+  /// A save is in flight — the button waits rather than firing twice.
+  bool _saving = false;
 
   // Captured EAGERLY in initState, never with a lazy `late` initializer.
   //
@@ -121,6 +125,35 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
     return picked;
   }
 
+  /// Keep the conversation so far, as a note in Your stuff.
+  ///
+  /// Not automatic and not on exit: the transcript belongs to whoever was
+  /// speaking, and saving it is a decision. Failures are reported inline —
+  /// telling someone their conversation was saved when it was not is worse
+  /// than telling them it failed.
+  Future<void> _save() async {
+    final s = ref.read(translateProvider);
+    final body = renderTranslationNote(
+      turns: s.turns,
+      targetLanguage: s.targetLanguage,
+      at: DateTime.now(),
+    );
+    setState(() => _saving = true);
+    String? problem;
+    try {
+      await ref.read(dataApiProvider).createNote(body);
+    } catch (e) {
+      problem = 'Could not save it — $e';
+    }
+    if (!mounted) return;
+    setState(() => _saving = false);
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text(problem ?? 'Saved to your notes.'),
+      ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(translateProvider);
@@ -137,6 +170,23 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
             style: TextStyle(color: Aurora.textPrimary, fontSize: 17)),
         iconTheme: const IconThemeData(color: Aurora.textPrimary),
         actions: [
+          // Saving is deliberately a tap, never automatic. A translator is
+          // pointed at other people's conversations; keeping one is the user's
+          // decision to make, once, and not the default.
+          if (hasSomethingToSave(s.turns))
+            IconButton(
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Aurora.mint),
+                    )
+                  : const Icon(Icons.bookmark_add_outlined),
+              color: Aurora.mint,
+              tooltip: 'Save this translation',
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: TextButton(
