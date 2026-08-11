@@ -19,6 +19,44 @@ cannot fix, only present honestly.
 | T6 | Detected language, eight languages | see LAB_NOTES §6 | ⚠️ see below |
 | T7 | A quiet session does not stream megabytes of silence | 888 KB → 276 KB for one sentence | ✅ |
 
+## Run 2026-08-11 (S23 + L802)
+
+| # | Result |
+|---|--------|
+| T8 | ✅ **Pass.** Hindi spoken into a Hindi target shows *"Already in हिन्दी — nothing to translate, so it was not spoken again."* The silence is explained in words, which was the whole requirement. |
+| T18 | ⚠️ **Half.** The label follows the speaker correctly — Spanish showed ESPAÑOL, French showed FRANÇAIS, with the right text under each. But Arabic was reported as ENGLISH three times out of three, with fluent English prose in the heard pane. That is Faraz's original report, reproduced first-hand. |
+| T15 | ✅ **Pass, by accident.** The glasses dropped mid-run and the session stopped with a plain red message and no hang. |
+| T13 | ❌ **FAIL — see below.** |
+| T19 | 🆕 **New defect.** The glasses dropped for **eleven seconds** and came back on their own (`connectionState disconnected` 18:18:34 → `connected` 18:18:45), but the translation session ended permanently and did not resume. Walking around in glasses will do this routinely. |
+| T20 | 🆕 **New defect — the T13 failure.** The upstream ends the session at about **ten minutes** and the raw protocol error reaches the user's screen, truncated mid-word: *"1008 None. Connection aborted because the client failed to close the connection after receiving a GoAway signal once the session durat"*. Died at 9m43s (14:21:26 → 14:31:09). |
+
+### T20 in detail
+
+The Live API sends a **GoAway** before it closes, expecting the client to
+reconnect. `gemini_translate.py` does not know the word — grep finds no mention
+— so the upstream kills the socket and `_receive_loop` forwards `str(exc)`
+verbatim to the phone as a fatal error.
+
+Two separate faults:
+
+1. **No session can outlive ten minutes**, whatever `TRANSLATE_MAX_SESSION_SECONDS`
+   says. It is set to 3600. A conversation, a meeting, a doctor's appointment —
+   all longer than ten minutes.
+2. **Raw upstream text is shown to the user.** Nobody outside this repo can read
+   that sentence, and it is cut off in the middle of a word.
+
+### What the eleven minutes also showed about detection
+
+The reported language **trails the speaker**. Clips played 80 seconds apart:
+
+| played | ar | es | fr | zh | ja | ru | es | fr |
+|--------|----|----|----|----|----|----|----|----|
+| reported | ar ✓ | ar | ar | ar | ja ✓ | ja | ru | pt |
+
+Four consecutive utterances were labelled Arabic while Spanish, French and
+Chinese played. It is not random — it lags, then catches up. Every Hindi
+translation underneath was still correct.
+
 ## Still to run
 
 | # | Case | What "pass" looks like | Why it matters |
