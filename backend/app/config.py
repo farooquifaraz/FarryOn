@@ -108,6 +108,49 @@ class Settings(BaseSettings):
     # (1800) is sized for a conversation with an assistant.
     translate_max_session_seconds: int = Field(default=3600)
 
+    # Languages to tell the model it is likely to hear. Empty (the default)
+    # leaves detection entirely to the model, which is how this shipped.
+    #
+    # Why the lever exists: the model appears to pivot through English for a
+    # non-English target. Feeding it one Arabic paragraph over a phone
+    # microphone with `target=hi` produced a transcript labelled ENGLISH,
+    # English prose in the heard pane, and a Hindi translation containing
+    # sentences that were never spoken. The same audio with `target=en` came
+    # back as correct Arabic with an accurate translation (S23, 2026-08-11).
+    #
+    # `AudioTranscriptionConfig` accepts `language_hints` and we had never
+    # passed any. This is here to measure whether saying what is being spoken
+    # stops the pivot.
+    translate_language_hints: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        description="Comma-separated BCP-47 hints for the SPOKEN language. "
+        "Empty means auto-detect.",
+    )
+
+    # -- Translate: which pipeline ---------------------------------------------
+    #
+    # `direct` is one model doing hear-translate-speak. It is fast and, for a
+    # non-English target, wrong: an Arabic paragraph came back as English
+    # gibberish with invented sentences in the Hindi (S23, 2026-08-11).
+    #
+    # `cascade` splits the job — the live model transcribes the source, a text
+    # model translates it, a TTS model speaks it. Roughly two seconds slower,
+    # measurably more accurate, and each stage leaves something we can read when
+    # it goes wrong. It is also what most production translators do.
+    translate_pipeline: str = Field(
+        default="cascade",
+        description="direct (one model) | cascade (hear, translate, speak).",
+    )
+    translate_text_model: str = Field(
+        default="gemini-3.1-flash-lite-preview",
+        description="Text model for the translate step of the cascade.",
+    )
+    #: Must be a STREAMING TTS model. The non-streaming one returns a single
+    #: blob after 8.2 s; this one starts speaking after 1.5 s and generates
+    #: faster than it plays.
+    translate_tts_model: str = Field(default="gemini-3.1-flash-tts-preview")
+    translate_tts_voice: str = Field(default="Kore")
+
     # -- Persistence -----------------------------------------------------------
     database_url: str = Field(
         default="sqlite+aiosqlite:///./farryon.db",
@@ -275,6 +318,13 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)
 
+    # -- Public site / direct APK download -------------------------------------
+    # Directory holding the prebuilt Android APKs the marketing site serves
+    # (FarryOn-Aurora-arm64.apk / -arm32.apk). Unset → the app falls back to the
+    # repo's top-level apk/ folder (works for local dev). In production point
+    # this at wherever the built APKs are placed inside the image/volume.
+    apk_dir: str | None = Field(default=None)
+
     # -- Live session cost control (P0-2) --------------------------------------
     # Live re-bills the whole session history every turn. A sliding context
     # window caps that: past `trigger_tokens`, only the most recent
@@ -400,6 +450,7 @@ class Settings(BaseSettings):
         "allowed_origins",
         "allowed_providers",
         "translate_allowed_target_langs",
+        "translate_language_hints",
         mode="before",
     )
     @classmethod

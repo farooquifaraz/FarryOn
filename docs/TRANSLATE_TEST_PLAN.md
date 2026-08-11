@@ -57,6 +57,47 @@ Four consecutive utterances were labelled Arabic while Spanish, French and
 Chinese played. It is not random — it lags, then catches up. Every Hindi
 translation underneath was still correct.
 
+
+## The English pivot — measured, and one cheap fix ruled out
+
+Faraz supplied the paragraph from his original report (the days of the week,
+Friday in Egypt) and it reproduced on the first try. Same audio, same session
+shape, only the **target** differs:
+
+| target | language reported | what the heard pane held | translation |
+|---|---|---|---|
+| `en` | `ar` ✓ | correct Arabic, right-to-left | accurate |
+| `hi` | **`en`** ✗ | English words with no relation to the audio — *"the movie you know, the one that ends on Saturday"* | invented sentences plus two plain factual errors |
+
+Google Translate, given the same Arabic **as text**, produced correct Hindi. So
+the fault is not in hearing the Arabic — that part is good — it is in producing
+the Hindi.
+
+**What it looks like:** for a non-English target the model routes through
+English, phonetically mangles the Arabic into English-sounding words, and
+translates *that*. The English pivot is what lands in the input-transcription
+slot, which is why the pane says ENGLISH.
+
+### Ruled out: telling it what it is hearing
+
+`AudioTranscriptionConfig` accepts `language_hints` and we had never passed any,
+so the obvious one-line fix was to say "this is Arabic". Tried on the S23,
+2026-08-11:
+
+* the hint reached the wire (pinned by a test)
+* the first utterance still came back labelled ENGLISH, still garbled
+* a later short utterance was correctly `ar` — as it had been without the hint
+
+**It does not work.** The plumbing is kept because it is correct and costs
+nothing switched off, but nothing should be built on it.
+
+### What is left
+
+Take **English** from the model, which is reliable, and do the last hop
+ourselves. That means a text translation step and a speech step for the spoken
+output — two services where there is now one, more delay, and another bill. It
+is not free and it is not small, but it is the only path measured to work.
+
 ## Still to run
 
 | # | Case | What "pass" looks like | Why it matters |
