@@ -15,7 +15,7 @@ of translation, and there is no earlier value to reconstruct. That makes this
 safe to apply to a live table — no rewrite, no lock, no backfill pass.
 
 Revision ID: 0007
-Revises: 0006
+Revises: 0006a
 Create Date: 2026-08-10
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0007"
-down_revision: str | None = "0006"
+down_revision: str | None = "0006a"
 branch_labels: Sequence[str] | str | None = None
 depends_on: Sequence[str] | str | None = None
 

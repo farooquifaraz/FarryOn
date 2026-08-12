@@ -109,7 +109,19 @@ fi
 
 # ---- 4. build + start (migrate -> backend -> caddy) -----------------------
 echo "==> building images and starting the stack"
-$COMPOSE up -d --build --remove-orphans
+# On failure compose reports only 'service "migrate" didn't complete
+# successfully: exit 1' — the actual traceback stays inside the container and
+# never reaches the CI log, which is useless when the deploy runs unattended.
+# Dump the logs of the services that can fail here before giving up.
+if ! $COMPOSE up -d --build --remove-orphans; then
+    echo
+    echo "==> stack failed to start — logs from the services involved:"
+    for svc in migrate backend postgres caddy; do
+        echo "---------- $svc ----------"
+        $COMPOSE logs --tail 60 "$svc" 2>&1 || true
+    done
+    exit 1
+fi
 
 # ---- 5. seed first super-admin (idempotent) -------------------------------
 if [[ -n "${FIRST_SUPER_ADMIN_EMAIL:-}" && -n "${FIRST_SUPER_ADMIN_PASSWORD:-}" ]]; then
