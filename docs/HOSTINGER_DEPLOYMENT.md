@@ -240,7 +240,22 @@ mode instead — the existing app is untouched:
 
 2. Deploy as usual (`./deploy/hostinger/deploy.sh` or push to main).
 
-3. In **Nginx Proxy Manager** (usually `http://<VPS-IP>:81`):
+3. Point the proxy at FarryOn. On the VPS, one command does the whole of
+   step 4 below through NPM's own API:
+
+   ```bash
+   cd /opt/farryon
+   python3 deploy/hostinger/setup_npm_proxy.py --email <your-NPM-login-email>
+   ```
+
+   It reads `DOMAIN` and `FARRYON_HTTP_PORT` from `.env`, creates the proxy
+   host (WebSockets on, long timeouts), requests a Let's Encrypt certificate,
+   forces SSL, and verifies `https://<domain>/healthz`. Re-running it updates
+   the same host rather than adding a duplicate, and keeps a certificate that
+   is already attached. The password is prompted for without echo, or read
+   from `NPM_PASSWORD`.
+
+4. Or do it by hand in **Nginx Proxy Manager** (usually `http://<VPS-IP>:81`):
    - **Hosts → Proxy Hosts → Add Proxy Host**
    - *Domain Names*: `app.farryon.example`
    - *Scheme*: `http` · *Forward Hostname/IP*: `172.17.0.1` · *Forward
@@ -250,7 +265,7 @@ mode instead — the existing app is untouched:
    - **SSL tab**: *Request a new SSL Certificate* (Let's Encrypt), enable
      *Force SSL* and *HTTP/2 Support* → **Save**
 
-4. Long-lived sockets: NPM's default `proxy_read_timeout` (60s) can drop
+5. Long-lived sockets: NPM's default `proxy_read_timeout` (60s) can drop
    idle live sessions. In the Proxy Host's **Advanced** tab add:
 
    ```nginx
