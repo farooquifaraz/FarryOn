@@ -40,6 +40,27 @@ fail=0
     && { echo "ERROR: set JWT_SECRET in .env (openssl rand -hex 32) — auth stays OFF otherwise."; fail=1; }
 (( fail )) && exit 1
 
+# ---- 1b. preflight: are ports 80/443 free (or already ours)? --------------
+# On a shared VPS another app may already own the web ports. Detect that
+# BEFORE compose tries to bind and fails half-deployed, and print exactly
+# what is listening so the fix is obvious from CI logs alone.
+if command -v ss >/dev/null 2>&1; then
+    our_caddy=$(docker ps --filter "name=farryon" --filter "expose=443" -q 2>/dev/null || true)
+    listeners=$(ss -tlnp 2>/dev/null | awk '$4 ~ /:(80|443)$/' || true)
+    if [[ -n "$listeners" && -z "$our_caddy" ]]; then
+        echo "ERROR: ports 80/443 are already in use by another service on this VPS:"
+        echo "$listeners"
+        echo
+        echo "Running containers:"
+        docker ps --format '  {{.Names}}  ->  {{.Ports}}' 2>/dev/null || true
+        echo
+        echo "FarryOn's Caddy needs 80+443 for TLS. Either stop/move that service,"
+        echo "or integrate FarryOn behind it instead (share this output with your"
+        echo "deployment assistant to generate the right reverse-proxy config)."
+        exit 1
+    fi
+fi
+
 # ---- 2. update code -------------------------------------------------------
 if [[ "${NO_PULL:-0}" != "1" ]]; then
     echo "==> git pull (branch: $(git rev-parse --abbrev-ref HEAD))"
