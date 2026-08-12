@@ -2,11 +2,11 @@ import { NavLink, Navigate, Outlet } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 
 const NAV = [
-  { to: "/", label: "Dashboard", end: true },
-  { to: "/users", label: "Users" },
-  { to: "/roles", label: "Roles" },
-  { to: "/billing", label: "Subscriptions & Revenue" },
-  { to: "/audit", label: "Audit log" },
+  { to: "/admin", label: "Dashboard", end: true },
+  { to: "/admin/users", label: "Users" },
+  { to: "/admin/roles", label: "Roles" },
+  { to: "/admin/billing", label: "Subscriptions & Revenue" },
+  { to: "/admin/audit", label: "Audit log" },
 ];
 
 export default function Layout() {
