@@ -135,7 +135,21 @@ but a missing `TELEGRAM_BOT_TOKEN`, `VISION_API_KEY`, `WEB_SEARCH_API_KEY`, or
 not configured and disables it. The app looks fine; one capability is simply
 gone.
 
-So before the first deploy, open your local `backend/.env` next to the
+**The fast path** — on the machine where FarryOn already works, let the
+generator do the merge:
+
+```bash
+python deploy/hostinger/make_prod_env.py --domain app.farryon.example
+```
+
+It reads `backend/.env`, carries over everything you have set, generates a
+fresh `POSTGRES_PASSWORD` / `JWT_SECRET`, substitutes the production-only
+values, and writes `farryon-env.txt` (gitignored) — paste that file into the
+`FARRYON_ENV` secret. It also prints which feature keys are set or missing,
+and warns if `AI_PROVIDER=mock` would ship canned answers to production.
+Secrets go to the file, never to the terminal.
+
+To do it by hand instead, open your local `backend/.env` next to the
 production file and copy across **every non-empty value**, paying particular
 attention to:
 
