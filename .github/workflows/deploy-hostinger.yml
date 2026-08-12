@@ -81,11 +81,20 @@ jobs:
             -e "ssh -i ~/.ssh/id_deploy" \
             ./ "$SSH_USER@$SSH_HOST:$VPS_PATH/"
 
+      # The emptiness check lives in the shell, not in `if:` — the secrets
+      # context is not available in step conditions, and referencing it there
+      # makes GitHub reject the whole workflow file (every run fails with no
+      # jobs at all, which reads like an infrastructure outage rather than a
+      # syntax error).
       - name: Write production .env from secret
-        if: steps.check.outputs.configured == 'true' && secrets.FARRYON_ENV != ''
+        if: steps.check.outputs.configured == 'true'
         env:
           FARRYON_ENV: ${{ secrets.FARRYON_ENV }}
         run: |
+          if [ -z "$FARRYON_ENV" ]; then
+            echo "FARRYON_ENV secret not set — keeping the .env already on the VPS."
+            exit 0
+          fi
           printf '%s\n' "$FARRYON_ENV" | ssh -i ~/.ssh/id_deploy \
             "$SSH_USER@$SSH_HOST" "cat > '$VPS_PATH/.env' && chmod 600 '$VPS_PATH/.env'"
 
