@@ -1,15 +1,19 @@
-# FarryOn edge Caddyfile — TLS termination, admin SPA, API/WS reverse proxy.
+# FarryOn edge Caddyfile — admin SPA + API/WS reverse proxy, with optional
+# TLS termination.
 #
-# DOMAIN and ACME_EMAIL come from the environment (docker-compose.prod.yml /
-# the VPS .env file). Caddy provisions and renews Let's Encrypt certificates
-# automatically as long as the domain's A record points at this server and
-# ports 80+443 are reachable.
+# SITE_ADDRESS comes from the environment (set by the compose overlay):
+#   standalone mode    SITE_ADDRESS=<domain>  → Caddy owns 80/443 and
+#                      provisions Let's Encrypt certificates automatically
+#   behind-proxy mode  SITE_ADDRESS=http://:80 → plain HTTP; an existing
+#                      reverse proxy (e.g. Nginx Proxy Manager) terminates TLS
+#
+# ACME_EMAIL is only meaningful in standalone mode.
 
 {
 	email {$ACME_EMAIL}
 }
 
-{$DOMAIN} {
+{$SITE_ADDRESS} {
 	encode gzip zstd
 
 	# ---- backend paths (FastAPI on the internal network) -------------------

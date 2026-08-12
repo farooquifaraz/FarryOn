@@ -3,24 +3,28 @@
 # FarryOn — deploy/update script for a Hostinger VPS (single Docker host)
 #
 # First run and every update are the same command, executed at the repo
-# root on the VPS:
+# root on the VPS (CI does exactly this over SSH):
 #
 #   ./deploy/hostinger/deploy.sh
 #
+# Modes (PROXY_MODE in .env):
+#   standalone    (default) FarryOn's Caddy owns 80/443 + Let's Encrypt
+#   behind-proxy  an existing proxy (e.g. Nginx Proxy Manager) owns 80/443;
+#                 FarryOn serves plain HTTP on 172.17.0.1:${FARRYON_HTTP_PORT}
+#
 # What it does:
 #   1. sanity-checks .env (DOMAIN, POSTGRES_PASSWORD, JWT_SECRET)
-#   2. pulls the latest code on the current branch (unless NO_PULL=1)
-#   3. builds images and starts the stack (migrations run first, then the
-#      backend, then Caddy — ordering enforced by docker-compose.prod.yml)
-#   4. seeds/promotes the first super-admin if FIRST_SUPER_ADMIN_* are set
-#   5. waits for the public health endpoint to come up
+#   2. preflight-checks the ports the chosen mode needs
+#   3. pulls the latest code (unless NO_PULL=1 — CI rsyncs instead)
+#   4. builds images and starts the stack (migrate -> backend -> caddy)
+#   5. seeds/promotes the first super-admin if FIRST_SUPER_ADMIN_* are set
+#   6. waits for the health endpoint
 #
 # Full runbook: docs/HOSTINGER_DEPLOYMENT.md
 # =====================================================================
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."                      # repo root
-COMPOSE="docker compose -f docker-compose.prod.yml"
 
 # ---- 1. environment sanity ------------------------------------------------
 if [[ ! -f .env ]]; then
@@ -40,56 +44,90 @@ fail=0
     && { echo "ERROR: set JWT_SECRET in .env (openssl rand -hex 32) — auth stays OFF otherwise."; fail=1; }
 (( fail )) && exit 1
 
-# ---- 1b. preflight: are ports 80/443 free (or already ours)? --------------
-# On a shared VPS another app may already own the web ports. Detect that
-# BEFORE compose tries to bind and fails half-deployed, and print exactly
-# what is listening so the fix is obvious from CI logs alone.
+MODE="${PROXY_MODE:-standalone}"
+case "$MODE" in
+    standalone)   OVERLAY="deploy/hostinger/compose.standalone.yml" ;;
+    behind-proxy) OVERLAY="deploy/hostinger/compose.behind-proxy.yml" ;;
+    *) echo "ERROR: PROXY_MODE must be 'standalone' or 'behind-proxy' (got '$MODE')."; exit 1 ;;
+esac
+COMPOSE="docker compose -f docker-compose.prod.yml -f $OVERLAY"
+BIND="${FARRYON_BIND:-172.17.0.1}"
+HTTP_PORT="${FARRYON_HTTP_PORT:-8080}"
+echo "==> mode: $MODE"
+
+# ---- 2. preflight: are the ports this mode needs free (or already ours)? --
+# Detect conflicts BEFORE compose tries to bind and fails half-deployed, and
+# print exactly what is listening so the fix is obvious from CI logs alone.
 if command -v ss >/dev/null 2>&1; then
-    our_caddy=$(docker ps --filter "name=farryon" --filter "expose=443" -q 2>/dev/null || true)
-    listeners=$(ss -tlnp 2>/dev/null | awk '$4 ~ /:(80|443)$/' || true)
+    if [[ "$MODE" == "standalone" ]]; then
+        our_caddy=$(docker ps --filter "name=farryon" --filter "publish=443" -q 2>/dev/null || true)
+        listeners=$(ss -tlnp 2>/dev/null | awk '$4 ~ /:(80|443)$/' || true)
+        needed="80/443"
+    else
+        our_caddy=$(docker ps --filter "name=farryon" --filter "publish=${HTTP_PORT}" -q 2>/dev/null || true)
+        listeners=$(ss -tlnp 2>/dev/null | awk -v p=":${HTTP_PORT}\$" '$4 ~ p' || true)
+        needed="$HTTP_PORT"
+    fi
     if [[ -n "$listeners" && -z "$our_caddy" ]]; then
-        echo "ERROR: ports 80/443 are already in use by another service on this VPS:"
+        echo "ERROR: port(s) $needed already in use by another service on this VPS:"
         echo "$listeners"
         echo
         echo "Running containers:"
         docker ps --format '  {{.Names}}  ->  {{.Ports}}' 2>/dev/null || true
         echo
-        echo "FarryOn's Caddy needs 80+443 for TLS. Either stop/move that service,"
-        echo "or integrate FarryOn behind it instead (share this output with your"
-        echo "deployment assistant to generate the right reverse-proxy config)."
+        if [[ "$MODE" == "standalone" ]]; then
+            echo "Another app owns the web ports. Set PROXY_MODE=behind-proxy in .env to"
+            echo "run FarryOn behind it instead (docs/HOSTINGER_DEPLOYMENT.md §'Shared VPS')."
+        else
+            echo "Pick a free port via FARRYON_HTTP_PORT in .env."
+        fi
         exit 1
     fi
 fi
 
-# ---- 2. update code -------------------------------------------------------
+# ---- 3. update code -------------------------------------------------------
 if [[ "${NO_PULL:-0}" != "1" ]]; then
     echo "==> git pull (branch: $(git rev-parse --abbrev-ref HEAD))"
     git pull --ff-only
 fi
 
-# ---- 3. build + start (migrate -> backend -> caddy) -----------------------
+# ---- 4. build + start (migrate -> backend -> caddy) -----------------------
 echo "==> building images and starting the stack"
 $COMPOSE up -d --build --remove-orphans
 
-# ---- 4. seed first super-admin (idempotent) -------------------------------
+# ---- 5. seed first super-admin (idempotent) -------------------------------
 if [[ -n "${FIRST_SUPER_ADMIN_EMAIL:-}" && -n "${FIRST_SUPER_ADMIN_PASSWORD:-}" ]]; then
     echo "==> seeding super-admin ${FIRST_SUPER_ADMIN_EMAIL}"
     $COMPOSE exec -T backend python -m scripts.seed_admin
 fi
 
-# ---- 5. wait for health ---------------------------------------------------
-echo "==> waiting for https://${DOMAIN}/healthz"
+# ---- 6. wait for health ---------------------------------------------------
+if [[ "$MODE" == "standalone" ]]; then
+    HEALTH_URL="https://${DOMAIN}/healthz"
+else
+    HEALTH_URL="http://${BIND}:${HTTP_PORT}/healthz"
+fi
+echo "==> waiting for ${HEALTH_URL}"
 for i in $(seq 1 30); do
-    if curl -fsS --max-time 5 "https://${DOMAIN}/healthz" >/dev/null 2>&1; then
-        echo "==> deploy OK — https://${DOMAIN} is live"
+    if curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
+        echo "==> deploy OK — FarryOn is up"
         $COMPOSE ps
+        if [[ "$MODE" == "behind-proxy" ]]; then
+            echo
+            echo "Reminder: the public URL works once your reverse proxy forwards"
+            echo "  https://${DOMAIN}  ->  http://${BIND}:${HTTP_PORT}"
+            echo "with WebSocket support enabled (Nginx Proxy Manager: Proxy Host ->"
+            echo "Websockets Support ON, SSL -> Request a new certificate + Force SSL)."
+        fi
         exit 0
     fi
     sleep 5
 done
 
-echo "WARNING: https://${DOMAIN}/healthz not reachable yet."
-echo "  - First TLS issuance can take a minute; check: $COMPOSE logs caddy"
-echo "  - Backend logs:                              $COMPOSE logs backend"
-echo "  - DNS: 'dig +short ${DOMAIN}' must return this VPS's IP."
+echo "WARNING: ${HEALTH_URL} not reachable yet."
+echo "  - Gateway logs:  $COMPOSE logs caddy"
+echo "  - Backend logs:  $COMPOSE logs backend"
+if [[ "$MODE" == "standalone" ]]; then
+    echo "  - First TLS issuance can take a minute; DNS: 'dig +short ${DOMAIN}' must return this VPS's IP."
+fi
 exit 1

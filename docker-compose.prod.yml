@@ -20,19 +20,21 @@ name: farryon
 
 services:
   # ------------------------------------------------------------------- caddy
+  # Ports and SITE_ADDRESS come from a mode overlay, picked by PROXY_MODE in
+  # .env (deploy.sh wires it up):
+  #   standalone   deploy/hostinger/compose.standalone.yml — Caddy owns
+  #                80/443 and does Let's Encrypt itself
+  #   behind-proxy deploy/hostinger/compose.behind-proxy.yml — plain HTTP on
+  #                an internal port; an existing proxy (e.g. Nginx Proxy
+  #                Manager) terminates TLS
   caddy:
     build:
       context: ./admin            # SPA build + Caddyfile live in ./admin
       dockerfile: Dockerfile
     image: farryon-gateway:prod
     restart: unless-stopped
-    ports:
-      - "80:80"                   # ACME HTTP challenge + redirect to HTTPS
-      - "443:443"
-      - "443:443/udp"             # HTTP/3
     environment:
-      DOMAIN: ${DOMAIN:?set DOMAIN in .env (e.g. app.example.com)}
-      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
     volumes:
       - caddy_data:/data          # certificates — must persist across deploys
       - caddy_config:/config

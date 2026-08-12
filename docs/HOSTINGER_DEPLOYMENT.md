@@ -159,6 +159,46 @@ For Google Sign-In, complete
 [`GOOGLE_SIGN_IN_SETUP.md`](./GOOGLE_SIGN_IN_SETUP.md) and set
 `SSO_REDIRECT_BASE_URL=https://app.farryon.example` in `.env`, then redeploy.
 
+## 7b. Shared VPS: running behind an existing proxy (Nginx Proxy Manager)
+
+If the VPS already runs another app whose proxy owns ports 80/443 (e.g.
+**Nginx Proxy Manager**), FarryOn can't bind them. Run it in `behind-proxy`
+mode instead — the existing app is untouched:
+
+1. In `.env`, set:
+
+   ```bash
+   PROXY_MODE=behind-proxy
+   FARRYON_HTTP_PORT=8080        # any free port
+   ```
+
+   FarryOn's gateway then serves plain HTTP on `172.17.0.1:8080` — the
+   docker0 gateway address, reachable by the host and by other containers
+   (like the proxy), but **not** from the public internet.
+
+2. Deploy as usual (`./deploy/hostinger/deploy.sh` or push to main).
+
+3. In **Nginx Proxy Manager** (usually `http://<VPS-IP>:81`):
+   - **Hosts → Proxy Hosts → Add Proxy Host**
+   - *Domain Names*: `app.farryon.example`
+   - *Scheme*: `http` · *Forward Hostname/IP*: `172.17.0.1` · *Forward
+     Port*: `8080`
+   - Enable **Websockets Support** (required — `/ws/live` is a WebSocket)
+     and *Block Common Exploits*
+   - **SSL tab**: *Request a new SSL Certificate* (Let's Encrypt), enable
+     *Force SSL* and *HTTP/2 Support* → **Save**
+
+4. Long-lived sockets: NPM's default `proxy_read_timeout` (60s) can drop
+   idle live sessions. In the Proxy Host's **Advanced** tab add:
+
+   ```nginx
+   proxy_read_timeout 3600s;
+   proxy_send_timeout 3600s;
+   ```
+
+`https://app.farryon.example` now serves the admin panel and `wss://…/ws/live`
+reaches the backend, with TLS handled by NPM.
+
 ## 8. Updating (every future release)
 
 ```bash
