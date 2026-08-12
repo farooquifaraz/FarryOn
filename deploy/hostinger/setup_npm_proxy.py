@@ -180,21 +180,44 @@ def main() -> int:
         else:
             print(f"==> requesting a Let's Encrypt certificate for {args.domain}")
             print("    (this takes ~30s; the domain's A record must point at this VPS)")
-            cert = api(
-                base,
-                "/api/nginx/certificates",
-                token=token,
-                method="POST",
-                body={
-                    "domain_names": [args.domain],
-                    "provider": "letsencrypt",
-                    "meta": {
-                        "letsencrypt_email": le_email,
-                        "letsencrypt_agree": True,
-                        "dns_challenge": False,
-                    },
-                },
-            )
+            # NPM validates `meta` against a strict schema that differs by
+            # version: older builds take the contact email and ToS agreement
+            # per certificate, newer ones take neither (their SSL dialog has no
+            # such fields) and reject them as additional properties. Offer the
+            # richest form first and fall back, so one script serves both.
+            meta_variants = [
+                {"letsencrypt_email": le_email, "letsencrypt_agree": True, "dns_challenge": False},
+                {"dns_challenge": False},
+                {},
+            ]
+            cert = None
+            for meta in meta_variants:
+                try:
+                    cert = api(
+                        base,
+                        "/api/nginx/certificates",
+                        token=token,
+                        method="POST",
+                        body={
+                            "domain_names": [args.domain],
+                            "provider": "letsencrypt",
+                            "meta": meta,
+                        },
+                    )
+                    break
+                except NpmError as exc:
+                    # Only a schema rejection is worth retrying with less; a
+                    # real failure (DNS not pointing here, rate limit) would
+                    # fail identically for every variant.
+                    if "additional propert" not in str(exc).lower():
+                        raise
+                    print("    (this NPM rejects some meta fields; retrying with fewer)")
+            if cert is None:
+                raise NpmError(
+                    "NPM rejected every certificate payload shape. Request the "
+                    "certificate from the SSL tab of the proxy host in the UI, "
+                    "then re-run this script — it will keep the existing one."
+                )
             cert_id = cert["id"]
             print(f"    issued, certificate id {cert_id}")
 
