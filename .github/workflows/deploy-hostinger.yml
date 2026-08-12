@@ -1,0 +1,38 @@
+# Manually-triggered deploy to the Hostinger VPS.
+#
+# One-time setup (docs/HOSTINGER_DEPLOYMENT.md §8):
+#   1. Complete the initial VPS deploy by hand so /opt/farryon exists.
+#   2. Add repository secrets:
+#        HOSTINGER_SSH_HOST   VPS IP or hostname
+#        HOSTINGER_SSH_USER   usually "root"
+#        HOSTINGER_SSH_KEY    private key whose public half is in
+#                             ~/.ssh/authorized_keys on the VPS
+#
+# Then: Actions → "deploy-hostinger" → Run workflow.
+
+name: deploy-hostinger
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-hostinger
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.HOSTINGER_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "${{ secrets.HOSTINGER_SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Run deploy script on the VPS
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+              "${{ secrets.HOSTINGER_SSH_USER }}@${{ secrets.HOSTINGER_SSH_HOST }}" \
+              'cd /opt/farryon && ./deploy/hostinger/deploy.sh'

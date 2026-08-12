@@ -1,0 +1,32 @@
+# FarryOn edge Caddyfile — TLS termination, admin SPA, API/WS reverse proxy.
+#
+# DOMAIN and ACME_EMAIL come from the environment (docker-compose.prod.yml /
+# the VPS .env file). Caddy provisions and renews Let's Encrypt certificates
+# automatically as long as the domain's A record points at this server and
+# ports 80+443 are reachable.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip zstd
+
+	# ---- backend paths (FastAPI on the internal network) -------------------
+	# /ws/live is a long-lived WebSocket; Caddy proxies upgrades transparently
+	# and applies no read timeout to streamed connections by default.
+	@backend path /api/* /ws/* /healthz /readyz /detect
+	handle @backend {
+		reverse_proxy backend:8000
+	}
+
+	# /metrics is intentionally NOT proxied — Prometheus scrapes the backend
+	# over the internal docker network; the exposition endpoint stays private.
+
+	# ---- admin SPA (everything else) ---------------------------------------
+	handle {
+		root * /srv/admin
+		try_files {path} /index.html
+		file_server
+	}
+}
