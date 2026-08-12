@@ -32,8 +32,24 @@ if [[ ! -f .env ]]; then
     echo "  cp deploy/hostinger/env.production.example .env  &&  edit it"
     exit 1
 fi
-# shellcheck disable=SC1091
-set -a; source .env; set +a
+# Read the handful of values this script needs WITHOUT sourcing the file.
+# A production .env legitimately holds JSON (STRIPE_PRICE_IDS) and other
+# values containing spaces, braces and quotes; `source` would try to execute
+# those and abort the deploy. Compose reads .env itself for interpolation and
+# env_file, so nothing here needs to be exported.
+# tr -d '\r': the file is often authored on Windows (or pasted into a GitHub
+# secret from a Windows editor), and a trailing CR would ride along into the
+# domain, the health-check URL and the secret comparisons below.
+env_get() { sed -n "s/^[[:space:]]*$1=//p" .env | head -n1 | tr -d '\r'; }
+
+DOMAIN="$(env_get DOMAIN)"
+POSTGRES_PASSWORD="$(env_get POSTGRES_PASSWORD)"
+JWT_SECRET="$(env_get JWT_SECRET)"
+PROXY_MODE="$(env_get PROXY_MODE)"
+FARRYON_HTTP_PORT="$(env_get FARRYON_HTTP_PORT)"
+FARRYON_BIND="$(env_get FARRYON_BIND)"
+FIRST_SUPER_ADMIN_EMAIL="$(env_get FIRST_SUPER_ADMIN_EMAIL)"
+FIRST_SUPER_ADMIN_PASSWORD="$(env_get FIRST_SUPER_ADMIN_PASSWORD)"
 
 fail=0
 [[ -z "${DOMAIN:-}" || "${DOMAIN}" == "app.example.com" ]] \
