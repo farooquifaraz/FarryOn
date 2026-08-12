@@ -1,21 +1,31 @@
-# CI/CD deploy to the Hostinger VPS.
+# CI/CD deploy to the Hostinger VPS — fully hands-off.
 #
 # Triggers:
 #   - automatically on every push to main (after merge)
 #   - manually via Actions → "deploy-hostinger" → Run workflow
 #
-# One-time setup (docs/HOSTINGER_DEPLOYMENT.md §8):
-#   1. Complete the initial VPS deploy by hand so the repo exists on the VPS.
-#   2. Add repository secrets (Settings → Secrets and variables → Actions):
-#        HOSTINGER_SSH_HOST   VPS IP or hostname
-#        HOSTINGER_SSH_USER   SSH user (e.g. root)
-#        HOSTINGER_SSH_KEY    private key whose public half is in
-#                             ~/.ssh/authorized_keys on the VPS
-#      Optional repository variable (Settings → ... → Variables):
-#        FARRYON_VPS_PATH     repo path on the VPS (default /opt/farryon)
+# How it works: the runner checks out the repo, rsyncs it to the VPS (no git
+# credentials ever live on the server), optionally writes the production .env
+# from a secret, then runs deploy/hostinger/deploy.sh there. First deploy and
+# every update are the same run.
 #
-# If the secrets are not configured yet, the job skips gracefully instead of
-# failing, so CI on main stays green until the VPS is wired up.
+# One-time setup (Settings → Secrets and variables → Actions):
+#   Secrets (required):
+#     HOSTINGER_SSH_HOST   VPS IP or hostname
+#     HOSTINGER_SSH_USER   SSH user (e.g. root)
+#     HOSTINGER_SSH_KEY    private key whose public half is in
+#                          ~/.ssh/authorized_keys on the VPS
+#   Secrets (optional):
+#     FARRYON_ENV          full contents of the production .env
+#                          (deploy/hostinger/env.production.example filled in).
+#                          If set, it overwrites the .env on the VPS each run —
+#                          making GitHub the single source of truth for config.
+#                          If unset, the .env already on the VPS is kept.
+#   Variables (optional):
+#     FARRYON_VPS_PATH     install path on the VPS (default /opt/farryon)
+#
+# If the SSH secrets are not configured yet, the job skips gracefully instead
+# of failing, so CI on main stays green until the VPS is wired up.
 
 name: deploy-hostinger
 
@@ -47,6 +57,10 @@ jobs:
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Checkout
+        if: steps.check.outputs.configured == 'true'
+        uses: actions/checkout@v4
+
       - name: Configure SSH
         if: steps.check.outputs.configured == 'true'
         run: |
@@ -55,8 +69,30 @@ jobs:
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
 
+      - name: Sync repository to the VPS
+        if: steps.check.outputs.configured == 'true'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" "mkdir -p '$VPS_PATH'"
+          # --delete keeps the server tree identical to the repo; --exclude
+          # protects server-side state (.env stays unless FARRYON_ENV is set).
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude '.env' \
+            -e "ssh -i ~/.ssh/id_deploy" \
+            ./ "$SSH_USER@$SSH_HOST:$VPS_PATH/"
+
+      - name: Write production .env from secret
+        if: steps.check.outputs.configured == 'true' && secrets.FARRYON_ENV != ''
+        env:
+          FARRYON_ENV: ${{ secrets.FARRYON_ENV }}
+        run: |
+          printf '%s\n' "$FARRYON_ENV" | ssh -i ~/.ssh/id_deploy \
+            "$SSH_USER@$SSH_HOST" "cat > '$VPS_PATH/.env' && chmod 600 '$VPS_PATH/.env'"
+
       - name: Run deploy script on the VPS
         if: steps.check.outputs.configured == 'true'
         run: |
+          # NO_PULL=1: the runner already synced the exact commit being
+          # deployed; the server never needs git access.
           ssh -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" \
-              "cd '$VPS_PATH' && ./deploy/hostinger/deploy.sh"
+              "cd '$VPS_PATH' && chmod +x deploy/hostinger/deploy.sh && NO_PULL=1 ./deploy/hostinger/deploy.sh"
