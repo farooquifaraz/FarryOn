@@ -122,6 +122,54 @@ Everything else has safe defaults; the full reference is
 [`backend/.env.example`](../backend/.env.example) and
 [`DEPLOYMENT.md`](./DEPLOYMENT.md) §5.
 
+## 5b. Making the cloud behave like your local machine
+
+Every setting in the template carries the **same default the backend uses
+locally**, so anything you leave unset behaves identically in both places.
+Parity breaks in one direction only: values you set in your **local
+`backend/.env`** and don't carry over here.
+
+That gap is quiet rather than loud. A missing `GEMINI_API_KEY` fails visibly,
+but a missing `TELEGRAM_BOT_TOKEN`, `VISION_API_KEY`, `WEB_SEARCH_API_KEY`, or
+`STRIPE_SECRET_KEY` doesn't error — the backend just treats that feature as
+not configured and disables it. The app looks fine; one capability is simply
+gone.
+
+So before the first deploy, open your local `backend/.env` next to the
+production file and copy across **every non-empty value**, paying particular
+attention to:
+
+| Area | Variables |
+| ---- | --------- |
+| AI provider | `GEMINI_API_KEY` / `OPENAI_API_KEY` / `GROK_API_KEY`, the matching `*_MODEL`, `ALLOWED_PROVIDERS` |
+| Live translation | `TRANSLATE_PROVIDER`, `GEMINI_TRANSLATE_MODEL`, `TRANSLATE_ALLOWED_TARGET_LANGS` |
+| Vision / Finder | `VISION_API_KEY`, `VISION_FRAME_MODE`, `VISION_ON_DEMAND_ONLY` |
+| Messaging | `TELEGRAM_*`, `WHATSAPP_*`, `DEFAULT_COUNTRY_CODE` |
+| Web search | `WEB_SEARCH_PROVIDER` + `WEB_SEARCH_API_KEY` (+ the fallback pair) |
+| SSO | `GOOGLE_CLIENT_ID` / `_SECRET`, `MICROSOFT_*` |
+| Billing | `STRIPE_*`, `BILLING_WEBHOOK_SECRET` |
+| Cost & quotas | `MAX_SESSION_SECONDS`, `CONTEXT_*`, `QUOTA_ENFORCEMENT_ENABLED`, `DEFAULT_PLAN` |
+
+Four values must **not** be copied from local — production needs its own:
+
+- `DATABASE_URL` — local SQLite → the stack's Postgres (leave unset; it is
+  derived from `POSTGRES_PASSWORD`).
+- `JWT_SECRET` — the local default keeps WS auth **off**; production needs a
+  real secret, which is what turns auth on.
+- `ALLOWED_ORIGINS` — `*` locally, your real domain in production.
+- `SSO_REDIRECT_BASE_URL` — `http://localhost:8000` → `https://$DOMAIN`.
+
+To confirm what the running server actually loaded, check a feature's
+readiness rather than guessing:
+
+```bash
+curl https://app.farryon.example/readyz          # DB + gateway configured
+docker compose -f docker-compose.prod.yml exec backend \
+  python -c "from app.config import get_settings as s; c=s(); \
+print('ai:', c.ai_provider, '| gemini key:', bool(c.gemini_api_key), \
+'| vision:', bool(c.vision_api_key), '| search:', c.web_search_provider)"
+```
+
 ## 6. Deploy
 
 ```bash
