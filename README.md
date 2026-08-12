@@ -48,6 +48,9 @@ cd mobile && flutter pub get && flutter run
 ```
 
 See `docs/ARCHITECTURE.md` for the full design and `docs/DEPLOYMENT.md` to ship.
+To deploy the complete stack on a Hostinger VPS (Caddy TLS + admin panel +
+backend + Postgres via `docker-compose.prod.yml`), follow
+`docs/HOSTINGER_DEPLOYMENT.md`.
 
 ## Features
 

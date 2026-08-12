@@ -1,0 +1,19 @@
+# Mode overlay: FarryOn runs BEHIND an existing reverse proxy that already
+# owns ports 80/443 (e.g. Nginx Proxy Manager on a shared VPS). Selected by
+# PROXY_MODE=behind-proxy in .env.
+#
+# Caddy serves plain HTTP on ${FARRYON_HTTP_PORT} (default 8080), bound to
+# ${FARRYON_BIND} (default 172.17.0.1 — the docker0 gateway, reachable from
+# the host and from other docker networks' containers, but NOT from the
+# public internet).
+#
+# Then, in the existing proxy, forward the FarryOn domain to
+# http://172.17.0.1:8080 with WebSocket support enabled and TLS terminated
+# there. Nginx Proxy Manager walkthrough: docs/HOSTINGER_DEPLOYMENT.md §"Shared
+# VPS".
+services:
+  caddy:
+    ports:
+      - "${FARRYON_BIND:-172.17.0.1}:${FARRYON_HTTP_PORT:-8080}:80"
+    environment:
+      SITE_ADDRESS: "http://:80"   # plain HTTP; the outer proxy does TLS

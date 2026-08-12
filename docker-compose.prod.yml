@@ -1,0 +1,166 @@
+# =====================================================================
+# FarryOn — production stack for a single Docker host (Hostinger VPS)
+#
+#   cp deploy/hostinger/env.production.example .env   # then edit it
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Services:
+#   caddy        TLS termination (auto Let's Encrypt) + admin SPA + reverse
+#                proxy for /api, /ws/live, /healthz, /readyz, /detect
+#   migrate      one-shot `alembic upgrade head`; backend waits for it
+#   backend      FastAPI + WebSocket workers (internal network only)
+#   postgres     Postgres 16 (internal network only)
+#   prometheus   optional, `--profile obs` (bound to localhost)
+#   grafana      optional, `--profile obs` (bound to localhost)
+#
+# Full runbook: docs/HOSTINGER_DEPLOYMENT.md
+# =====================================================================
+
+name: farryon
+
+services:
+  # ------------------------------------------------------------------- caddy
+  # Ports and SITE_ADDRESS come from a mode overlay, picked by PROXY_MODE in
+  # .env (deploy.sh wires it up):
+  #   standalone   deploy/hostinger/compose.standalone.yml — Caddy owns
+  #                80/443 and does Let's Encrypt itself
+  #   behind-proxy deploy/hostinger/compose.behind-proxy.yml — plain HTTP on
+  #                an internal port; an existing proxy (e.g. Nginx Proxy
+  #                Manager) terminates TLS
+  caddy:
+    build:
+      context: ./admin            # SPA build + Caddyfile live in ./admin
+      dockerfile: Dockerfile
+    image: farryon-gateway:prod
+    restart: unless-stopped
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
+    volumes:
+      - caddy_data:/data          # certificates — must persist across deploys
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - farryon
+
+  # ----------------------------------------------------------------- migrate
+  # One-shot schema migration. Runs to completion before the backend starts,
+  # so new replicas never serve traffic against an old schema.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: farryon-backend:prod
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://farryon:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/farryon}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - farryon
+
+  # ----------------------------------------------------------------- backend
+  backend:
+    image: farryon-backend:prod   # built once by the migrate service
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://farryon:${POSTGRES_PASSWORD}@postgres:5432/farryon}
+      HOST: 0.0.0.0
+      PORT: "8000"
+    # No host ports: only Caddy (and the obs profile) reach the backend, over
+    # the internal docker network.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status==200 else sys.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - farryon
+
+  # ---------------------------------------------------------------- postgres
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-farryon}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-farryon}
+    # No host port: the database is reachable only on the internal network.
+    # For ad-hoc psql use: docker compose -f docker-compose.prod.yml exec postgres psql -U farryon
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-farryon} -d ${POSTGRES_DB:-farryon}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - farryon
+
+  # -------------------------------------------------- observability (opt-in)
+  # Enable with:  docker compose -f docker-compose.prod.yml --profile obs up -d
+  # Both bind to 127.0.0.1 only — reach them through an SSH tunnel, e.g.
+  #   ssh -L 3000:localhost:3000 root@<vps-ip>
+  prometheus:
+    profiles: ["obs"]
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    networks:
+      - farryon
+
+  grafana:
+    profiles: ["obs"]
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      # Localhost-only bind (SSH tunnel to reach it) — still set a real
+      # GRAFANA_PASSWORD in .env before enabling --profile obs.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - farryon
+
+networks:
+  farryon:
+    driver: bridge
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+  promdata:
+  grafanadata:

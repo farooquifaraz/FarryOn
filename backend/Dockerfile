@@ -15,8 +15,13 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application source.
+# Copy the application source, migrations, and operational scripts so the
+# container can run `alembic upgrade head` and `python -m scripts.seed_admin`
+# at deploy time (docs/HOSTINGER_DEPLOYMENT.md).
 COPY app ./app
+COPY alembic.ini ./alembic.ini
+COPY alembic ./alembic
+COPY scripts ./scripts
 
 # Run as an unprivileged user.
 RUN useradd --create-home --uid 10001 appuser \

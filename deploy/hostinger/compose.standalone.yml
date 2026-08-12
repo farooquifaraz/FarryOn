@@ -1,0 +1,12 @@
+# Mode overlay: FarryOn's Caddy owns ports 80/443 and terminates TLS itself
+# (automatic Let's Encrypt). Use when nothing else on the VPS serves web
+# traffic. Selected by PROXY_MODE=standalone (the default) in .env.
+services:
+  caddy:
+    ports:
+      - "80:80"                   # ACME HTTP challenge + redirect to HTTPS
+      - "443:443"
+      - "443:443/udp"             # HTTP/3
+    environment:
+      SITE_ADDRESS: ${DOMAIN:?set DOMAIN in .env (e.g. app.example.com)}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}

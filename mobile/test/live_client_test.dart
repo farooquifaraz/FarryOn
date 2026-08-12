@@ -305,7 +305,7 @@ void main() {
 
       // It must still be *used*: the next connect has to carry it, or renewal
       // would be silently pointless and the socket would 403 on reconnect.
-      client.stop();
+      await client.stop();
       client.start();
       await Future<void>.delayed(Duration.zero);
       expect(connectCount, 2);
