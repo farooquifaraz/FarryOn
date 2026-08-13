@@ -52,7 +52,6 @@ from app.ws.live import router as ws_router
 logger = get_logger(__name__)
 
 
-
 class DetectRequest(BaseModel):
     """Body for ``POST /detect`` (the Finder screen's request).
 

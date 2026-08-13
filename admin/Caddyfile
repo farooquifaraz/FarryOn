@@ -19,7 +19,13 @@
 	# ---- backend paths (FastAPI on the internal network) -------------------
 	# /ws/live is a long-lived WebSocket; Caddy proxies upgrades transparently
 	# and applies no read timeout to streamed connections by default.
-	@backend path /api/* /ws/* /healthz /readyz /detect
+	#
+	# `/` is the public marketing site and `/download*` the direct APK, both
+	# served by the backend (backend/app/web/router.py) rather than from the
+	# SPA bundle — the page ships with the app that knows which builds exist.
+	# `path /` matches the root exactly, so every other URL still falls
+	# through to the SPA handler below.
+	@backend path /api /api/* /ws/* /healthz /readyz /detect / /download /download/* /farry-icon.png /favicon.ico
 	handle @backend {
 		reverse_proxy backend:8000
 	}
