@@ -146,7 +146,13 @@ class Settings(BaseSettings):
     # nobody asked — one Arabic paragraph came back as fluent Vietnamese, with
     # Egypt turned into America and the mosque into a church (S23, 2026-08-13).
     # Transcription has no such escape route.
-    translate_transcribe: bool = Field(default=True)
+    # A live session used purely as a recogniser. Measured against a 31-second
+    # Arabic clip: first words 3.4 s in, 77 deltas, correct Arabic. The other
+    # live model returned one block at 35.4 s, which is not streaming at all.
+    translate_asr_model: str = Field(default="gemini-2.5-flash-native-audio-latest")
+    # The batch transcriber it replaced. Off: it costs a second round trip and
+    # only ever existed because the listener used to translate.
+    translate_transcribe: bool = Field(default=False)
     translate_transcribe_model: str = Field(default="gemini-2.5-flash")
     # `gemini-3.1-flash-lite-preview` took 8.8 s on a 352-character block on the
     # device. This one measured 0.6 s with reasoning off.

@@ -68,9 +68,15 @@ class PcmPlayer {
       codec: Codec.pcm16,
       numChannels: AudioFormat.channels,
       sampleRate: AudioFormat.ttsSampleRate, // 24 kHz
-      // Keep internal buffering small for low latency; flutter_sound feeds the
-      // OS audio unit as chunks arrive.
-      bufferSize: 4096,
+      // 4096 bytes is 85 ms, which is fine for the phone's own speaker and far
+      // too little for Bluetooth. On the glasses it starved the A2DP stream —
+      // `btif_a2dp_source: UNDERFLOW: ONLY READ 0 BYTES OUT OF 4096`, then
+      // `ack_stream_suspended` — so the translation arrived chopped up and the
+      // route sometimes fell back to the phone's loudspeaker mid-sentence
+      // (device log, 2026-08-13). A Bluetooth link needs a few hundred
+      // milliseconds of slack; this is ~0.7 s, still short enough that
+      // interrupting the assistant feels immediate.
+      bufferSize: 32768,
       interleaved: true,
     );
     _streaming = true;

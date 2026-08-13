@@ -85,6 +85,14 @@ _SENTENCE_ENDINGS = ".?!।॥؟。！？…"
 #: one <p> does not grow without bound.
 _MAX_UTTERANCE_CHARS = 400
 
+#: Shortest run of text that may be closed off by its own full stop.
+#:
+#: Without a floor, "Yes." or an abbreviation would each become an utterance of
+#: their own — a round trip and a spoken fragment for two words. Long enough to
+#: be a sentence worth translating, short enough that a real one is not held
+#: back waiting for the next.
+_MIN_SENTENCE_CHARS = 25
+
 #: The model pads its output stream with pure digital silence — 15.2 s of it
 #: after 3.5 s of speech, and it keeps going for as long as the session is open
 #: (measured 2026-08-10). Forwarding that is ~170 MB/hour of zeros over the
@@ -460,8 +468,23 @@ class GeminiTranslateGateway(AIGateway):
                 )
             )
 
-        # A monologue that never pauses would otherwise grow one line forever.
-        if len(self._heard_buf) > _MAX_UTTERANCE_CHARS:
+        # Close on a FINISHED SENTENCE, without waiting for the speaker to go
+        # quiet. This is what makes the feature live.
+        #
+        # Until this existed an utterance only ended on silence, so someone
+        # reading a paragraph without pausing produced one 31-second block: the
+        # translation started when they stopped, eleven seconds after the first
+        # sentence was over. An interpreter does not work that way — they follow
+        # a sentence behind, not a paragraph behind.
+        #
+        # The cut is at the punctuation, never mid-thought. Cutting on silence
+        # alone is what used to chop sentences in half; this is the opposite,
+        # and it only fires where a sentence has genuinely ended.
+        if self._sentence_ready():
+            await self._finalize(turn_complete=True, sentence_only=True)
+        # A monologue that never pauses AND never punctuates would otherwise
+        # grow one line forever.
+        elif len(self._heard_buf) > _MAX_UTTERANCE_CHARS:
             await self._finalize(turn_complete=True)
 
         # Kept for completeness. Neither fired once against the real model, but
@@ -557,7 +580,28 @@ class GeminiTranslateGateway(AIGateway):
                 return value.strip().lower()[:16]
         return None
 
-    async def _finalize(self, *, turn_complete: bool) -> None:
+    def _sentence_ready(self) -> bool:
+        """Is there a finished sentence sitting in the buffer?
+
+        Looks INSIDE the buffer rather than only at its end. Deltas do not
+        arrive on sentence boundaries — the model sends "…السبت. الايام هي" as
+        one piece — so a check that only asked "does the buffer end in a full
+        stop" almost never fired, and a 31-second paragraph still came through
+        as a single block.
+        """
+        cut = self._last_sentence_end()
+        return cut is not None and cut >= _MIN_SENTENCE_CHARS
+
+    def _last_sentence_end(self) -> int | None:
+        """Index just past the last sentence-ending character, or None."""
+        for i in range(len(self._heard_buf) - 1, -1, -1):
+            if self._heard_buf[i] in _SENTENCE_ENDINGS:
+                return i + 1
+        return None
+
+    async def _finalize(
+        self, *, turn_complete: bool, sentence_only: bool = False
+    ) -> None:
         """Close out an utterance: end audio, finalize both transcripts.
 
         Two callers race here — the receive loop (on a length break) and the
@@ -566,10 +610,26 @@ class GeminiTranslateGateway(AIGateway):
         is awaited. Clearing them afterwards let the other caller wake up in
         between and emit the same utterance a second time.
         """
-        heard, self._heard_buf = self._heard_buf, ""
-        heard_lang, self._heard_lang = self._heard_lang, None
-        translated, self._translated_buf = self._translated_buf, ""
-        was_open, self._audio_open = self._audio_open, False
+        # When a sentence has ended mid-buffer, close off THAT sentence and
+        # leave the words after it for the next one. Taking the whole buffer
+        # would either wait for the speaker to stop (the eleven-second delay
+        # this exists to remove) or cut a half-finished thought loose.
+        cut = self._last_sentence_end() if sentence_only else None
+        if cut is not None and cut < len(self._heard_buf):
+            heard, self._heard_buf = (
+                self._heard_buf[:cut],
+                self._heard_buf[cut:].lstrip(),
+            )
+            heard_lang = self._heard_lang
+            # The translation lags the speech, so whatever of it has arrived
+            # belongs with this sentence; the rest catches up on the next.
+            translated, self._translated_buf = self._translated_buf, ""
+            was_open, self._audio_open = self._audio_open, False
+        else:
+            heard, self._heard_buf = self._heard_buf, ""
+            heard_lang, self._heard_lang = self._heard_lang, None
+            translated, self._translated_buf = self._translated_buf, ""
+            was_open, self._audio_open = self._audio_open, False
 
         if not (heard or translated or was_open):
             return  # nothing to close — the other caller got here first

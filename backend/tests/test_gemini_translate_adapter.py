@@ -28,6 +28,7 @@ import pytest
 
 from app.ai.events import EventType
 from app.ai.gemini_translate import (
+    _MIN_SENTENCE_CHARS,
     _MAX_REOPENS,
     _SENTENCE_GAP_S,
     _SILENCE_GRACE_CHUNKS,
@@ -584,3 +585,148 @@ class TestTellingItWhatItIsHearing:
         gw = GeminiTranslateGateway(target_language="hi", language_hints=["ar"])
         in_tx = gw._build_config().input_audio_transcription
         assert in_tx.language_auto is None
+
+
+class TestItDoesNotWaitForThePersonToStopTalking:
+    """"Live" translation that starts when the speaker finishes is not live.
+
+    Faraz's objection, and he is right: a 31-second paragraph read without
+    pauses became ONE utterance, so nothing was translated until the reader
+    stopped — eleven seconds after the first sentence had ended. An interpreter
+    follows a sentence behind, not a paragraph behind.
+
+    So an utterance now closes on a finished sentence as well as on silence.
+    The cut is at the punctuation and nowhere else: cutting on silence alone is
+    what used to chop sentences in half, and this must not bring that back.
+    """
+
+    async def test_a_finished_sentence_closes_without_any_pause(self) -> None:
+        gw = _gw()
+        # Delivered as deltas, back to back, exactly as the model sends them.
+        for part in ("The old market in Cairo opens at nine",
+                     " in the morning and closes at eleven at night."):
+            await gw._handle_message(_msg(heard=part, heard_lang="en"))
+
+        finals = [
+            e for e in await _drain(gw)
+            if e.type == EventType.TRANSCRIPT and e.final and e.role == "user"
+        ]
+        assert finals, "it waited for silence that never came"
+        assert finals[0].text.endswith("night.")
+        assert gw._heard_buf == "", "the buffer should start fresh"
+
+    async def test_the_next_sentence_is_its_own_utterance(self) -> None:
+        gw = _gw()
+        await gw._handle_message(
+            _msg(heard="The old market in Cairo opens at nine in the morning.",
+                 heard_lang="en"))
+        await _drain(gw)
+        await gw._handle_message(
+            _msg(heard=" My uncle Kareem sells spices there, and cinnamon.",
+                 heard_lang="en"))
+
+        finals = [
+            e for e in await _drain(gw)
+            if e.type == EventType.TRANSCRIPT and e.final and e.role == "user"
+        ]
+        assert finals, "the second sentence never closed"
+        assert "Kareem" in finals[0].text
+        assert "Cairo" not in finals[0].text, "the two ran together"
+
+    async def test_it_does_not_cut_mid_thought(self) -> None:
+        # The failure this must not reintroduce: "register account in all three
+        # services and" / "generate" arriving as two lines.
+        gw = _gw()
+        for part in ("Register the account in all three services and",
+                     " generate the keys"):
+            await gw._handle_message(_msg(heard=part, heard_lang="en"))
+
+        finals = [
+            e for e in await _drain(gw)
+            if e.type == EventType.TRANSCRIPT and e.final
+        ]
+        assert not finals, "an unfinished sentence was cut"
+
+    async def test_two_words_and_a_full_stop_are_not_worth_a_round_trip(self) -> None:
+        # "Yes." should ride along with what follows, not become its own
+        # utterance with its own transcription, translation and voice.
+        gw = _gw()
+        await gw._handle_message(_msg(heard="Yes.", heard_lang="en"))
+        finals = [
+            e for e in await _drain(gw)
+            if e.type == EventType.TRANSCRIPT and e.final
+        ]
+        assert not finals, "a two-word fragment was sent down the pipeline"
+
+    async def test_an_endless_sentence_still_gets_broken_eventually(self) -> None:
+        gw = _gw()
+        await gw._handle_message(_msg(heard="x" * 500, heard_lang="en"))
+        finals = [
+            e for e in await _drain(gw)
+            if e.type == EventType.TRANSCRIPT and e.final
+        ]
+        assert finals, "someone who never punctuates would never be translated"
+
+
+class TestCuttingInsideTheBuffer:
+    """The first attempt at sentence-cutting almost never fired.
+
+    It asked "does the buffer END in a full stop", but deltas do not arrive on
+    sentence boundaries — the model sends "…السبت. الايام هي" as one piece. So
+    the check kept missing and a 31-second paragraph still came through as one
+    block, which is the whole complaint.
+    """
+
+    async def test_a_sentence_buried_mid_delta_is_still_found(self) -> None:
+        gw = _gw()
+        await gw._handle_message(_msg(
+            heard="The market opens at nine in the morning. My uncle sells",
+            heard_lang="en"))
+
+        finals = [
+            e for e in await _drain(gw)
+            if e.type == EventType.TRANSCRIPT and e.final and e.role == "user"
+        ]
+        assert finals, "the full stop in the middle was missed"
+        assert finals[0].text == "The market opens at nine in the morning."
+
+    async def test_the_words_after_it_are_kept_not_dropped(self) -> None:
+        gw = _gw()
+        await gw._handle_message(_msg(
+            heard="The market opens at nine in the morning. My uncle sells",
+            heard_lang="en"))
+        await _drain(gw)
+        assert gw._heard_buf == "My uncle sells", (
+            f"the tail was lost or mangled: {gw._heard_buf!r}"
+        )
+
+    async def test_the_tail_joins_the_next_sentence(self) -> None:
+        gw = _gw()
+        await gw._handle_message(_msg(
+            heard="The market opens at nine in the morning. My uncle",
+            heard_lang="en"))
+        await _drain(gw)
+        await gw._handle_message(_msg(
+            heard=" sells spices there, cumin and cinnamon.", heard_lang="en"))
+
+        finals = [
+            e for e in await _drain(gw)
+            if e.type == EventType.TRANSCRIPT and e.final and e.role == "user"
+        ]
+        assert finals, "the second sentence never closed"
+        assert finals[0].text == "My uncle sells spices there, cumin and cinnamon."
+
+    async def test_several_sentences_in_one_delta_close_together(self) -> None:
+        # Cutting only at the LAST ending keeps them in one line rather than
+        # emitting a burst of fragments — one round trip, one spoken reply.
+        gw = _gw()
+        await gw._handle_message(_msg(
+            heard="It opens at nine. It closes at eleven. My uncle",
+            heard_lang="en"))
+        finals = [
+            e for e in await _drain(gw)
+            if e.type == EventType.TRANSCRIPT and e.final and e.role == "user"
+        ]
+        assert len(finals) == 1
+        assert finals[0].text == "It opens at nine. It closes at eleven."
+        assert gw._heard_buf == "My uncle"

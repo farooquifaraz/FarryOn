@@ -12,20 +12,20 @@ with ``target=en`` came back as correct Arabic and an accurate translation
 
 So the job is split, which is also what most production translators do:
 
-===========  ==========================================  ==========
+===========  ==========================================  ==============
 step         who                                         measured
-===========  ==========================================  ==========
-hear         the live model with ``target=en``, which     accurate
-             transcribes the source language correctly
-translate    a text model, reasoning switched off         0.6 s
-speak        a streaming TTS model                        first
-                                                          sound in
-                                                          1.5 s
-===========  ==========================================  ==========
+===========  ==========================================  ==============
+hear         a streaming recogniser (see gemini_asr)     words 3.4 s in,
+                                                         77 deltas over
+                                                         a 31 s clip
+translate    a text model, reasoning switched off        0.6 s
+speak        a streaming TTS model                       first sound
+                                                         after 1.5 s
+===========  ==========================================  ==============
 
-That is about two seconds more than the single-model path — on top of the 2.6 s
-this feature already waits for a speaker to finish a sentence, so it is a
-smaller change than it sounds.
+Because the recogniser streams, a sentence is ready while the speaker is still
+talking — the translation goes out a few seconds behind the voice instead of
+after the whole paragraph. Nothing cuts the audio; only the text is segmented.
 
 What it buys, beyond the translation being right: **every stage is visible.**
 When the old path turned Arabic into "the movie", nothing in our logs could say
@@ -38,7 +38,7 @@ import asyncio
 import contextlib
 import time
 from collections.abc import AsyncIterator
-from typing import Any, NamedTuple
+from typing import Any
 
 from app.ai.base import AIGateway, ToolSpec
 from app.ai.events import (
@@ -61,21 +61,8 @@ logger = get_logger(__name__)
 #: use its English — only the source transcript that comes with it.
 _LISTEN_TARGET = "en"
 
-#: Ceiling on the audio kept for one utterance — 60 s at 16 kHz PCM16. Someone
-#: who never pauses must not be able to grow this without bound, and a minute is
-#: already far longer than anything the gap watchdog lets through.
-_MAX_UTTERANCE_BYTES = 16000 * 2 * 60
-
-#: Below this there is nothing worth sending to a transcriber — a quarter second
-#: of audio is a cough, and the round trip costs more than it could return.
-_MIN_UTTERANCE_BYTES = 16000 * 2 // 4
 
 
-class Transcript(NamedTuple):
-    """What was actually said, and in what language."""
-
-    text: str
-    lang: str | None
 
 
 class CascadeTranslateGateway(AIGateway):
@@ -89,7 +76,6 @@ class CascadeTranslateGateway(AIGateway):
         target_language: str = "en",
         echo_target_language: bool = False,
         listener: AIGateway | None = None,
-        transcriber: Any | None = None,
         translator: Any | None = None,
         speaker: Any | None = None,
         model: str | None = None,
@@ -107,24 +93,15 @@ class CascadeTranslateGateway(AIGateway):
         self._work: set[asyncio.Task[None]] = set()
 
         if listener is None:
-            from app.ai.gemini_translate import GeminiTranslateGateway
+            from app.ai.gemini_asr import GeminiStreamingASR
 
-            listener = GeminiTranslateGateway(
-                target_language=_LISTEN_TARGET,
-                echo_target_language=False,
-                text_only=True,  # we speak for ourselves; do not buy its audio
-            )
+            # A recogniser, not a translator. Asked to translate, the old
+            # listener translated — into Vietnamese, into English, into
+            # whatever — and everything downstream inherited it.
+            listener = GeminiStreamingASR()
         self._listener = listener
-        self._transcriber = (
-            transcriber
-            if transcriber is not None
-            else (_GeminiTranscriber(settings) if settings.translate_transcribe else None)
-        )
         self._translator = translator or _GeminiTextTranslator(settings)
         self._speaker = speaker or _GeminiSpeaker(settings)
-        #: Audio for the utterance being spoken right now, so it can be
-        #: transcribed properly once the speaker stops.
-        self._utterance = bytearray()
 
     # -- Lifecycle -----------------------------------------------------------
 
@@ -133,11 +110,10 @@ class CascadeTranslateGateway(AIGateway):
         self._pump_task = asyncio.create_task(self._pump_listener())
 
     async def send_audio(self, pcm: bytes, ts_ms: int | None = None) -> None:
-        # Kept as well as forwarded. The live model tells us WHEN someone
-        # stopped talking; what they actually said is read back off this buffer
-        # by a transcriber. See _transcribe.
-        if len(self._utterance) < _MAX_UTTERANCE_BYTES:
-            self._utterance.extend(pcm)
+        # Straight through. Nothing here keeps or cuts the audio: the recogniser
+        # streams words as they are spoken and segmentation happens on the TEXT.
+        # Slicing the waveform at boundaries found in the text is what split
+        # "عمي كريم" in half and printed the same clause twice.
         await self._listener.send_audio(pcm)
 
     async def send_text(self, text: str) -> None:
@@ -204,18 +180,11 @@ class CascadeTranslateGateway(AIGateway):
                     continue
                 await self._queue.put(event)
                 if event.final and event.text.strip():
-                    # Take the audio for this utterance and start a fresh
-                    # buffer, synchronously, before anything awaits — the next
-                    # chunk can arrive while the transcription is in flight.
-                    audio = bytes(self._utterance)
-                    self._utterance.clear()
                     task = asyncio.create_task(
-                        self._translate_and_speak(event.text, event.lang, audio)
+                        self._translate_and_speak(event.text, event.lang)
                     )
                     self._work.add(task)
                     task.add_done_callback(self._work.discard)
-                elif event.final:
-                    self._utterance.clear()
         except asyncio.CancelledError:
             raise
         finally:
@@ -228,24 +197,8 @@ class CascadeTranslateGateway(AIGateway):
     # -- Steps 2 and 3: translate, then speak --------------------------------
 
     async def _translate_and_speak(
-        self, text: str, source_lang: str | None, audio: bytes = b""
+        self, text: str, source_lang: str | None
     ) -> None:
-        # What the live model heard is only a first draft. On the S23 it turned
-        # an Arabic paragraph into fluent Vietnamese — Egypt became America and
-        # the mosque became a church — and everything downstream inherited that.
-        # A transcriber is asked to write down what was said instead, which is a
-        # different task with no reason to produce another language at all.
-        if audio and self._transcriber is not None:
-            better = await self._transcribe(audio)
-            if better:
-                text = better.text
-                source_lang = better.lang or source_lang
-                await self._queue.put(
-                    TranscriptEvent(
-                        role="user", text=text, final=True, lang=source_lang
-                    )
-                )
-
         if self._same_language(source_lang):
             # Already in the target. Saying it back is what
             # `echo_target_language=False` avoids upstream; the client shows its
@@ -280,31 +233,6 @@ class CascadeTranslateGateway(AIGateway):
         )
         await self._speak(translated)
 
-    async def _transcribe(self, audio: bytes) -> Transcript | None:
-        """Write down what was said. Returns None to keep the live model's draft.
-
-        Never raises: a transcription that fails costs accuracy on one line, and
-        the draft is still a usable line. Losing the utterance would be worse.
-        """
-        if len(audio) < _MIN_UTTERANCE_BYTES:
-            return None
-        started = time.monotonic()
-        try:
-            result = await self._transcriber.transcribe(audio)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("cascade_translate.transcribe_failed", error=repr(exc))
-            metrics.TRANSLATE_ERRORS.labels(stage="transcribe").inc()
-            return None
-        if result is None or not result.text.strip():
-            return None
-        logger.info(
-            "cascade_translate.transcribed",
-            lang=result.lang,
-            chars=len(result.text),
-            audio_seconds=round(len(audio) / 32000, 1),
-            ms=int((time.monotonic() - started) * 1000),
-        )
-        return result
 
     async def _speak(self, text: str) -> None:
         opened = False
@@ -341,81 +269,6 @@ class CascadeTranslateGateway(AIGateway):
             == self.target_language.split("-")[0].lower()
         )
 
-
-class _GeminiTranscriber:
-    """Step one done properly: write down the words, do not translate them.
-
-    The live model was doing this job as a side effect of being asked to
-    translate, and it kept answering a question nobody asked — Arabic in,
-    Vietnamese out. Transcription has no such escape route: there is only one
-    correct answer and it is in the language that was spoken.
-
-    Batch rather than streaming, because it is fast enough to be invisible:
-    33 seconds of audio came back in 3.2 s, and utterances here are seconds
-    long, not minutes.
-    """
-
-    def __init__(self, settings: Any) -> None:
-        self._settings = settings
-
-    async def transcribe(self, pcm: bytes) -> Transcript | None:
-        from google import genai
-        from google.genai import types
-
-        client = genai.Client(api_key=self._settings.gemini_api_key)
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=self._settings.translate_transcribe_model,
-            contents=[
-                types.Part.from_bytes(data=_wav(pcm), mime_type="audio/wav"),
-                "Transcribe this audio word for word, in the language actually "
-                "spoken. Do NOT translate it. Do not add anything.\n"
-                "Reply with exactly two lines and no numbering, no labels and "
-                "no punctuation around them:\n"
-                "first line: the BCP-47 code of the language spoken\n"
-                "second line: the transcript",
-            ],
-            config=types.GenerateContentConfig(
-                temperature=0,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
-        )
-        raw = (response.text or "").strip()
-        if not raw:
-            return None
-        lines = [_unnumber(line) for line in raw.splitlines() if line.strip()]
-        lines = [line for line in lines if line]
-        if len(lines) >= 2 and len(lines[0]) <= 12:
-            return Transcript(text=" ".join(lines[1:]), lang=lines[0] or None)
-        # It ignored the format. The transcript is still the useful part.
-        return Transcript(text=" ".join(lines) if lines else raw, lang=None)
-
-
-def _unnumber(line: str) -> str:
-    """Strip a leading "1." / "2)" the model adds despite being asked not to.
-
-    It leaked once and reached the screen: the heard pane read "2. أيام الأسبوع"
-    and the Hindi came out as "2. सप्ताह के दिन" — a list marker translated as
-    if it were speech.
-    """
-    import re
-
-    return re.sub(r"^\s*\d+\s*[.)\]:-]\s*", "", line).strip()
-
-
-def _wav(pcm: bytes, rate: int = 16000) -> bytes:
-    """Wrap raw PCM16 mono in a WAV header — the API wants a container."""
-    import struct
-
-    return (
-        b"RIFF"
-        + struct.pack("<I", 36 + len(pcm))
-        + b"WAVEfmt "
-        + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
-        + b"data"
-        + struct.pack("<I", len(pcm))
-        + pcm
-    )
 
 
 class _GeminiTextTranslator:
