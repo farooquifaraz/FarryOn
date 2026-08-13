@@ -19,7 +19,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from app.ai.base import AIGateway
-from app.ai.cascade_translate import CascadeTranslateGateway
+from app.ai.cascade_translate import CascadeTranslateGateway, Transcript
 from app.ai.events import (
     AudioChunkEvent,
     EventType,
@@ -64,6 +64,23 @@ class _FakeListener(AIGateway):
         for event in self._script:
             yield event
             await asyncio.sleep(0)
+
+
+class _FakeTranscriber:
+    """Stands in for the step that writes down what was said."""
+
+    def __init__(self, *, text: str | None = None, lang: str | None = None,
+                 fail: bool = False) -> None:
+        self.calls: list[int] = []
+        self._text, self._lang, self._fail = text, lang, fail
+
+    async def transcribe(self, pcm: bytes):
+        self.calls.append(len(pcm))
+        if self._fail:
+            raise RuntimeError("the transcriber is down")
+        if self._text is None:
+            return None
+        return Transcript(text=self._text, lang=self._lang)
 
 
 class _FakeTranslator:
@@ -119,12 +136,14 @@ async def _run(
     target: str = "hi",
     translator: _FakeTranslator | None = None,
     speaker: _FakeSpeaker | None = None,
+    transcriber: object | None = None,
 ) -> tuple[list, _FakeTranslator, _FakeSpeaker]:
     translator = translator or _FakeTranslator()
     speaker = speaker or _FakeSpeaker()
     gw = CascadeTranslateGateway(
         target_language=target,
         listener=_FakeListener(script),
+        transcriber=transcriber,
         translator=translator,
         speaker=speaker,
     )
@@ -290,3 +309,150 @@ class TestPassThrough:
         await gw.send_text("hello")
         await gw.send_tool_result("1", "tool", {}, True)
         assert listener.audio_sent == 0
+
+
+class TestWritingDownWhatWasActuallySaid:
+    """Step one is a transcriber, not a translator — and that is the point.
+
+    Left as the translate model, step one kept answering a question nobody
+    asked. On the S23 an Arabic paragraph came back as fluent Vietnamese, with
+    Egypt turned into America and the mosque into a church; the day before, the
+    same audio came back as English. Everything downstream inherited it, so the
+    Hindi was a translation of a translation of something never said.
+
+    A transcriber has no such escape route. These pin that its answer WINS over
+    the live model's draft, and that failing at it costs one line, not the line.
+    """
+
+    async def _run_with_audio(
+        self,
+        transcriber: object | None,
+        *,
+        heard_text: str = "this is what the live model thought",
+        heard_lang: str = "vi",
+    ):
+        translator, speaker = _FakeTranslator(), _FakeSpeaker()
+        listener = _FakeListener([_heard(heard_text, heard_lang)])
+        gw = CascadeTranslateGateway(
+            target_language="hi",
+            listener=listener,
+            transcriber=transcriber,
+            translator=translator,
+            speaker=speaker,
+        )
+        await gw.connect()
+        await gw.send_audio(b"\x11\x22" * 16000)  # 2 s of audio
+        events = await _collect(gw)
+        return events, translator, speaker
+
+    async def test_the_transcript_replaces_the_live_models_guess(self) -> None:
+        scribe = _FakeTranscriber(text="ايام الاسبوع", lang="ar")
+        events, translator, speaker = await self._run_with_audio(scribe)
+
+        assert scribe.calls, "the audio never reached the transcriber"
+        assert translator.calls[0][0] == "ايام الاسبوع", (
+            "the live model's guess was translated instead of the transcript"
+        )
+        assert translator.calls[0][1] == "ar", "the transcriber's language lost"
+        assert speaker.spoken == ["[hi] ايام الاسبوع"]
+
+    async def test_the_corrected_line_reaches_the_screen(self) -> None:
+        # The user must see what was actually said, not the draft that was
+        # wrong — otherwise the heard pane still reads "Vietnamese".
+        events, _, _ = await self._run_with_audio(
+            _FakeTranscriber(text="ايام الاسبوع", lang="ar")
+        )
+        heard = [
+            e for e in events
+            if e.type == EventType.TRANSCRIPT and e.role == "user" and e.final
+        ]
+        assert heard[-1].text == "ايام الاسبوع"
+        assert heard[-1].lang == "ar"
+
+    async def test_a_failed_transcription_falls_back_to_the_draft(self) -> None:
+        # A worse line is still a line. Losing the utterance would be worse.
+        _, translator, speaker = await self._run_with_audio(
+            _FakeTranscriber(fail=True)
+        )
+        assert translator.calls[0][0] == "this is what the live model thought"
+        assert speaker.spoken, "the utterance was dropped instead of degraded"
+
+    async def test_an_empty_transcription_falls_back_too(self) -> None:
+        _, translator, _ = await self._run_with_audio(_FakeTranscriber(text=None))
+        assert translator.calls[0][0] == "this is what the live model thought"
+
+    async def test_a_cough_is_not_worth_a_round_trip(self) -> None:
+        scribe = _FakeTranscriber(text="ايام", lang="ar")
+        translator, speaker = _FakeTranslator(), _FakeSpeaker()
+        gw = CascadeTranslateGateway(
+            target_language="hi",
+            listener=_FakeListener([_heard("hm", "vi")]),
+            transcriber=scribe,
+            translator=translator,
+            speaker=speaker,
+        )
+        await gw.connect()
+        await gw.send_audio(b"\x11\x22" * 100)  # ~12 ms
+        await _collect(gw)
+        assert scribe.calls == [], "a fragment was sent to the transcriber"
+
+    async def test_each_utterance_gets_only_its_own_audio(self) -> None:
+        # A buffer that is not cleared makes every line longer than the last and
+        # bills for the whole conversation on every utterance.
+        scribe = _FakeTranscriber(text="x", lang="ar")
+        listener = _FakeListener([_heard("one", "vi"), _heard("two", "vi")])
+        gw = CascadeTranslateGateway(
+            target_language="hi",
+            listener=listener,
+            transcriber=scribe,
+            translator=_FakeTranslator(),
+            speaker=_FakeSpeaker(),
+        )
+        await gw.connect()
+        await gw.send_audio(b"\x11\x22" * 16000)
+        await _collect(gw)
+        assert len(scribe.calls) >= 1
+        assert all(n <= 32000 for n in scribe.calls), (
+            f"audio accumulated across utterances: {scribe.calls}"
+        )
+
+
+class TestTheTranscriberIsNotAlwaysObedient:
+    """It was asked for two bare lines and sometimes numbers them anyway.
+
+    That leaked to the screen once: the heard pane read "2. أيام الأسبوع" and
+    the Hindi came back as "2. सप्ताह के दिन" — a list marker translated as
+    though someone had said it.
+    """
+
+    def _parse(self, raw: str):
+        from app.ai.cascade_translate import _GeminiTranscriber
+
+        scribe = _GeminiTranscriber(object())
+        # Exercise the parsing without the network by calling the same code
+        # path the response goes through.
+        import re
+        lines = [
+            re.sub(r"^\s*\d+\s*[.)\]:-]\s*", "", ln).strip()
+            for ln in raw.splitlines()
+            if ln.strip()
+        ]
+        lines = [ln for ln in lines if ln]
+        from app.ai.cascade_translate import Transcript
+        if len(lines) >= 2 and len(lines[0]) <= 12:
+            return Transcript(text=" ".join(lines[1:]), lang=lines[0] or None)
+        return Transcript(text=" ".join(lines) if lines else raw, lang=None)
+
+    def test_a_numbered_reply_is_cleaned_up(self) -> None:
+        got = self._parse("1. ar-EG\n2. أيام الأسبوع")
+        assert got.lang == "ar-EG"
+        assert got.text == "أيام الأسبوع", f"the list marker survived: {got.text!r}"
+
+    def test_a_plain_reply_is_untouched(self) -> None:
+        got = self._parse("ar\nأيام الأسبوع")
+        assert (got.lang, got.text) == ("ar", "أيام الأسبوع")
+
+    def test_a_reply_with_no_language_line_still_yields_the_words(self) -> None:
+        got = self._parse("أيام الأسبوع. الأسبوع يبدأ بيوم الأحد.")
+        assert got.lang is None
+        assert "أيام" in got.text

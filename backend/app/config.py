@@ -141,8 +141,17 @@ class Settings(BaseSettings):
         default="cascade",
         description="direct (one model) | cascade (hear, translate, speak).",
     )
+    # Step one: write down what was said. The live model was doing this as a
+    # side effect of being asked to translate, and kept answering a question
+    # nobody asked — one Arabic paragraph came back as fluent Vietnamese, with
+    # Egypt turned into America and the mosque into a church (S23, 2026-08-13).
+    # Transcription has no such escape route.
+    translate_transcribe: bool = Field(default=True)
+    translate_transcribe_model: str = Field(default="gemini-2.5-flash")
+    # `gemini-3.1-flash-lite-preview` took 8.8 s on a 352-character block on the
+    # device. This one measured 0.6 s with reasoning off.
     translate_text_model: str = Field(
-        default="gemini-3.1-flash-lite-preview",
+        default="gemini-2.5-flash",
         description="Text model for the translate step of the cascade.",
     )
     #: Must be a STREAMING TTS model. The non-streaming one returns a single
