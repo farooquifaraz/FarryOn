@@ -13,7 +13,7 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (user) return <Navigate to="/" replace />;
+  if (user) return <Navigate to="/admin" replace />;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -22,14 +22,14 @@ export default function Login() {
     try {
       if (pendingToken) {
         await verify2fa(pendingToken, code);
-        navigate("/");
+        navigate("/admin");
         return;
       }
       const result = await login(email, password);
       if (result.twoFactorRequired) {
         setPendingToken(result.pendingToken!);
       } else {
-        navigate("/");
+        navigate("/admin");
       }
     } catch (err) {
       if (err instanceof NotAnAdminError) {

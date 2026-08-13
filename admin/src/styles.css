@@ -233,3 +233,52 @@ tbody tr:hover { background: rgba(0, 212, 170, 0.03); }
 
 .empty { text-align: center; color: var(--td); padding: 40px 0; font-size: 13px; }
 .loading { text-align: center; color: var(--tm); padding: 40px 0; font-size: 13px; font-family: var(--fm); }
+
+/* ---------------------------------------------------------------- landing */
+/* Public page at `/`. Reuses the tokens above so the front door and the admin
+   panel behind it read as one product. */
+.landing { position: relative; z-index: 1; max-width: 1080px; margin: 0 auto; padding: 0 24px 60px; }
+
+.landing-nav { display: flex; align-items: center; justify-content: space-between; padding: 22px 0 0; flex-wrap: wrap; gap: 12px; }
+.landing-nav .brand { padding: 0; font-size: 17px; }
+.landing-nav nav { display: flex; align-items: center; gap: 22px; }
+.landing-nav nav a { color: var(--tm); font-size: 13px; transition: 0.2s; }
+.landing-nav nav a:hover { color: var(--t); }
+.landing-nav nav a.btn-primary { color: #030912; }
+
+.landing-hero { padding: 84px 0 72px; text-align: center; }
+.eyebrow { font-family: var(--fm); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--pl); margin-bottom: 20px; }
+.landing-hero h1 { font-family: var(--fd); font-size: clamp(32px, 6vw, 56px); line-height: 1.12; letter-spacing: -0.02em; margin-bottom: 20px; }
+.landing-hero h1 em { font-style: normal; color: var(--pl); text-shadow: 0 0 34px rgba(0, 212, 170, 0.35); }
+.lede { max-width: 620px; margin: 0 auto; color: var(--tm); font-size: 15.5px; }
+.landing-cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 34px; }
+.btn-primary.lg, .btn-outline.lg { padding: 13px 30px; font-size: 14px; }
+
+.landing-section { padding: 56px 0; }
+.landing-section h2 { font-family: var(--fd); font-size: 26px; margin-bottom: 30px; text-align: center; }
+
+.feature-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); }
+.feature { background: rgba(0, 212, 170, 0.03); border: 1px solid rgba(0, 212, 170, 0.1); border-radius: 16px; padding: 24px 22px; transition: 0.25s; }
+.feature:hover { border-color: rgba(0, 212, 170, 0.3); transform: translateY(-2px); }
+.feature-icon { font-size: 22px; display: block; margin-bottom: 12px; }
+.feature h3 { font-family: var(--fd); font-size: 15.5px; margin-bottom: 7px; }
+.feature p { color: var(--tm); font-size: 13.5px; }
+
+.steps { list-style: none; display: grid; gap: 14px; counter-reset: step; max-width: 760px; margin: 0 auto; }
+.steps li { counter-increment: step; display: grid; grid-template-columns: 34px 1fr; gap: 16px; align-items: start; background: rgba(0, 212, 170, 0.02); border: 1px solid rgba(0, 212, 170, 0.08); border-radius: 14px; padding: 18px 20px; }
+.steps li::before { content: counter(step); font-family: var(--fm); font-size: 12px; color: var(--pl); border: 1px solid rgba(0, 212, 170, 0.28); border-radius: 50%; width: 28px; height: 28px; display: grid; place-items: center; }
+.steps b { font-size: 14.5px; display: block; margin-bottom: 3px; }
+.steps span { display: block; color: var(--tm); font-size: 13.5px; }
+
+.landing-foot { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding-top: 30px; border-top: 1px solid rgba(0, 212, 170, 0.08); font-size: 12.5px; }
+.landing-foot .brand { padding: 0; font-size: 14px; }
+.landing-foot .muted { color: var(--td); }
+.landing-foot a { color: var(--tm); }
+.landing-foot a:hover { color: var(--pl); }
+
+@media (max-width: 620px) {
+  .landing-hero { padding: 56px 0 48px; }
+  .landing-nav nav { gap: 14px; }
+  /* Three items on one line crowd each other at phone width. */
+  .landing-foot { flex-direction: column; align-items: flex-start; gap: 10px; }
+}
