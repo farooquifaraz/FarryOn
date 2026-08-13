@@ -7,11 +7,17 @@ name: Build Android APK
 # (enable "Install unknown apps"). Point it at your deployed backend in the app's
 # in-app settings sheet (⚙️): host = <name>.onrender.com, port = 443, secure = ON.
 #
-# Note: the app ships its Dart code (lib/), pubspec, and tests, but not the
-# generated Android Gradle project. We materialise a version-correct Android
-# project (v2 embedding) at build time with `flutter create`, then patch in the
-# camera/mic/internet permissions. This keeps the repo free of generated gradle
-# while guaranteeing the scaffold matches the pinned Flutter version.
+# Note: mobile/android is committed and is what we build. It used to be
+# scaffolded here with `flutter create`, from a time when the repo did not
+# carry one — that stopped being true once the glasses Kotlin channels,
+# foreground services, and twenty-one manifest permissions landed in it, and
+# the scaffold was deleting all of them on every run. It also regenerated a
+# Gradle wrapper pointing at github.com/gradle/gradle-distributions, whose
+# 503s failed this workflow on every run from 2026-07-25 onward; the committed
+# wrapper pins 8.14 on services.gradle.org.
+#
+# The vendor glasses .aar is git-ignored, so CI builds without it — the app
+# falls back to stub mode, exactly as app/libs/README.md describes.
 
 on:
   workflow_dispatch:
@@ -43,33 +49,6 @@ jobs:
 
       - name: Flutter version
         run: flutter --version
-
-      - name: Materialise Android project (v2 embedding)
-        run: |
-          flutter create \
-            --org com.farryon --project-name farryon \
-            --platforms=android /tmp/farryon_scaffold
-          rm -rf android
-          cp -r /tmp/farryon_scaffold/android ./android
-
-      - name: Apply runtime permissions to AndroidManifest
-        run: |
-          python3 - <<'PY'
-          import re, pathlib
-          p = pathlib.Path("android/app/src/main/AndroidManifest.xml")
-          xml = p.read_text()
-          perms = (
-              '    <uses-permission android:name="android.permission.INTERNET"/>\n'
-              '    <uses-permission android:name="android.permission.CAMERA"/>\n'
-              '    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n'
-          )
-          if "android.permission.CAMERA" not in xml:
-              xml = re.sub(r"(<manifest[^>]*>\s*\n)", r"\1" + perms, xml, count=1)
-              p.write_text(xml)
-              print("Permissions injected:\n" + perms)
-          else:
-              print("Permissions already present.")
-          PY
 
       - name: Resolve dependencies
         run: flutter pub get
@@ -111,8 +90,11 @@ jobs:
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # main only: the website serves whatever lands here, so a branch build
+      # must never overwrite what users are downloading. Branch runs still
+      # build and upload the artifact, they just do not publish.
       - name: Publish APKs to the VPS
-        if: steps.check.outputs.configured == 'true'
+        if: steps.check.outputs.configured == 'true' && github.ref == 'refs/heads/main'
         env:
           SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
