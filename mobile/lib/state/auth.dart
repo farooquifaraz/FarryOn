@@ -100,8 +100,8 @@ class AuthNotifier extends Notifier<AuthState> {
   @override
   AuthState build() {
     ref.onDispose(() {
-      _renewTimer?.cancel();
-      _renewTimer = null;
+      _heartbeat?.cancel();
+      _heartbeat = null;
     });
     final session = ConfigStore.authSession();
     if (session == null) return const AuthState.signedOut();
@@ -166,7 +166,7 @@ class AuthNotifier extends Notifier<AuthState> {
       ref.read(configProvider.notifier).state =
           cfg.copyWith(authToken: accessToken);
     }
-    _armRenewal(accessToken);
+    _startHeartbeat();
   }
 
   // ---- Keeping the access token alive ------------------------------------
@@ -179,78 +179,97 @@ class AuthNotifier extends Notifier<AuthState> {
   // the S23 on 2026-08-11 while testing translation; it affects the assistant
   // just the same, and only a full restart cleared it.
 
-  Timer? _renewTimer;
+  // The first attempt at this armed ONE timer for the moment a renewal was
+  // due. It failed on the S23 the same day: a token minted at 14:13 was still
+  // being sent at 15:06, nearly an hour after it expired, with no renewal ever
+  // attempted. One missed timer — a request that never returned, a frozen
+  // process, a rebuild — and renewal was off for the rest of the run, silently.
+  //
+  // So nothing now depends on a single timer landing. A cheap heartbeat asks
+  // "is the token nearly out?" every [_checkEvery]; if any one tick is lost the
+  // next one recovers. The check is a subtraction on a cached value — it costs
+  // nothing to run often and it cannot get stuck.
 
-  /// Renew this long before the token actually expires, so a slow network or a
-  /// device that woke up late still lands inside the valid window.
+  Timer? _heartbeat;
+
+  /// Set while a renewal is in flight, so ticks do not stack up requests.
+  bool _renewing = false;
+
+  /// How often to look at the clock. Frequent enough that a missed tick is
+  /// harmless, cheap enough to be free.
+  static const _checkEvery = Duration(seconds: 30);
+
+  /// Renew once the token has this little life left. Wide enough to absorb a
+  /// slow network and a device that woke up late.
   static const _renewMargin = Duration(minutes: 3);
 
-  /// Floor on the timer, so a token that is already near expiry (or has a
-  /// lifetime shorter than the margin) schedules a prompt renewal instead of a
-  /// busy loop of immediate ones.
-  static const _minRenewDelay = Duration(seconds: 20);
+  /// A renewal that hangs must not disable renewal. Without this the request
+  /// could sit forever, `_renewing` would stay true, and every later tick would
+  /// skip — which is exactly the failure this rewrite exists to end.
+  static const _renewTimeout = Duration(seconds: 20);
 
-  void _armRenewal(String accessToken) {
-    _renewTimer?.cancel();
-    _renewTimer = null;
-    final exp = jwtExpiry(accessToken);
-    if (exp == null) return; // unreadable: leave the old behaviour alone
-    final due = exp.subtract(_renewMargin).difference(DateTime.now().toUtc());
-    final delay = due < _minRenewDelay ? _minRenewDelay : due;
-    _renewTimer = Timer(delay, () => unawaited(_renew()));
+  void _startHeartbeat() {
+    _heartbeat?.cancel();
+    _heartbeat = Timer.periodic(_checkEvery, (_) => unawaited(_tick()));
+  }
+
+  Future<void> _tick() async {
+    if (_renewing || !state.isSignedIn) return;
+    final session = ConfigStore.authSession();
+    if (session == null) return;
+    if (jwtExpiresWithin(session.access, _renewMargin)) await _renew();
   }
 
   /// Trade the stored refresh token for a fresh pair. Silent by design: a
   /// failure here must not sign anyone out — the refresh token is good for 30
-  /// days, so a renewal that fails because the network is down should simply
-  /// be tried again, and [ensureFreshToken] will do that on the next resume.
+  /// days, so a renewal that fails because the network is down is simply tried
+  /// again on the next tick.
   Future<void> _renew() async {
     final session = ConfigStore.authSession();
-    if (session == null) return;
+    if (session == null || _renewing) return;
+    _renewing = true;
     final epoch = _sessionEpoch;
-    final outcome = await ref.read(authApiProvider).refresh(session.refresh);
-    if (epoch != _sessionEpoch) return; // signed out while we waited
+    try {
+      final outcome = await ref
+          .read(authApiProvider)
+          .refresh(session.refresh)
+          .timeout(_renewTimeout,
+              onTimeout: () => const AuthRefreshOutcome.unreachable());
+      if (epoch != _sessionEpoch) return; // signed out while we waited
 
-    if (outcome.invalid) {
-      // The server disowned the session (revoked, or signed out elsewhere).
-      // Staying "signed in" with tokens the server rejects is the state that
-      // produced the endless silent reconnect, so end it honestly.
-      _log.warn('refresh token rejected — signing out');
-      await _clearLocal();
-      return;
+      if (outcome.invalid) {
+        // The server disowned the session (revoked, or signed out elsewhere).
+        // Staying "signed in" on tokens the server rejects is the state that
+        // produced the endless silent reconnect, so end it honestly.
+        _log.warn('refresh token rejected — signing out');
+        await _clearLocal();
+        return;
+      }
+      final tokens = outcome.tokens;
+      if (tokens == null) return; // unreachable; the next tick tries again
+      await _persist(
+        () => ConfigStore.saveAuthSession(
+          access: tokens.accessToken,
+          refresh: tokens.refreshToken,
+        ),
+        'Renewing the session',
+      );
+      if (epoch != _sessionEpoch) return;
+      _applyTokenToConfig(tokens.accessToken);
+    } finally {
+      _renewing = false;
     }
-    final tokens = outcome.tokens;
-    if (tokens == null) {
-      // Unreachable. Retry once the token is nearly out rather than giving up.
-      _renewTimer?.cancel();
-      _renewTimer = Timer(_minRenewDelay, () => unawaited(_renew()));
-      return;
-    }
-    await _persist(
-      () => ConfigStore.saveAuthSession(
-        access: tokens.accessToken,
-        refresh: tokens.refreshToken,
-      ),
-      'Renewing the session',
-    );
-    if (epoch != _sessionEpoch) return;
-    _applyTokenToConfig(tokens.accessToken); // re-arms the timer
   }
 
-  /// Renew now if the token is spent, and re-arm the timer either way.
+  /// Renew now if the token is spent, and make sure the heartbeat is running.
   ///
-  /// Call this when the app comes back to the foreground: [Timer]s do not fire
-  /// reliably while Android has the process frozen, so a phone left in a pocket
-  /// for an hour comes back with a dead token and no pending renewal.
+  /// Call this when the app comes back to the foreground: timers do not fire
+  /// while Android has the process frozen, so a phone left in a pocket comes
+  /// back with a dead token and a heartbeat that has not ticked in an hour.
   Future<void> ensureFreshToken() async {
     if (!state.isSignedIn) return;
-    final session = ConfigStore.authSession();
-    if (session == null) return;
-    if (jwtExpiresWithin(session.access, _renewMargin)) {
-      await _renew();
-    } else {
-      _armRenewal(session.access);
-    }
+    _startHeartbeat();
+    await _tick();
   }
 
   /// Completes sign-in after any flow (password, 2FA) that produced tokens:
@@ -389,10 +408,10 @@ class AuthNotifier extends Notifier<AuthState> {
     // would write the rotated tokens back, leaving a signed-out user with a
     // live session in the keystore that signs them in again next launch.
     _sessionEpoch++;
-    // The renewal timer is the same hazard on a longer fuse: left armed, it
+    // The heartbeat is the same hazard on a longer fuse: left running, it
     // would refresh a session nobody is signed into and write it back.
-    _renewTimer?.cancel();
-    _renewTimer = null;
+    _heartbeat?.cancel();
+    _heartbeat = null;
 
     // Stop the live session — it outlives the home screen (LiveController is a
     // plain Provider), so sign-out would otherwise leave the mic and a

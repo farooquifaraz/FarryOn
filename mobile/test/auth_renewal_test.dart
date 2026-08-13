@@ -183,6 +183,44 @@ void main() {
     expect(container.read(authProvider).isSignedIn, isTrue);
   });
 
+  test('a renewal that hangs does not switch renewal off forever', () async {
+    // The real failure, second time around. The first fix armed ONE timer for
+    // the moment a renewal was due; a request that never returned meant the
+    // timer never re-armed and renewal was silently off for the rest of the
+    // run. Seen on the S23: a token minted at 14:13 still being sent at 15:06.
+    //
+    // Now the request has a deadline and a heartbeat re-checks, so one hung
+    // call costs one attempt rather than the session.
+    var call = 0;
+    final api = _FakeApi(() {
+      call++;
+      // Cold start takes the first; the hung attempt under test is the second.
+      if (call <= 2) return const AuthRefreshOutcome.unreachable();
+      return AuthRefreshOutcome.rotated(
+        AuthTokens(
+          accessToken: _token('fresh', const Duration(minutes: 15)),
+          refreshToken: 'refresh-2',
+        ),
+      );
+    });
+    final container =
+        await signedInWith(api, access: _token('old', const Duration(minutes: 1)));
+    final afterRestore = api.refreshCalls;
+
+    // First attempt fails the way a hung request now resolves.
+    await container.read(authProvider.notifier).ensureFreshToken();
+    await settle();
+    expect(api.refreshCalls, afterRestore + 1);
+    expect(container.read(authProvider).isSignedIn, isTrue);
+
+    // The second attempt must still be possible — this is the whole point.
+    await container.read(authProvider.notifier).ensureFreshToken();
+    await settle();
+    expect(api.refreshCalls, afterRestore + 2,
+        reason: 'one failed renewal disabled every later one');
+    expect(jwtClaims(container.read(configProvider).authToken)?['name'], 'fresh');
+  });
+
   test('a token with life left is left alone', () async {
     final api = _FakeApi(() => const AuthRefreshOutcome.unreachable());
     final container = await signedInWith(
