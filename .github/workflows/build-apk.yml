@@ -7,11 +7,17 @@ name: Build Android APK
 # (enable "Install unknown apps"). Point it at your deployed backend in the app's
 # in-app settings sheet (⚙️): host = <name>.onrender.com, port = 443, secure = ON.
 #
-# Note: the app ships its Dart code (lib/), pubspec, and tests, but not the
-# generated Android Gradle project. We materialise a version-correct Android
-# project (v2 embedding) at build time with `flutter create`, then patch in the
-# camera/mic/internet permissions. This keeps the repo free of generated gradle
-# while guaranteeing the scaffold matches the pinned Flutter version.
+# Note: mobile/android is committed and is what we build. It used to be
+# scaffolded here with `flutter create`, from a time when the repo did not
+# carry one — that stopped being true once the glasses Kotlin channels,
+# foreground services, and twenty-one manifest permissions landed in it, and
+# the scaffold was deleting all of them on every run. It also regenerated a
+# Gradle wrapper pointing at github.com/gradle/gradle-distributions, whose
+# 503s failed this workflow on every run from 2026-07-25 onward; the committed
+# wrapper pins 8.14 on services.gradle.org.
+#
+# The vendor glasses .aar is git-ignored, so CI builds without it — the app
+# falls back to stub mode, exactly as app/libs/README.md describes.
 
 on:
   workflow_dispatch:
@@ -44,33 +50,6 @@ jobs:
       - name: Flutter version
         run: flutter --version
 
-      - name: Materialise Android project (v2 embedding)
-        run: |
-          flutter create \
-            --org com.farryon --project-name farryon \
-            --platforms=android /tmp/farryon_scaffold
-          rm -rf android
-          cp -r /tmp/farryon_scaffold/android ./android
-
-      - name: Apply runtime permissions to AndroidManifest
-        run: |
-          python3 - <<'PY'
-          import re, pathlib
-          p = pathlib.Path("android/app/src/main/AndroidManifest.xml")
-          xml = p.read_text()
-          perms = (
-              '    <uses-permission android:name="android.permission.INTERNET"/>\n'
-              '    <uses-permission android:name="android.permission.CAMERA"/>\n'
-              '    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n'
-          )
-          if "android.permission.CAMERA" not in xml:
-              xml = re.sub(r"(<manifest[^>]*>\s*\n)", r"\1" + perms, xml, count=1)
-              p.write_text(xml)
-              print("Permissions injected:\n" + perms)
-          else:
-              print("Permissions already present.")
-          PY
-
       - name: Resolve dependencies
         run: flutter pub get
 
@@ -89,3 +68,64 @@ jobs:
           name: farryon-release-apk
           path: mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
           if-no-files-found: error
+
+      # ---- publish to the VPS ------------------------------------------------
+      # The website's download buttons serve whatever is in the VPS build
+      # directory, so a rebuilt APK has to land there or users keep getting the
+      # old one. The backend reads that directory on every request (APK_DIR, a
+      # read-only mount) — no redeploy, no image rebuild.
+      #
+      # The directory sits OUTSIDE /opt/farryon on purpose: the deploy workflow
+      # rsyncs with --delete, which would erase any build kept inside it.
+      - name: Check publish secrets
+        id: check
+        env:
+          SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+        run: |
+          if [ -z "$SSH_HOST" ] || [ -z "$SSH_USER" ]; then
+            echo "HOSTINGER_SSH_* not set — skipping publish."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # main only: the website serves whatever lands here, so a branch build
+      # must never overwrite what users are downloading. Branch runs still
+      # build and upload the artifact, they just do not publish.
+      - name: Publish APKs to the VPS
+        if: steps.check.outputs.configured == 'true' && github.ref == 'refs/heads/main'
+        env:
+          SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          APK_HOST_DIR: ${{ vars.FARRYON_APK_DIR || '/opt/farryon-builds' }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.HOSTINGER_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          ssh -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" "mkdir -p '$APK_HOST_DIR'"
+
+          out=build/app/outputs/flutter-apk
+          # source file -> the name backend/app/web/router.py serves
+          publish() {
+            src="$out/$1"; dest="$2"
+            if [ ! -f "$src" ]; then
+              echo "::warning::$src not built — skipping $dest"
+              return
+            fi
+            # Upload beside the target, then mv. A rename within one filesystem
+            # is atomic, so a request landing mid-upload never gets a truncated
+            # APK — it gets the previous build.
+            scp -i ~/.ssh/id_deploy "$src" "$SSH_USER@$SSH_HOST:$APK_HOST_DIR/.$dest.part"
+            ssh -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" \
+              "mv -f '$APK_HOST_DIR/.$dest.part' '$APK_HOST_DIR/$dest' && chmod 644 '$APK_HOST_DIR/$dest'"
+            echo "published $dest"
+          }
+
+          publish app-arm64-v8a-release.apk   FarryOn-Aurora-arm64.apk
+          publish app-armeabi-v7a-release.apk FarryOn-Aurora-arm32.apk
+
+          ssh -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" "ls -lh '$APK_HOST_DIR'"

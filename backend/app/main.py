@@ -46,6 +46,7 @@ from app.modules.twofa.router import admin_router as twofa_admin_router
 from app.modules.twofa.router import me_router as twofa_me_router
 from app.modules.users.router import router as users_router
 from app.services.vision import run_detection
+from app.web.router import router as site_router
 from app.ws.live import router as ws_router
 
 logger = get_logger(__name__)
@@ -132,6 +133,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(SecurityHeadersMiddleware)
 
     app.include_router(ws_router)
+    # Public marketing site (landing page at "/") + direct APK download.
+    app.include_router(site_router)
 
     # Admin/User module — additive only: new prefix, own error envelope
     # (AppError -> app_error_handler), zero effect on any existing route.
@@ -193,12 +196,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             generate_latest(), media_type=CONTENT_TYPE_LATEST
         )
 
-    @app.get("/", tags=["ops"])
-    async def root() -> JSONResponse:
-        """Friendly service banner."""
+    @app.get("/api", tags=["ops"])
+    async def api_banner() -> JSONResponse:
+        """Friendly service banner (the landing page now lives at ``/``)."""
         return JSONResponse(
             {
                 "service": "FarryOn Backend",
+                "site": "/",
+                "download": "/download/arm64",
                 "ws": "/ws/live",
                 "health": "/healthz",
                 "ready": "/readyz",

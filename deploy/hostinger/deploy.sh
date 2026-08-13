@@ -107,6 +107,16 @@ if [[ "${NO_PULL:-0}" != "1" ]]; then
     git pull --ff-only
 fi
 
+# ---- 3b. APK build directory ----------------------------------------------
+# The backend bind-mounts this read-only and serves the website's /download
+# links from it. It lives outside the deploy path on purpose: the CI rsync runs
+# with --delete against this checkout, so a build kept inside would be wiped on
+# every deploy. The build-apk workflow uploads here; we only ensure it exists,
+# and never touch what is already in it.
+APK_HOST_DIR="${APK_HOST_DIR:-/opt/farryon-builds}"
+mkdir -p "$APK_HOST_DIR"
+echo "==> APK directory: $APK_HOST_DIR ($(ls -1 "$APK_HOST_DIR"/*.apk 2>/dev/null | wc -l) build(s) present)"
+
 # ---- 4. build + start (migrate -> backend -> caddy) -----------------------
 echo "==> building images and starting the stack"
 # On failure compose reports only 'service "migrate" didn't complete

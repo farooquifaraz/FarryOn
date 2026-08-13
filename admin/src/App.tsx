@@ -1,10 +1,9 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./lib/auth";
 import Layout from "./components/Layout";
 import Audit from "./pages/Audit";
 import Billing from "./pages/Billing";
 import Dashboard from "./pages/Dashboard";
-import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Roles from "./pages/Roles";
 import Users from "./pages/Users";
@@ -14,9 +13,11 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          {/* `/` is the public front door; everything the admin panel owns
-              lives under /admin, behind Layout's auth gate. */}
-          <Route path="/" element={<Landing />} />
+          {/* `/` is the public marketing site, served by the backend
+              (backend/app/web/router.py) — the gateway routes it there before
+              this SPA is ever reached. This redirect only fires when the SPA
+              is served on its own, e.g. `npm run dev`. */}
+          <Route path="/" element={<Navigate to="/admin" replace />} />
           <Route path="/login" element={<Login />} />
           <Route element={<Layout />}>
             <Route path="/admin" element={<Dashboard />} />
