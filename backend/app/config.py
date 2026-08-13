@@ -362,6 +362,15 @@ class Settings(BaseSettings):
     # receives the full, untruncated result either way. 0 disables the cap.
     tool_result_max_chars: int = Field(default=6000)
 
+    # -- Public site ------------------------------------------------------------
+    # Where the downloadable APKs live, for the /download routes on the
+    # marketing page. Unset means "the repo's own apk/ folder", which is right
+    # for a local run but wrong in the container: the app is copied to /app/app
+    # there, so the relative walk lands on /apk and finds nothing. Production
+    # mounts the build directory and points this at it (see
+    # docker-compose.prod.yml + deploy/hostinger/env.production.example).
+    apk_dir: str | None = Field(default=None)
+
     # -- Camera capture (identify_image / capture_photo) ------------------------
     # How long a vision tool waits for a fresh camera frame before giving up.
     # Phone cameras stream ~1 fps, so the wait normally resolves in ~1 s and

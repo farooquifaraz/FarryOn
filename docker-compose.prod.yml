@@ -78,6 +78,16 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://farryon:${POSTGRES_PASSWORD}@postgres:5432/farryon}
       HOST: 0.0.0.0
       PORT: "8000"
+      # The /download routes read the APKs from here, not from the image — a
+      # new build must reach users without rebuilding the backend.
+      APK_DIR: /srv/apk
+    volumes:
+      # Read-only mount of the host's build directory. It deliberately sits
+      # OUTSIDE the deploy path: the CI rsync runs with --delete against
+      # /opt/farryon, so anything kept in there that is not in git is erased on
+      # every deploy. The build-apk workflow uploads here directly, and the
+      # backend picks a new APK up on the next request — no redeploy needed.
+      - ${APK_HOST_DIR:-/opt/farryon-builds}:/srv/apk:ro
     # No host ports: only Caddy (and the obs profile) reach the backend, over
     # the internal docker network.
     depends_on:

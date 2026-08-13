@@ -89,3 +89,61 @@ jobs:
           name: farryon-release-apk
           path: mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
           if-no-files-found: error
+
+      # ---- publish to the VPS ------------------------------------------------
+      # The website's download buttons serve whatever is in the VPS build
+      # directory, so a rebuilt APK has to land there or users keep getting the
+      # old one. The backend reads that directory on every request (APK_DIR, a
+      # read-only mount) — no redeploy, no image rebuild.
+      #
+      # The directory sits OUTSIDE /opt/farryon on purpose: the deploy workflow
+      # rsyncs with --delete, which would erase any build kept inside it.
+      - name: Check publish secrets
+        id: check
+        env:
+          SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+        run: |
+          if [ -z "$SSH_HOST" ] || [ -z "$SSH_USER" ]; then
+            echo "HOSTINGER_SSH_* not set — skipping publish."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish APKs to the VPS
+        if: steps.check.outputs.configured == 'true'
+        env:
+          SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          APK_HOST_DIR: ${{ vars.FARRYON_APK_DIR || '/opt/farryon-builds' }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.HOSTINGER_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          ssh -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" "mkdir -p '$APK_HOST_DIR'"
+
+          out=build/app/outputs/flutter-apk
+          # source file -> the name backend/app/web/router.py serves
+          publish() {
+            src="$out/$1"; dest="$2"
+            if [ ! -f "$src" ]; then
+              echo "::warning::$src not built — skipping $dest"
+              return
+            fi
+            # Upload beside the target, then mv. A rename within one filesystem
+            # is atomic, so a request landing mid-upload never gets a truncated
+            # APK — it gets the previous build.
+            scp -i ~/.ssh/id_deploy "$src" "$SSH_USER@$SSH_HOST:$APK_HOST_DIR/.$dest.part"
+            ssh -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" \
+              "mv -f '$APK_HOST_DIR/.$dest.part' '$APK_HOST_DIR/$dest' && chmod 644 '$APK_HOST_DIR/$dest'"
+            echo "published $dest"
+          }
+
+          publish app-arm64-v8a-release.apk   FarryOn-Aurora-arm64.apk
+          publish app-armeabi-v7a-release.apk FarryOn-Aurora-arm32.apk
+
+          ssh -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" "ls -lh '$APK_HOST_DIR'"
