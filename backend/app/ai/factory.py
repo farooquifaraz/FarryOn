@@ -72,6 +72,16 @@ def build_translate_gateway(
         )
 
     if configured == "gemini_translate":
+        if (settings.translate_pipeline or "").strip().lower() == "cascade":
+            # Three steps instead of one. See app/ai/cascade_translate.py for
+            # what the single-model path did to an Arabic paragraph.
+            from app.ai.cascade_translate import CascadeTranslateGateway
+
+            return CascadeTranslateGateway(
+                target_language=target_language,
+                echo_target_language=echo_target_language,
+            )
+
         from app.ai.gemini_translate import GeminiTranslateGateway
 
         return GeminiTranslateGateway(

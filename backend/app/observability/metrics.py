@@ -122,3 +122,9 @@ TRANSLATE_ERRORS = Counter(
     "Translate failures, labelled by stage (connect | stream).",
     ["stage"],
 )
+TRANSLATE_UPSTREAM_REOPENS = Counter(
+    "farryon_translate_upstream_reopens_total",
+    "Upstream sockets replaced mid-session. The Live API caps how long one "
+    "may live, so a long conversation costs several — a count that stays at "
+    "zero while sessions run long means the rollover has stopped working.",
+)

@@ -97,6 +97,15 @@ _MAX_UTTERANCE_CHARS = 400
 #: passage that is merely faint is real audio and goes through.
 _SILENCE_GRACE_CHUNKS = 4  # ~1 s at the 0.25 s chunks the model sends
 
+#: How many upstream sockets one session may burn through in
+#: :data:`_REOPEN_WINDOW_S`. The Live API ends a socket roughly every ten
+#: minutes, so an hour of talking legitimately costs about six — spread out.
+#: Six *in a row inside two minutes* is not a long conversation, it is a
+#: failure that reconnecting cannot fix (a revoked key, a withdrawn model), and
+#: retrying it forever would bill the account in silence.
+_MAX_REOPENS = 6
+_REOPEN_WINDOW_S = 120.0
+
 
 class GeminiTranslateGateway(AIGateway):
     """Gemini Live Translate as an :class:`AIGateway`."""
@@ -111,6 +120,8 @@ class GeminiTranslateGateway(AIGateway):
         model: str | None = None,
         system_prompt: str = "",
         tools: list[ToolSpec] | None = None,
+        language_hints: list[str] | None = None,
+        text_only: bool = False,
     ) -> None:
         settings = get_settings()
         super().__init__(
@@ -120,6 +131,17 @@ class GeminiTranslateGateway(AIGateway):
         )
         self.target_language = target_language
         self.echo_target_language = echo_target_language
+        # Ask for no spoken output at all. Audio out is six times the price of
+        # audio in, so a caller that speaks for itself (the cascade path) or a
+        # user reading captions should not be buying speech nobody hears.
+        self.text_only = text_only
+        # Falls back to the deployment-wide setting, so the lever can be pulled
+        # without a client that knows about it.
+        self.language_hints = (
+            language_hints
+            if language_hints is not None
+            else list(settings.translate_language_hints)
+        )
         self._api_key = settings.gemini_api_key
         self._queue: asyncio.Queue[GatewayEvent | None] = asyncio.Queue()
         self._session: Any = None
@@ -139,6 +161,11 @@ class GeminiTranslateGateway(AIGateway):
         # Consecutive all-zero audio chunks, for the silence-padding gate.
         self._silent_run = 0
         self._watchdog_task: asyncio.Task[None] | None = None
+        # Set when the upstream announces it is about to close, cleared when the
+        # replacement socket is up. See _reopen_upstream.
+        self._goaway = False
+        self._reopens = 0
+        self._reopen_window_at = 0.0
 
     # -- Setup ---------------------------------------------------------------
 
@@ -146,13 +173,35 @@ class GeminiTranslateGateway(AIGateway):
         from google.genai import types  # type: ignore[import-not-found]
 
         return types.LiveConnectConfig(
-            response_modalities=["AUDIO"],
-            input_audio_transcription=types.AudioTranscriptionConfig(),
+            response_modalities=["TEXT"] if self.text_only else ["AUDIO"],
+            input_audio_transcription=self._input_transcription(types),
             output_audio_transcription=types.AudioTranscriptionConfig(),
             translation_config=types.TranslationConfig(
                 target_language_code=self.target_language,
                 echo_target_language=self.echo_target_language,
             ),
+        )
+
+    def _input_transcription(self, types: Any) -> Any:
+        """How the model should decide what language it is hearing.
+
+        With no hints it decides alone, which is how this shipped and is still
+        the default. The lever exists because that decision is where the
+        feature falls apart: one Arabic paragraph through a phone microphone
+        with ``target=hi`` came back labelled ENGLISH, with English prose in
+        the heard pane and invented sentences in the Hindi. The same audio with
+        ``target=en`` was correct Arabic and an accurate translation. The model
+        appears to pivot through English whenever the target is not English.
+
+        Hints and auto-detection are mutually exclusive in the API, so only one
+        of the two is ever sent.
+        """
+        if not self.language_hints:
+            return types.AudioTranscriptionConfig()
+        return types.AudioTranscriptionConfig(
+            language_hints=types.LanguageHints(
+                language_codes=list(self.language_hints)
+            )
         )
 
     async def connect(self) -> None:
@@ -183,6 +232,17 @@ class GeminiTranslateGateway(AIGateway):
                 "upgrade the SDK to use live translation."
             )
 
+        await self._open_upstream()
+        self._last_delta_at = time.monotonic()
+        self._recv_task = asyncio.create_task(self._receive_loop())
+        self._watchdog_task = asyncio.create_task(self._utterance_watchdog())
+
+    async def _open_upstream(self) -> None:
+        """Open one upstream socket. Separate from :meth:`connect` because the
+        socket is replaced mid-session — see :meth:`_reopen_upstream`."""
+        from google import genai  # type: ignore[import-not-found]
+        from google.genai import types  # type: ignore[import-not-found]
+
         last_exc: Exception | None = None
         # v1alpha first: this model is a preview, and preview models live there.
         for api_version in ("v1alpha", "v1beta"):
@@ -201,11 +261,6 @@ class GeminiTranslateGateway(AIGateway):
                     model=self.model,
                     api_version=api_version,
                     target=self.target_language,
-                )
-                self._last_delta_at = time.monotonic()
-                self._recv_task = asyncio.create_task(self._receive_loop())
-                self._watchdog_task = asyncio.create_task(
-                    self._utterance_watchdog()
                 )
                 return
             except Exception as exc:  # noqa: BLE001 - try the next channel
@@ -231,28 +286,132 @@ class GeminiTranslateGateway(AIGateway):
         re-entered in an outer loop — the same shape as ``gemini.py``, and for
         the same reason: without it the session would end after the first
         translated sentence.
+
+        The upstream socket does not last a conversation. It is rolled over
+        underneath this loop when it has to be; the caller never notices.
         """
         try:
             while not self._closed:
                 saw_message = False
-                async for message in self._session.receive():
-                    saw_message = True
-                    await self._handle_message(message)
-                if not saw_message:
-                    logger.info("gemini_translate.session_ended")
+                reason: str | None = None
+                try:
+                    async for message in self._session.receive():
+                        saw_message = True
+                        await self._handle_message(message)
+                        if self._goaway:
+                            # Leave on our own terms, before it hangs up on us.
+                            reason = "go_away"
+                            break
+                except asyncio.CancelledError:  # pragma: no cover
+                    raise
+                except Exception as exc:  # pragma: no cover - network/runtime
+                    if self._closed:
+                        break
+                    reason = "upstream_error"
+                    logger.warning(
+                        "gemini_translate.upstream_error", error=str(exc)
+                    )
+                if self._closed:
                     break
+                if reason is None and not saw_message:
+                    reason = "stream_ended"
+                if reason is None:
+                    continue
+                if await self._reopen_upstream(reason):
+                    continue
+                await self._queue.put(
+                    ErrorEvent(
+                        code="provider_error",
+                        # Deliberately not `str(exc)`. What the upstream says
+                        # here is a sentence about GoAway frames and policy
+                        # violations, and it went to a user's screen once,
+                        # truncated mid-word.
+                        message=(
+                            "The translation service ended the session and "
+                            "could not be restarted."
+                        ),
+                        fatal=True,
+                    )
+                )
+                break
         except asyncio.CancelledError:  # pragma: no cover - cancellation path
             raise
-        except Exception as exc:  # pragma: no cover - network/runtime
-            logger.error("gemini_translate.receive_error", error=str(exc))
-            await self._queue.put(
-                ErrorEvent(code="provider_error", message=str(exc), fatal=True)
-            )
         finally:
             await self._queue.put(None)
 
+    async def _reopen_upstream(self, reason: str) -> bool:
+        """Replace the upstream socket without ending the user's session.
+
+        The Live API caps how long one socket may live and sends a **GoAway**
+        first, expecting the client to close and reconnect. We did not know the
+        word: the upstream hung up at about ten minutes, and its raw protocol
+        error was forwarded to the phone as a fatal one (device-seen
+        2026-08-11, 9m43s in). Ten minutes does not cover a conversation, a
+        meeting, or an appointment.
+
+        Returns True if translation can carry on.
+        """
+        # Settle whatever the old socket had in flight. Those words were heard;
+        # they should not be lost because the pipe underneath rolled over.
+        with contextlib.suppress(Exception):
+            await self._finalize(turn_complete=True)
+        # And close the audio segment — the next socket starts a new one, and a
+        # segment left open would splice two of them into one.
+        if self._audio_open:
+            self._audio_open = False
+            await self._queue.put(AudioEndEvent())
+
+        now = time.monotonic()
+        if now - self._reopen_window_at > _REOPEN_WINDOW_S:
+            self._reopen_window_at = now
+            self._reopens = 0
+        self._reopens += 1
+        if self._reopens > _MAX_REOPENS:
+            # Something is wrong that reconnecting cannot fix — a revoked key, a
+            # withdrawn model. Retrying forever would bill for it in silence.
+            logger.error(
+                "gemini_translate.reopen_gave_up",
+                reason=reason,
+                attempts=self._reopens,
+            )
+            return False
+
+        with contextlib.suppress(Exception):
+            if self._session_cm is not None:
+                await self._session_cm.__aexit__(None, None, None)
+        self._session = None
+        self._session_cm = None
+
+        try:
+            await self._open_upstream()
+        except Exception as exc:  # noqa: BLE001 - reported to the caller
+            logger.error(
+                "gemini_translate.reopen_failed", reason=reason, error=repr(exc)
+            )
+            return False
+
+        self._goaway = False
+        self._silent_run = 0
+        self._last_delta_at = time.monotonic()
+        metrics.TRANSLATE_UPSTREAM_REOPENS.inc()
+        logger.info(
+            "gemini_translate.reopened", reason=reason, attempts=self._reopens
+        )
+        return True
+
     async def _handle_message(self, message: Any) -> None:
         """Decode one server message into heard / translated / audio events."""
+        # "I am about to hang up." Acting on it is the difference between a
+        # clean rollover and the user reading a protocol error.
+        go_away = getattr(message, "go_away", None)
+        if go_away is not None:
+            self._goaway = True
+            logger.info(
+                "gemini_translate.go_away",
+                time_left=str(getattr(go_away, "time_left", None)),
+            )
+            return
+
         server_content = getattr(message, "server_content", None)
         if server_content is None:
             return

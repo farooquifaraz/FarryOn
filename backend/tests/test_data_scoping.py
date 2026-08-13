@@ -313,3 +313,50 @@ def test_user_cannot_mark_another_users_task_done() -> None:
         r = client.post(f"/tasks/{task_id}/done?done=true", headers=_auth(alice))
         assert r.status_code == 200
         assert r.json()["done"] is True
+
+
+def test_a_note_the_app_writes_belongs_to_whoever_wrote_it() -> None:
+    """``POST /notes`` exists so the app can save something it produced itself
+    — a translation the user asked to keep. Every rule the agent-written notes
+    follow has to hold for these too, or the new door is the one with no lock
+    on it."""
+    with _client() as client:
+        alice = _sign_up(client, "alice7@example.com")
+        bob = _sign_up(client, "bob7@example.com")
+
+        r = client.post(
+            "/notes",
+            json={"text": "Live translation → हिन्दी\n[العربية] …"},
+            headers=_auth(alice),
+        )
+        assert r.status_code == 201, r.text
+        note_id = r.json()["id"]
+
+        assert [n["id"] for n in client.get("/notes", headers=_auth(alice)).json()] == [
+            note_id
+        ]
+        assert client.get("/notes", headers=_auth(bob)).json() == [], (
+            "a note saved by one account showed up in another's list"
+        )
+        # And 404, not 403 — a 403 would confirm the row exists.
+        assert client.delete(f"/notes/{note_id}", headers=_auth(bob)).status_code == 404
+
+
+def test_an_empty_or_enormous_note_is_refused() -> None:
+    with _client() as client:
+        token = _sign_up(client, "alice8@example.com")
+
+        for bad in ("", "   ", "\n\t "):
+            r = client.post("/notes", json={"text": bad}, headers=_auth(token))
+            assert r.status_code == 422, f"{bad!r} was accepted"
+
+        r = client.post(
+            "/notes", json={"text": "x" * 20_001}, headers=_auth(token)
+        )
+        assert r.status_code == 422, "an unbounded field is a way to fill a table"
+        assert client.get("/notes", headers=_auth(token)).json() == []
+
+
+def test_saving_a_note_needs_an_account() -> None:
+    with _client() as client:
+        assert client.post("/notes", json={"text": "hello"}).status_code in (401, 403)

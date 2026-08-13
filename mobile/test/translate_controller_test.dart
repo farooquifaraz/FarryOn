@@ -448,6 +448,8 @@ void main() {
         glasses: glasses,
         voiceAudioMode: _FakeVoiceAudioMode('skipped_external_route'),
         clientFactory: factory,
+        // The real window is thirty seconds. No test should sit through it.
+        glassesGraceWindow: const Duration(milliseconds: 10),
       );
     });
 
@@ -486,18 +488,63 @@ void main() {
       expect(await controller.start(), isTrue);
     });
 
-    test('losing them mid-session ends it rather than falling back', () async {
-      // Carrying on would put the translation back on the loudspeaker and
-      // straight into the microphone — the loop this feature exists to avoid.
+    test('a brief drop holds the session instead of ending it', () async {
+      // Device-seen 2026-08-11: the glasses reported `disconnected` and were
+      // back eleven seconds later on their own, but the session had already
+      // ended for good. Walking between rooms should not end a conversation.
       await connect();
       expect(controller.state.isRunning, isTrue);
 
       glasses.emit('connectionState', {'state': 'disconnected'});
       await pump(5);
 
+      expect(controller.state.isRunning, isTrue, reason: 'held, not ended');
+      expect(controller.state.error, isNull);
+      expect(controller.state.notice, contains('dropped'));
+      // The microphone still has to go. With the glasses gone the sound comes
+      // out of the loudspeaker and back into the mic listening to the room.
+      expect(source.audioStarted, isFalse, reason: 'the mic must be released');
+    });
+
+    test('they come back inside the window and it carries on', () async {
+      await connect();
+      glasses.emit('connectionState', {'state': 'disconnected'});
+      await pump(5);
+
+      glasses.emit('connectionState', {'state': 'connected'});
+      await pump(5);
+
+      expect(controller.state.isRunning, isTrue);
+      expect(controller.state.notice, isNull, reason: 'the banner must clear');
+      expect(controller.state.error, isNull);
+      expect(source.audioStarted, isTrue, reason: 'the mic has to come back');
+    });
+
+    test('they stay away and it ends, saying so', () async {
+      await connect();
+      glasses.emit('connectionState', {'state': 'disconnected'});
+      await pump(5);
+      // Past the grace window (10ms in this controller — see setUp).
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      await pump(5);
+
       expect(controller.state.isRunning, isFalse);
       expect(controller.state.error, contains('glasses'));
-      expect(source.audioStarted, isFalse, reason: 'the mic must be released');
+      expect(source.audioStarted, isFalse);
+    });
+
+    test('stopping cancels the wait, so no late error paints over it',
+        () async {
+      await connect();
+      glasses.emit('connectionState', {'state': 'disconnected'});
+      await pump(5);
+      await controller.stop();
+
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      await pump(5);
+
+      expect(controller.state.error, isNull,
+          reason: 'a timer firing into a dead session is a lying screen');
     });
   });
 

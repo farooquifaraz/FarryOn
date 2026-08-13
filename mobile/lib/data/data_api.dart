@@ -242,6 +242,24 @@ class DataApi {
     );
   }
 
+  /// Save a note the app wrote itself, e.g. a translation the user kept.
+  ///
+  /// Distinct from everything else here: the other notes come from Farry's
+  /// `create_note` tool, so until this existed the app had no way to write one
+  /// of its own.
+  Future<NoteItem> createNote(String text) async {
+    final r = _check(
+      await _client
+          .post(
+            _uri('/notes'),
+            headers: {..._headers, 'Content-Type': 'application/json'},
+            body: jsonEncode({'text': text}),
+          )
+          .timeout(_timeout),
+    );
+    return NoteItem.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
   Future<void> deleteNote(int id) async {
     _check(
       await _client
