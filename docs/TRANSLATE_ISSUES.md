@@ -294,6 +294,57 @@ removed.
 
 ---
 
+## I7 — Sentences arrive that nobody said (open, test not yet run)
+
+**Severity: unknown until the test below is run.** Cards appear during
+quiet stretches, in languages nobody in the room is speaking. Seen
+2026-08-14 across two sessions:
+
+- Thai `ได้` -> "Got it.", French "Je le soignerai." -> "I will treat
+  him.", and a card whose entire content was `.` translated to `.`
+- Later, with the phone silent (`Text only, no voice` on) and the TV
+  off, six minutes of coherent Arabic: Arabic coffee, then tea and
+  juice, then "What is the staple bread in Arab cuisine?", then
+  "A) Oat bread B) Bran bread C) Homemade bread D) Cornbread"
+
+Each of those cost a recogniser call and a translation call.
+
+**Two explanations, not yet separated.**
+
+1. Something really was playing in the room. Plausible for the first
+   session; the TV was on. Less so for the second — it had been turned
+   off, and the theme kept developing.
+2. The live connection is continuing its own context. We inject no
+   transcript history into the recogniser — it gets `_SILENT_INSTRUCTION`
+   and nothing else — but a Gemini live session keeps its own state, and
+   since the latency fix we hold ONE connection open for the whole
+   session instead of reopening per sentence. Six minutes of Arabic
+   cuisine quiz is in that connection's context, and on silence a model
+   will happily continue the story it has been telling. If this is the
+   cause it is a direct cost of that fix and worth knowing.
+
+The second reading is supported by the content developing along one
+theme (drinks -> bread -> famous dishes) rather than jumping about, and
+by the multiple-choice format persisting.
+
+**The test that separates them, not yet run.** In a quiet room, with the
+TV off: stop the session and start a NEW one — a fresh connection with
+empty context — then stay silent for two minutes.
+
+- Nothing appears -> the model was continuing its own context, and long
+  sessions will do this. Fix belongs near the connection lifetime.
+- Arabic still appears -> something in the room is genuinely audible and
+  the recogniser is right; find the source before changing any code.
+
+Do not fix this before running it. Both explanations predict the same
+screen and only this test tells them apart.
+
+**Separately, and safe to fix either way:** a fragment carrying no
+letters at all (`.`) must never reach the translator. That one is not
+in doubt whatever the test shows.
+
+---
+
 ## I4 — First sentence missing (seen once, not reproduced)
 
 **Severity: unknown.** T1's opening sentence never appeared on screen.

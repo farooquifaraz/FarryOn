@@ -455,3 +455,57 @@ class TestEverySentenceKeepsItsName:
             if e.type == EventType.TRANSCRIPT and e.role == "user"
         ]
         assert len(heard) == 1, f"the heard line was sent twice: {heard}"
+
+
+class TestFragmentsNobodySaid:
+    """A fragment carrying no letters or digits is not speech.
+
+    A live session produced a card whose whole content was ``.`` and paid
+    to translate it into ``.`` (device-seen 2026-08-14).
+    """
+
+    async def test_a_lone_full_stop_is_never_translated(self) -> None:
+        listener = _FakeListener([
+            TranscriptEvent(role="user", text=".", final=True, lang="en",
+                            utterance=0),
+            TranscriptEvent(role="user", text="Bilkul theek hai.", final=True,
+                            lang="hi", utterance=1),
+        ])
+        translator = _FakeTranslator()
+        gw = CascadeTranslateGateway(
+            target_language="en",
+            listener=listener,
+            translator=translator,
+            speaker=_FakeSpeaker(),
+        )
+        await gw.connect()
+        events = await _collect(gw)
+
+        assert len(translator.calls) == 1, (
+            "a full stop was sent to the translator and billed for"
+        )
+        heard = [e.text for e in events
+                 if isinstance(e, TranscriptEvent) and e.role == "user"]
+        assert "." not in heard, (
+            'a card reading "." reads as a bug to whoever is looking at it'
+        )
+
+    async def test_a_number_said_alone_still_counts(self) -> None:
+        # Digits are speech. "49億" and "4.900 millones" are the whole point
+        # of translating numbers carefully; a rule that wanted letters would
+        # throw them away.
+        listener = _FakeListener([
+            TranscriptEvent(role="user", text="49", final=True, lang="ja",
+                            utterance=0),
+        ])
+        translator = _FakeTranslator()
+        gw = CascadeTranslateGateway(
+            target_language="en",
+            listener=listener,
+            translator=translator,
+            speaker=_FakeSpeaker(),
+        )
+        await gw.connect()
+        await _collect(gw)
+
+        assert len(translator.calls) == 1, "a number said on its own is a turn"

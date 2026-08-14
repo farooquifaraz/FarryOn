@@ -62,6 +62,24 @@ logger = get_logger(__name__)
 _LISTEN_TARGET = "en"
 
 
+def _has_words(text: str) -> bool:
+    """Whether this fragment carries anything a person could have said.
+
+    A live session produced a card whose entire content was ``.``, and it
+    went on to be translated: a recogniser call and a translation call,
+    both billed, to turn a full stop into a full stop. It also reached
+    the screen, where a card reading "." under HEARD is indistinguishable
+    from a bug (device-seen 2026-08-14).
+
+    Letters OR digits count, in any script — ``isalnum`` is true for
+    Devanagari, Arabic and CJK alike, and a number said on its own is a
+    real utterance worth translating, so "49億" has to survive. Only
+    punctuation and whitespace fail, and nobody says those.
+
+    Deliberately not a length rule. A one-word answer is a whole turn in
+    a conversation, and this feature exists to carry exactly those.
+    """
+    return any(ch.isalnum() for ch in text)
 
 
 
@@ -187,6 +205,8 @@ class CascadeTranslateGateway(AIGateway):
                     continue
                 assert isinstance(event, TranscriptEvent)
                 if event.role != "user":
+                    continue
+                if not _has_words(event.text):
                     continue
                 await self._queue.put(event)
                 if event.final and event.text.strip():
