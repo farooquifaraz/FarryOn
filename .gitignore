@@ -78,5 +78,16 @@ secrets/
 data/postgres/
 data/grafana/
 
+# Loose credential notes kept beside the repo while working. Never committed —
+# checked 2026-08-14, "all credentials.txt" had been sitting untracked in the
+# root, one `git add -A` from being in the history for good. Patterns, not one
+# filename, because the next one will be called something slightly different.
+*credential*
+*credentials*
+!**/credentials.example.*
+*.secrets
+api-keys*
+
+
 # Vendored AI Glasses SDK (kept locally, not tracked)
 AI Glasses SDK/
