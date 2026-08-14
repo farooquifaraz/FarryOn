@@ -451,7 +451,17 @@ class TranslateController {
     // get close enough. The voice path is still claimed — it reduces the echo
     // and matches what the assistant does — but it is not a substitute for
     // holding the microphone.
-    return _player.isPlayingWithin(_echoTail);
+    //
+    // BOTH sources are asked, and forgetting the second one is what let the
+    // loop back in. This guard was written when the translation arrived as PCM
+    // from the cloud and came out of [_player]. Moving the voice on-device to
+    // cut the cost meant it no longer passed through that player at all, so
+    // the guard saw silence and held nothing. The phone spoke "and Uncle
+    // Javed" and heard "एंड अंकल जावेद" a moment later (device-seen
+    // 2026-08-14). A saving in one place quietly disabled a defence in
+    // another.
+    return _player.isPlayingWithin(_echoTail) ||
+        _voice.isSpeakingWithin(_echoTail);
   }
 
   /// The microphone stopped producing audio while we still expect it to.

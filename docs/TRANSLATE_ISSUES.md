@@ -221,6 +221,43 @@ fixed; if it appears, the seconds figure finally says what it costs.
 
 ---
 
+## I6 — The phone hears its own voice and translates it
+
+**Severity: high.** Found 2026-08-14, the first time the feature was
+used the way a person would actually use it.
+
+Every earlier run played a recording from a second phone, so the only
+voice in the room was the speaker's. Speaking into the phone directly,
+with `speak_on_device` saying the translation out loud, closes a loop:
+
+| | |
+|---|---|
+| Spoken | "और ताऊ जावेद" |
+| Phone said | "and Uncle Javed" |
+| Phone then heard | **"एंड अंकल जावेद नॉट"** |
+
+That last line is English written in Devanagari — the recogniser
+transcribing the phone's own speech back. It arrived with no language
+label at all, which is the tell: it is not really any language, it is
+our own output coming round again. It costs a translation call, it
+costs the voice that speaks the result, and it puts a sentence on
+screen that nobody said.
+
+`AudioModeChannel` already puts the phone in voice-call mode so the
+platform echo canceller has a playback reference, and it is plainly not
+catching text-to-speech.
+
+**Fix:** stop sending microphone audio to the recogniser while the phone
+is speaking. Nothing has to be detected or guessed — the translation is
+spoken by our own TTS, so we know exactly when it starts and when it
+finishes. A short tail after it stops covers the room's reverberation.
+
+The alternative — filtering the echo out of the transcript afterwards —
+means recognising our own words in a different script, and by then the
+call has already been paid for.
+
+---
+
 ## I4 — First sentence missing (seen once, not reproduced)
 
 **Severity: unknown.** T1's opening sentence never appeared on screen.

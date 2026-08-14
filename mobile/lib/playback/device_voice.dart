@@ -49,6 +49,30 @@ class DeviceVoice {
   /// True once [speak] has been asked for a language the phone cannot say.
   bool cannotSpeak(String language) => _unavailable.contains(_base(language));
 
+  /// Utterances started and not yet finished. A count, not a flag, because
+  /// sentences are spoken without waiting for the one before: two can overlap,
+  /// and the first one finishing must not declare the phone silent.
+  int _speaking = 0;
+
+  /// When the last utterance finished, so the caller can allow for the room's
+  /// ring-down after it.
+  DateTime? _stoppedAt;
+
+  /// True while this phone is talking, plus [tail] for the room to go quiet.
+  ///
+  /// The echo guard in the translate controller asks the PCM player this same
+  /// question, and used to ask only the PCM player. Moving the voice on-device
+  /// meant the translation no longer went through that player at all, so the
+  /// guard saw silence and the microphone stayed open through every spoken
+  /// sentence. The phone then heard itself: "and Uncle Javed" came back as
+  /// "एंड अंकल जावेद" — English written in Devanagari, translated again, paid
+  /// for again (device-seen 2026-08-14).
+  bool isSpeakingWithin(Duration tail) {
+    if (_speaking > 0) return true;
+    final stopped = _stoppedAt;
+    return stopped != null && DateTime.now().isBefore(stopped.add(tail));
+  }
+
   Future<void> initialize() async {
     if (_ready) return;
     try {
@@ -78,7 +102,16 @@ class DeviceVoice {
         return false;
       }
       await tts.setLanguage(code);
-      await tts.speak(text);
+      // Counted around the call, not after it. `awaitSpeakCompletion(true)`
+      // makes this return when the utterance ends, so the window it brackets
+      // is exactly the window in which the microphone must not be trusted.
+      _speaking++;
+      try {
+        await tts.speak(text);
+      } finally {
+        _speaking--;
+        _stoppedAt = DateTime.now();
+      }
       return true;
     } catch (e) {
       _log.warn('speak failed: $e');
@@ -97,6 +130,12 @@ class DeviceVoice {
       await tts.stop();
     } catch (e) {
       _log.warn('stop failed: $e');
+    } finally {
+      // Whatever the engine does with the pending futures, nothing is coming
+      // out of the speaker now. Leaving the count raised would hold the
+      // microphone shut for the rest of the session.
+      _speaking = 0;
+      _stoppedAt = DateTime.now();
     }
   }
 

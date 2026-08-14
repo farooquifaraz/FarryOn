@@ -8,6 +8,7 @@ import 'package:farryon/data/live_client.dart';
 import 'package:farryon/features/glasses_lab/bridge/glasses_channel.dart';
 import 'package:farryon/features/translate/translate_controller.dart';
 import 'package:farryon/features/translate/translate_state.dart';
+import 'package:farryon/playback/device_voice.dart';
 import 'package:farryon/playback/voice_audio_mode.dart';
 import 'package:farryon/protocol/frames.dart';
 import 'package:farryon/protocol/messages.dart';
@@ -47,6 +48,34 @@ class _FakeGlasses implements GlassesBridgeApi {
       throw UnsupportedError('the translate session must not drive the glasses');
 }
 
+/// Stands in for Android's text-to-speech.
+///
+/// `speaking` is the question the echo guard actually asks. The real class
+/// answers it from a count of utterances in flight; here it is set by hand so
+/// a test can put the phone mid-sentence without waiting for one.
+class _FakeVoice implements DeviceVoice {
+  bool speaking = false;
+  final List<String> said = <String>[];
+
+  @override
+  bool isSpeakingWithin(Duration tail) => speaking;
+
+  @override
+  Future<bool> speak(String text, String language) async {
+    said.add(text);
+    return true;
+  }
+
+  @override
+  Future<void> stop() async => speaking = false;
+
+  @override
+  bool cannotSpeak(String language) => false;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 /// Stands in for the platform audio-route switch. `route` is what the OS
 /// would answer: `applied` (voice path taken, echo canceller has its
 /// reference), `skipped_external_route` (already on a headset), or
@@ -83,6 +112,7 @@ void main() {
   late FakeChannel fake;
   late FakeCaptureSource source;
   late FakePcmPlayer player;
+  late _FakeVoice voice;
   late DeviceRegistry registry;
   late TranslateController controller;
   late List<Map<String, dynamic>> helloFrames;
@@ -115,6 +145,7 @@ void main() {
   TranslateController build({
     PermissionsService? permissions,
     VoiceAudioMode? voiceAudioMode,
+    DeviceVoice? deviceVoice,
   }) =>
       TranslateController(
         config: const AppConfig(host: 'h', port: 8000, secure: false),
@@ -124,6 +155,7 @@ void main() {
         // Default: the platform could not switch paths, so the echo canceller
         // has no reference and the hold is the only defence left.
         voiceAudioMode: voiceAudioMode ?? _FakeVoiceAudioMode('unavailable'),
+        deviceVoice: deviceVoice ?? voice,
         clientFactory: factory,
       );
 
@@ -132,6 +164,7 @@ void main() {
     fake = FakeChannel();
     source = FakeCaptureSource();
     player = FakePcmPlayer();
+    voice = _FakeVoice();
     registry = DeviceRegistry(factory: (_) => source);
     controller = build();
     helloFrames = [];
@@ -600,6 +633,40 @@ void main() {
       source.audioCtl.add(Uint8List.fromList([1, 2, 3, 4]));
       await pump();
       expect(audioFramesSent(), hasLength(1));
+    });
+
+    test('the mic is withheld while the PHONE is doing the talking', () async {
+      // The guard used to ask only the PCM player. Moving the voice on-device
+      // to cut the cost meant the translation never went through that player,
+      // so the guard saw silence and held nothing — and the phone heard
+      // itself: "and Uncle Javed" came back as "एंड अंकल जावेद", English in
+      // Devanagari, translated again and paid for again (device-seen
+      // 2026-08-14). A saving in one place silently disabled a defence in
+      // another, and every test here passed throughout.
+      await connect();
+      player.playing = false; // nothing from the cloud — that is the point
+      voice.speaking = true; // Android's own engine is mid-sentence
+      source.audioCtl.add(Uint8List.fromList([1, 2, 3, 4]));
+      source.audioCtl.add(Uint8List.fromList([5, 6, 7, 8]));
+      await pump();
+
+      expect(audioFramesSent(), isEmpty,
+          reason: 'the phone sent its own voice up to be re-translated');
+    });
+
+    test('the mic returns when the phone stops talking', () async {
+      await connect();
+      player.playing = false;
+      voice.speaking = true;
+      source.audioCtl.add(Uint8List.fromList([1, 2, 3, 4]));
+      await pump();
+      expect(audioFramesSent(), isEmpty);
+
+      voice.speaking = false;
+      source.audioCtl.add(Uint8List.fromList([5, 6, 7, 8]));
+      await pump();
+      expect(audioFramesSent(), hasLength(1),
+          reason: 'a translator that stays deaf after speaking is no use');
     });
 
     test('a mic that is held is still a LIVE mic', () async {
