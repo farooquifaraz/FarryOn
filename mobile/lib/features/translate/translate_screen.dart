@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/config.dart';
 import '../../core/theme.dart';
 import '../../data/live_client.dart' show ConnectionStatus;
+import '../../playback/device_voice.dart';
 import '../../state/providers.dart';
 import 'translate_controller.dart';
 import 'translate_language_picker.dart';
@@ -113,9 +115,12 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
   }
 
   Future<String?> _pickLanguage() async {
+    final voice = DeviceVoice();
     final picked = await TranslateLanguagePicker.open(
       context,
       ref.read(translateProvider).targetLanguage,
+      installedVoices: voice.installedLanguages,
+      onAddVoices: voice.openVoiceInstaller,
     );
     if (picked == null || !mounted) return null;
     await _controller.setTargetLanguage(picked);
@@ -156,6 +161,12 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Keep the session's socket on a live token. Without this the config
+    // snapshot taken when the screen opened is the only one it ever sees, and
+    // fifteen minutes later every reconnect is refused.
+    ref.listen<AppConfig>(configProvider, (_, next) {
+      _controller.updateConfig(next);
+    });
     final s = ref.watch(translateProvider);
     // Watched, not read: plugging the glasses in should light the screen up
     // without the user having to back out and come in again.

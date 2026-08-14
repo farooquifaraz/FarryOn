@@ -27,6 +27,13 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             applicationContext,
         )
+        // Translation is spoken by the phone's own voice, and a phone only has
+        // the voices someone installed. This opens the screen where they can
+        // add one — we never download tens of megabytes on their behalf.
+        VoiceDataChannel.register(
+            flutterEngine.dartExecutor.binaryMessenger,
+            applicationContext,
+        )
     }
 
     override fun onDestroy() {

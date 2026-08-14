@@ -89,6 +89,10 @@ void main() {
 
   /// The client the controller opens, built over [fake] so tests can push
   /// server messages in and read what the handshake sent out.
+  /// The URI the client actually dialled, so a test can check which token
+  /// went out rather than which one was stored.
+  Uri? lastUri;
+
   WebSocketLiveClient factory(
     AppConfig cfg,
     TranslateSessionConfig tx,
@@ -99,7 +103,13 @@ void main() {
         platform: 'android',
         deviceInfoProvider: deviceInfo,
         translate: tx,
-        channelFactory: (_) => fake,
+        // A fresh channel per connect, like the real thing: a Dart stream
+        // can only be listened to once, so reusing one made a reconnect throw
+        // inside the test rather than in the code under test.
+        channelFactory: (uri) {
+          lastUri = uri;
+          return fake = FakeChannel();
+        },
       );
 
   TranslateController build({
@@ -118,6 +128,7 @@ void main() {
       );
 
   setUp(() {
+    lastUri = null;
     fake = FakeChannel();
     source = FakeCaptureSource();
     player = FakePcmPlayer();
@@ -680,6 +691,41 @@ void main() {
           reason: 'on a headset nothing is missed, so say nothing');
     });
   });
+  group('a session that outlives its token', () {
+    /// Access tokens live fifteen minutes; a translate session can run for an
+    /// hour. This screen builds its own socket from a config snapshot taken
+    /// when it opened, so the snapshot goes stale while the screen is still
+    /// up — and every reconnect is then refused. On the device that showed as
+    /// "Starting…" forever with 27 rejections in the server log and not one
+    /// word transcribed (2026-08-14).
+    test('a renewed token reaches the socket', () async {
+      await connect();
+      final renewed = const AppConfig(host: 'h', port: 8000, secure: false)
+          .copyWith(authToken: 'fresh-token');
+
+      controller.updateConfig(renewed);
+      await pump(3);
+
+      expect(fake.closed, isFalse,
+          reason: 'a new token is not a reason to drop a live session');
+    });
+
+    test('and is used the next time it connects', () async {
+      await connect();
+      controller.updateConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false)
+            .copyWith(authToken: 'fresh-token'),
+      );
+      await controller.stop();
+      await pump(3);
+      await controller.start();
+      await pump(3);
+
+      expect(lastUri?.queryParameters['token'], 'fresh-token',
+          reason: 'the socket reconnected on the dead token');
+    });
+  });
+
   group('sentences translated out of order', () {
     /// Sentences are translated concurrently while the speaker keeps talking,
     /// so a translation almost always arrives AFTER the next sentence is

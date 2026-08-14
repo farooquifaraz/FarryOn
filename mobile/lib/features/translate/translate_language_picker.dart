@@ -10,16 +10,42 @@ import 'translate_languages.dart';
 /// the native name, the English name and the code, so it can be found by
 /// someone typing on an English keyboard *or* on a keyboard already set to that
 /// language.
+/// How the picker learns which languages the phone can say.
+///
+/// Injected so a widget test does not need a speech engine.
+typedef InstalledVoices = Future<Set<String>> Function();
+
 class TranslateLanguagePicker extends StatefulWidget {
-  const TranslateLanguagePicker({super.key, required this.selected});
+  const TranslateLanguagePicker({
+    super.key,
+    required this.selected,
+    this.installedVoices,
+    this.onAddVoices,
+  });
 
   /// Currently chosen BCP-47 code, or empty when nothing has been picked.
   final String selected;
 
+  /// Which languages this phone can speak. Null means do not ask, and nothing
+  /// is marked — better than marking everything wrongly.
+  final InstalledVoices? installedVoices;
+
+  /// Opens the phone's voice installer. Null hides the offer.
+  final Future<bool> Function()? onAddVoices;
+
   /// Returns the chosen code, or null if the user backed out.
-  static Future<String?> open(BuildContext context, String selected) =>
+  static Future<String?> open(
+    BuildContext context,
+    String selected, {
+    InstalledVoices? installedVoices,
+    Future<bool> Function()? onAddVoices,
+  }) =>
       Navigator.of(context).push<String>(MaterialPageRoute<String>(
-        builder: (_) => TranslateLanguagePicker(selected: selected),
+        builder: (_) => TranslateLanguagePicker(
+          selected: selected,
+          installedVoices: installedVoices,
+          onAddVoices: onAddVoices,
+        ),
       ));
 
   @override
@@ -30,6 +56,42 @@ class TranslateLanguagePicker extends StatefulWidget {
 class _TranslateLanguagePickerState extends State<TranslateLanguagePicker> {
   final _search = TextEditingController();
   String _query = '';
+
+  /// Base codes the phone can say. Empty until asked, and left empty when the
+  /// engine cannot answer — an unknown answer must not mark every language as
+  /// silent.
+  Set<String> _voices = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    final ask = widget.installedVoices;
+    if (ask == null) return;
+    ask().then((codes) {
+      if (mounted) setState(() => _voices = codes);
+    });
+  }
+
+  /// True when we KNOW this phone cannot speak the language. Unknown is not
+  /// silent: with no answer from the engine, nothing is marked.
+  Future<void> _addVoices() async {
+    final opened = await widget.onAddVoices?.call() ?? false;
+    if (opened || !mounted) return;
+    // Some phones have no such screen. Say where to go rather than leaving a
+    // button that silently does nothing.
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(const SnackBar(
+        content: Text(
+          "Couldn't open it — try Android Settings, then search for "
+          '"Text-to-speech".',
+        ),
+      ));
+  }
+
+  bool _silent(String code) =>
+      _voices.isNotEmpty &&
+      !_voices.contains(code.split(RegExp('[-_]')).first.toLowerCase());
 
   @override
   void dispose() {
@@ -104,6 +166,33 @@ class _TranslateLanguagePickerState extends State<TranslateLanguagePicker> {
                 ),
               ),
             ),
+            // Offered only once we KNOW something is missing — a phone that
+            // can say everything should not be nagged, and one we could not
+            // ask must not be either.
+            if (widget.onAddVoices != null && _voices.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.volume_off_outlined,
+                        color: Aurora.textMuted, size: 16),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Languages marked with this are shown but not spoken — '
+                        'this phone has no voice for them yet.',
+                        style: TextStyle(
+                            color: Aurora.textMuted, fontSize: 11, height: 1.4),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _addVoices,
+                      child: const Text('Add voices',
+                          style: TextStyle(color: Aurora.mint, fontSize: 12)),
+                    ),
+                  ],
+                ),
+              ),
             Expanded(
               child: matches.isEmpty
                   ? const Center(
@@ -147,10 +236,17 @@ class _TranslateLanguagePickerState extends State<TranslateLanguagePicker> {
                                   style: const TextStyle(
                                       color: Aurora.textMuted, fontSize: 12),
                                 ),
+                          // Say up front whether this phone can SPEAK the
+                          // language, not halfway through a conversation.
+                          // Translation is voiced by the phone's own engine,
+                          // and a phone only has the voices someone installed.
                           trailing: chosen
                               ? const Icon(Icons.check,
                                   color: Aurora.mint, size: 20)
-                              : null,
+                              : (_silent(l.code)
+                                  ? const Icon(Icons.volume_off_outlined,
+                                      color: Aurora.textMuted, size: 18)
+                                  : null),
                         );
                       },
                     ),

@@ -17,12 +17,15 @@
 /// user once rather than failing silently forever.
 library;
 
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
 import '../core/logger.dart';
 
 class DeviceVoice {
-  DeviceVoice({FlutterTts? tts}) : _tts = tts;
+  DeviceVoice({FlutterTts? tts, MethodChannel? channel})
+      : _tts = tts,
+        _channel = channel ?? const MethodChannel('com.farryon/voice_data');
 
   static final _log = Logger('DeviceVoice');
 
@@ -33,7 +36,11 @@ class DeviceVoice {
   /// initialiser took out thirty-two unrelated unit tests that never intended
   /// to speak. Nothing here touches the platform until someone asks for sound.
   FlutterTts? _tts;
+  final MethodChannel _channel;
   bool _ready = false;
+
+  /// Base codes this phone can actually say, once asked. Null until then.
+  Set<String>? _installed;
 
   /// Languages this phone has actually refused, so the caller is told once
   /// rather than on every sentence.
@@ -91,6 +98,51 @@ class DeviceVoice {
     } catch (e) {
       _log.warn('stop failed: $e');
     }
+  }
+
+  /// Which languages this phone can speak, as base codes (`hi`, `ar`).
+  ///
+  /// A phone only has the voices someone installed, so a target the engine
+  /// cannot say leaves the translation on screen and silent. Knowing this in
+  /// advance is what lets the picker say so BEFORE a conversation starts,
+  /// rather than halfway through one.
+  ///
+  /// Returns an empty set if the engine cannot be asked — callers treat that
+  /// as "unknown", never as "nothing works".
+  Future<Set<String>> installedLanguages() async {
+    final cached = _installed;
+    if (cached != null) return cached;
+    await initialize();
+    final tts = _tts;
+    if (tts == null) return const <String>{};
+    try {
+      final raw = await tts.getLanguages;
+      final codes = <String>{
+        for (final entry in (raw as List? ?? const []))
+          _base(entry.toString()),
+      }..removeWhere((c) => c.isEmpty);
+      _installed = codes;
+      return codes;
+    } catch (e) {
+      _log.warn('could not list voices: \$e');
+      return const <String>{};
+    }
+  }
+
+  /// Open the screen where a voice can be added. False if the phone has none.
+  ///
+  /// Deliberately does not download anything: voice data runs to tens of
+  /// megabytes, often on mobile data, and that is the user's decision.
+  Future<bool> openVoiceInstaller() async {
+    for (final method in ['installVoices', 'openSettings']) {
+      try {
+        final ok = await _channel.invokeMethod<bool>(method);
+        if (ok == true) return true;
+      } catch (e) {
+        _log.warn('\$method failed: \$e');
+      }
+    }
+    return false;
   }
 
   /// `hi` from `hi-IN`. The engine wants a language, not a region variant, and

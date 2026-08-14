@@ -174,6 +174,21 @@ class TranslateController {
     if (!_stateController.isClosed) _stateController.add(next);
   }
 
+  /// Follow a changed config — above all, a renewed access token.
+  ///
+  /// This screen holds its OWN socket, built from a config snapshot taken when
+  /// it opened. Access tokens live fifteen minutes and a translate session can
+  /// run for an hour, so the snapshot goes stale while the screen is still up:
+  /// the socket then reconnects forever with a dead token and the screen sits
+  /// on "Starting…" saying nothing (device-seen 2026-08-14, the third time this
+  /// family of bug has bitten). The client stores the new token for its next
+  /// connect and does NOT rebuild the socket for it — see
+  /// WebSocketLiveClient.updateConfig.
+  void updateConfig(AppConfig cfg) {
+    _config = cfg;
+    _client?.updateConfig(cfg);
+  }
+
   /// Seed the target language, captions setting and glasses state.
   void primeFromConfig(AppConfig cfg, {bool glassesConnected = false}) {
     _config = cfg;
