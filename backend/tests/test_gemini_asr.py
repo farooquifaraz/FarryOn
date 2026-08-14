@@ -20,12 +20,14 @@ touches only the text. The audio is never cut, so (3) cannot come back.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from types import SimpleNamespace
 
 from app.ai.events import EventType
 from app.ai.gemini_asr import (
-    _MAX_UTTERANCE_CHARS,
-    _MIN_SENTENCE_CHARS,
+    _MAX_UTTERANCE_UNITS,
+    _MIN_SENTENCE_UNITS,
     GeminiStreamingASR,
 )
 
@@ -133,12 +135,99 @@ class TestWordsArriveWhileSomeoneIsStillTalking:
         asr = _asr()
         await asr._handle(_msg("Yes.", "en"))
         assert not _finals(await _drain(asr))
-        assert len("Yes.") < _MIN_SENTENCE_CHARS
+        assert len("Yes.") < _MIN_SENTENCE_UNITS
 
     async def test_someone_who_never_punctuates_is_still_translated(self) -> None:
         asr = _asr()
-        await asr._handle(_msg("x" * (_MAX_UTTERANCE_CHARS + 10), "en"))
+        await asr._handle(_msg("x" * (_MAX_UTTERANCE_UNITS + 10), "en"))
         assert _finals(await _drain(asr)), "they would never be heard from"
+
+
+class TestANumberIsNotASentence:
+    """A decimal point looks exactly like a full stop.
+
+    On the device this turned "4.9 billion" into two utterances — "more than
+    4" and "9 billion" — each translated on its own and each saying something
+    false. Seen in English and again in Arabic (2026-08-14).
+    """
+
+    async def test_a_decimal_point_does_not_end_the_sentence(self) -> None:
+        asr = _asr()
+        await asr._handle(_msg("Every day more than 4.9 billion people log in.", "en"))
+        finals = _finals(await _drain(asr))
+
+        assert finals
+        assert finals[0].text == "Every day more than 4.9 billion people log in."
+
+    async def test_it_waits_rather_than_guess_at_a_trailing_point(self) -> None:
+        # The transcript arrives a few characters at a time, so "4.9" is "4."
+        # for a moment. Deciding then is deciding too early.
+        asr = _asr()
+        await asr._handle(_msg("Every day more than 4.", "en"))
+        assert not _finals(await _drain(asr))
+
+        await asr._handle(_msg("9 billion people log in.", "en"))
+        finals = _finals(await _drain(asr))
+        assert finals
+        assert finals[0].text == "Every day more than 4.9 billion people log in."
+
+    async def test_a_sentence_may_still_end_on_a_number(self) -> None:
+        # The rule above must not swallow a real ending. Here the point is
+        # followed by more words, which settles it.
+        asr = _asr()
+        await asr._handle(
+            _msg("The total for the whole of last year was 49. Then it fell", "en")
+        )
+        finals = _finals(await _drain(asr))
+
+        assert finals
+        assert finals[0].text == "The total for the whole of last year was 49."
+
+
+class TestScriptsThatPackAWordIntoACharacter:
+    """Counting characters is not counting language.
+
+    Chinese broke the thresholds in both directions at once: a complete
+    sentence of ten characters was too short to ever be closed, while single
+    characters went out on their own. 此外 ("besides") lost its first half and
+    was translated as 外 ("outside") — device-seen 2026-08-14.
+    """
+
+    async def test_a_short_chinese_sentence_is_long_enough(self) -> None:
+        asr = _asr()
+        await asr._handle(_msg("不斷的獲取數字信息。", "zh"))
+        finals = _finals(await _drain(asr))
+
+        assert finals, "a whole sentence was held back for being 'too short'"
+        assert finals[0].text == "不斷的獲取數字信息。"
+
+    async def test_a_lone_character_waits_for_the_rest_of_its_word(self) -> None:
+        asr = _asr()
+        await asr._handle(_msg("如今,我们的世界高度依赖科技和全球通信。此", "zh"))
+        await _drain(asr)
+        assert asr._buf == "此", "the tail was not carried"
+
+        await asr._handle(_msg("外,約75%的商業溝通", "zh"))
+        assert asr._buf.startswith("此外"), (
+            f"besides became outside: {asr._buf!r}"
+        )
+
+    async def test_a_pause_does_not_send_a_scrap_on_its_own(self) -> None:
+        # The watchdog was the one path that ignored the minimum entirely.
+        # A pause in the middle of a word is what split 此外.
+        asr = _asr()
+        asr._buf = "此"
+        asr._last_delta_at = time.monotonic() - 2.5  # past the ordinary gap
+        watchdog = asyncio.create_task(asr._quiet_watchdog())
+        await asyncio.sleep(0.4)
+
+        assert not _finals(await _drain(asr)), "a scrap went out alone"
+
+        asr._last_delta_at = time.monotonic() - 10.0  # the speaker really stopped
+        await asyncio.sleep(0.4)
+        assert _finals(await _drain(asr)), "it was never sent at all"
+
+        watchdog.cancel()
 
 
 class TestItIsAListenerNotASpeaker:

@@ -71,11 +71,19 @@ class _FakeListener(AIGateway):
 class _FakeTranslator:
     def __init__(self, *, fail: bool = False, detected: str | None = None) -> None:
         self.calls: list[tuple[str, str | None, str]] = []
+        #: What each call was given as the preceding utterance. Kept apart from
+        #: `calls` so the older assertions keep reading as they did.
+        self.contexts: list[str | None] = []
         self._fail = fail
         self.detected = detected
 
     async def translate(
-        self, text: str, *, source_lang: str | None, target: str
+        self,
+        text: str,
+        *,
+        source_lang: str | None,
+        target: str,
+        previous: str | None = None,
     ) -> tuple[str, str | None]:
         """Returns the translation AND the language it was translated from.
 
@@ -84,6 +92,7 @@ class _FakeTranslator:
         the sentence — says what it was.
         """
         self.calls.append((text, source_lang, target))
+        self.contexts.append(previous)
         if self._fail:
             raise RuntimeError("the translate step is down")
         return f"[{target}] {text}", self.detected
@@ -304,6 +313,67 @@ class TestPassThrough:
 
 
 
+
+
+class TestASentenceCutInTwoStillReadsAsOne:
+    """Sentences do not always break where the recogniser says they do.
+
+    A speaker listing things pauses at the commas, and the model writes a full
+    stop into the pause. Spanish "…para trabajar. Estudiar o comunicarse con
+    amigos." is one sentence cut in two that way, and the second half was
+    translated as an instruction to go and study (device-seen 2026-08-14).
+
+    Nothing here can put the sentence back together — the cut has already
+    happened upstream. What it can do is stop the second half being read in
+    isolation, and that does not depend on the cut being right.
+    """
+
+    async def test_each_utterance_is_told_what_came_before_it(self) -> None:
+        listener = _FakeListener([
+            TranscriptEvent(role="user", final=True, lang="es", utterance=0,
+                            text="Cada día, más de 4.900 millones de personas "
+                                 "se conectan a internet para trabajar."),
+            TranscriptEvent(role="user", final=True, lang="es", utterance=1,
+                            text="Estudiar o comunicarse con amigos."),
+        ])
+        translator = _FakeTranslator()
+        gw = CascadeTranslateGateway(
+            target_language="hi",
+            listener=listener,
+            translator=translator,
+            speaker=_FakeSpeaker(),
+        )
+        await gw.connect()
+        await _collect(gw)
+
+        assert len(translator.contexts) == 2
+        assert translator.contexts[0] is None, "there was nothing before the first"
+        assert translator.contexts[1] is not None
+        assert "para trabajar" in translator.contexts[1], (
+            "the second half was translated with no idea what it continues"
+        )
+
+    async def test_the_context_is_never_the_sentence_itself(self) -> None:
+        # A sentence handed its own text as context would invite the model to
+        # translate it twice over.
+        listener = _FakeListener([
+            TranscriptEvent(role="user", text="Uno.", final=True, lang="es",
+                            utterance=0),
+            TranscriptEvent(role="user", text="Dos.", final=True, lang="es",
+                            utterance=1),
+        ])
+        translator = _FakeTranslator()
+        gw = CascadeTranslateGateway(
+            target_language="hi",
+            listener=listener,
+            translator=translator,
+            speaker=_FakeSpeaker(),
+        )
+        await gw.connect()
+        await _collect(gw)
+
+        for (text, _, _), context in zip(translator.calls, translator.contexts):
+            assert context != text
 
 
 class TestEverySentenceKeepsItsName:

@@ -98,6 +98,9 @@ class CascadeTranslateGateway(AIGateway):
         self._closed = False
         self._pump_task: asyncio.Task[None] | None = None
         self._work: set[asyncio.Task[None]] = set()
+        #: The utterance before the one being translated, passed along as
+        #: context so a sentence cut in the wrong place still reads as one.
+        self._previous_text: str | None = None
 
         if listener is None:
             from app.ai.gemini_asr import GeminiStreamingASR
@@ -187,9 +190,10 @@ class CascadeTranslateGateway(AIGateway):
                     continue
                 await self._queue.put(event)
                 if event.final and event.text.strip():
+                    previous, self._previous_text = self._previous_text, event.text
                     task = asyncio.create_task(
                         self._translate_and_speak(
-                            event.text, event.lang, event.utterance
+                            event.text, event.lang, event.utterance, previous
                         )
                     )
                     self._work.add(task)
@@ -206,7 +210,11 @@ class CascadeTranslateGateway(AIGateway):
     # -- Steps 2 and 3: translate, then speak --------------------------------
 
     async def _translate_and_speak(
-        self, text: str, source_lang: str | None, utterance: int | None = None
+        self,
+        text: str,
+        source_lang: str | None,
+        utterance: int | None = None,
+        previous: str | None = None,
     ) -> None:
         if self._same_language(source_lang):
             # Already in the target. Saying it back is what
@@ -216,7 +224,10 @@ class CascadeTranslateGateway(AIGateway):
         try:
             started = time.monotonic()
             translated, detected = await self._translator.translate(
-                text, source_lang=source_lang, target=self.target_language
+                text,
+                source_lang=source_lang,
+                target=self.target_language,
+                previous=previous,
             )
         except Exception as exc:  # noqa: BLE001 - one utterance, not the session
             logger.error("cascade_translate.translate_failed", error=repr(exc))
@@ -311,7 +322,12 @@ class _GeminiTextTranslator:
         self._settings = settings
 
     async def translate(
-        self, text: str, *, source_lang: str | None, target: str
+        self,
+        text: str,
+        *,
+        source_lang: str | None,
+        target: str,
+        previous: str | None = None,
     ) -> tuple[str, str | None]:
         """Returns the translation and the language it was translated FROM.
 
@@ -319,12 +335,31 @@ class _GeminiTextTranslator:
         report one, and this step has just read the sentence — asking for it
         costs nothing on a call already being made, and it is what puts a name
         above the heard text instead of a bare "HEARD".
+
+        `previous` is the utterance before this one, shown but never
+        translated. Sentences do not always break where the recogniser says
+        they do: a speaker listing things pauses at the commas, and the model
+        writes a full stop into the pause. Spanish "…para trabajar. Estudiar o
+        comunicarse con amigos." is one sentence cut in two that way, and the
+        second half read as an order to go and study. Given the first half, the
+        model translates the second as the continuation it is. This is the only
+        remedy that does not depend on the cut being in the right place, which
+        is why it is here rather than in the recogniser.
         """
         from google import genai
         from google.genai import types
 
         client = genai.Client(api_key=self._settings.gemini_api_key)
         source = source_lang or "whatever language it is in"
+        context = ""
+        if previous and previous.strip():
+            context = (
+                "For context only, the speaker said this immediately before. "
+                "Do NOT translate it, do not repeat it, and do not let it into "
+                "your answer — it is here so that a sentence broken across two "
+                "parts still reads as one:\n"
+                f"{previous.strip()}\n\n"
+            )
         prompt = (
             f"Translate the following text, which is in {source}, into "
             f"{target}.\n"
@@ -334,6 +369,8 @@ class _GeminiTextTranslator:
             "labels, no quotation marks:\n"
             "first line: the BCP-47 code of the language the text is IN\n"
             "second line: the translation\n\n"
+            f"{context}"
+            "Translate this:\n"
             f"{text}"
         )
         response = await asyncio.to_thread(

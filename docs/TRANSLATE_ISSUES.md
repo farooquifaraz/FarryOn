@@ -1,4 +1,23 @@
-# Live translation — open issues found while testing
+# Live translation — issues found while testing
+
+**Status 2026-08-14, after the fixes.** I1, I2a, I2b and I2c are fixed and
+covered by tests; none has been seen on a device since, because none has
+been run on a device since — the next run is what closes them. I5 is
+mitigated but explicitly unproven. I3 is not ours. I4 stays open on one
+sighting.
+
+| | Fault | State |
+|---|---|---|
+| I1 | Decimal point read as a full stop | **fixed**, needs a device run |
+| I2a | Watchdog closes on a pause mid-list | **fixed** (via I2c + context) |
+| I2b | Recogniser writes the full stop itself | **mitigated** — the translator now sees the previous fragment |
+| I2c | Watchdog ignored the minimum length | **fixed**, and the minimum is now script-aware |
+| I3 | Words misheard | not fixable here |
+| I4 | First sentence missing, seen once | open, awaiting a second sighting |
+| I5 | Recogniser speaks and we pay for it | **capped, unproven** — watch `gemini_asr.model_spoke` |
+
+---
+
 
 Every problem seen on the device during the cross-language runs of
 2026-08-14, with what caused it and what it would take to fix. Kept
@@ -33,11 +52,21 @@ held only "हर दिन 4." — ten characters, below `_MIN_SENTENCE_CHARS`
 (25), so the cut was refused. The protection is accidental: the same
 sentence with a few more words in front of the number would split.
 
-**Fix:** refuse the cut when the character is `.` and both neighbours are
-digits. Cheap, local, no behaviour change anywhere else. Note that a
-comma inside a number ("4,900") is already safe — `,` is not a sentence
-ending — and Arabic-Indic digits need the same digit test, so use a
-Unicode-aware digit check rather than `str.isascii()`.
+**Fixed** in `_last_sentence_end`. Two shapes are refused: a point with
+digits on both sides, and a point with a digit before it and nothing yet
+after it — because the transcript arrives a few characters at a time,
+and "…more than 4." is what "4.9" looks like a moment before the 9
+lands. Refusing to decide costs one delta; the watchdog still closes the
+utterance if the speaker really did stop on a number. `str.isdigit()` is
+Unicode-aware, so Arabic-Indic and Devanagari digits are covered by the
+same test, and a comma inside a number was always safe.
+
+A sentence that genuinely ends on a number still cuts — "…was 49. Then
+it fell" is a test.
+
+Worth noting for anyone tempted to blame the recogniser: fed real speech
+saying "four point nine billion", it wrote **4.9 billion** correctly.
+The number was never misheard. It was cut in half afterwards, by us.
 
 ---
 
@@ -73,21 +102,39 @@ involved — `_last_sentence_end()` found a genuine `.` in the transcript
 and cut correctly on bad input. Any fix that only touches the watchdog
 cannot see this at all.
 
-**Fix options, cheapest first:**
+### I2c — the watchdog ignored the minimum entirely
 
-1. Raise `_QUIET_GAP_S`. Buys margin against I2a, costs latency on every
-   utterance, does nothing for I2b. Not a fix.
-2. Refuse to close on a trailing conjunction or comma — covers I2a and
-   the "trabajar. / Estudiar" shape of I2b only if the fragment is short
-   enough to look unfinished. Partial.
-3. Give the translator the previous fragment as context, so a
-   continuation reads as one sentence even when the cut was wrong. This
-   is the only option that covers **both** causes, because it stops
-   depending on the cut being right. One more moving part; the prompt
-   already takes a system instruction, so the cost is a few hundred
-   tokens per utterance.
+Found in T7 (Chinese → Hindi), and it turned out to be the mechanism
+behind most of what I2a was blamed for. `_quiet_watchdog` closed whatever
+was in the buffer regardless of length: `_MIN_SENTENCE_UNITS` was checked
+on the sentence-ending path and nowhere else. Chinese made it visible
+because a character is a word there — utterances of 2, 7 and 10
+characters went out on their own, one of them so short the language could
+not even be identified (`HEARD · UND`, containing "50").
 
-(3) is now the one worth doing. (2) is a cheap complement.
+### What was done
+
+**Length is now measured in script-normalised units, not characters.**
+A dense-script character counts for three, which is the Chinese-to-English
+expansion our own logs show (20 characters became 68, 26 became 105, 30
+became 89). The old thresholds were wrong in *both* directions for
+Chinese: a complete ten-character sentence could never reach 25 and so
+was never closed, while 25 characters of Chinese is a paragraph, so
+nothing was ever held back either.
+
+**The watchdog now respects that minimum**, giving a short fragment
+`_SHORT_QUIET_GAP_S` (4.5 s) instead of 1.8 s before it gives up and
+sends it alone. A scrap is far more likely to be the start of something
+than all of one.
+
+**The translator is given the previous utterance as context** — shown,
+never translated. This is the only measure that covers I2b, because it
+stops depending on the cut being in the right place at all. It cannot
+un-break a sentence; it stops the second half being read in isolation.
+
+Rejected: raising `_QUIET_GAP_S` across the board. It buys margin against
+I2a, costs latency on every single utterance, and does nothing at all for
+I2b.
 
 ---
 
@@ -131,19 +178,26 @@ deliver. It went unnoticed because the counter is only logged in
 `close()` — a warning nobody sees until the session ends, and only then
 as a bare number with no cost attached.
 
-**Two things to do, in order:**
+**What was done, and what is still unknown.**
 
-1. **Measure it.** The chunk count alone does not give a bill. Log the
-   byte total as well, convert to seconds at the output sample rate, and
-   put a figure on one session. Until that number exists, the severity
-   above is an inference, not a measurement.
-2. **Stop it.** `response_modalities=["AUDIO"]` is set because TEXT is
-   rejected by the models that transcribe well — that was measured. But
-   it has not been retried since the model changed to
-   `gemini-2.5-flash-native-audio-latest`. Retry TEXT first; it is the
-   clean fix. If it is still rejected, the fallback is to stop reading
-   `model_turn` parts at all and, if the API allows, cap or disable the
-   speech budget on the config.
+TEXT output was re-checked against the current model and is still
+rejected outright — "the requested combination of response modalities
+(TEXT) is not supported". The clean fix is not available.
+
+So the budget was taken away instead: `max_output_tokens=1`. Against
+real generated speech the transcript came back character-for-character
+identical with and without the cap, so it costs nothing we want.
+
+**It is not proven to work.** In that same experiment the model produced
+no audio in *either* configuration, so there was nothing for the cap to
+prevent. An eight-second clip evidently does not give it the opening
+that a minutes-long session with pauses does. The cap is an upper bound
+and must therefore reduce the waste, but "must" is an argument, not a
+measurement.
+
+`gemini_asr.model_spoke` now logs bytes and seconds as well as chunks.
+**The next real session settles this**: if the warning is absent, it is
+fixed; if it appears, the seconds figure finally says what it costs.
 
 ---
 
