@@ -29,6 +29,7 @@ def build_translate_gateway(
     *,
     target_language: str = "en",
     echo_target_language: bool = False,
+    speak_on_device: bool = False,
 ) -> AIGateway:
     """Construct a gateway for a ``mode: "translate"`` session.
 
@@ -80,6 +81,7 @@ def build_translate_gateway(
             return CascadeTranslateGateway(
                 target_language=target_language,
                 echo_target_language=echo_target_language,
+                speak_on_device=speak_on_device,
             )
 
         from app.ai.gemini_translate import GeminiTranslateGateway

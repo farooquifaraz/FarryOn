@@ -102,6 +102,11 @@ class GeminiStreamingASR(AIGateway):
         self._closed = False
         self._buf = ""
         self._lang: str | None = None
+        #: Sentences closed so far. Translation is asynchronous, so each one
+        #: has to be nameable — otherwise the client cannot tell which
+        #: translation belongs to which sentence, and the first one loses its
+        #: translation to the second (device-seen 2026-08-14).
+        self._utterances = 0
         self._last_delta_at = 0.0
         #: Counted, not forwarded. If it ever rises the silence instruction has
         #: stopped working and we are paying for speech nobody hears.
@@ -237,7 +242,13 @@ class GeminiStreamingASR(AIGateway):
         if code:
             self._lang = code
         await self._queue.put(
-            TranscriptEvent(role="user", text=self._buf, final=False, lang=self._lang)
+            TranscriptEvent(
+                role="user",
+                text=self._buf,
+                final=False,
+                lang=self._lang,
+                utterance=self._utterances,
+            )
         )
 
         # Segmentation happens HERE and only here — on the text. The audio is
@@ -259,8 +270,16 @@ class GeminiStreamingASR(AIGateway):
         head, self._buf = self._buf[:cut].strip(), self._buf[cut:].lstrip()
         if not head:
             return
+        closed = self._utterances
+        self._utterances += 1
         await self._queue.put(
-            TranscriptEvent(role="user", text=head, final=True, lang=self._lang)
+            TranscriptEvent(
+                role="user",
+                text=head,
+                final=True,
+                lang=self._lang,
+                utterance=closed,
+            )
         )
 
     async def _quiet_watchdog(self) -> None:

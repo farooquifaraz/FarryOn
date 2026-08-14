@@ -75,6 +75,7 @@ class CascadeTranslateGateway(AIGateway):
         *,
         target_language: str = "en",
         echo_target_language: bool = False,
+        speak_on_device: bool = False,
         listener: AIGateway | None = None,
         translator: Any | None = None,
         speaker: Any | None = None,
@@ -86,6 +87,12 @@ class CascadeTranslateGateway(AIGateway):
         super().__init__(system_prompt="", tools=[], model=model or "cascade")
         self.target_language = target_language
         self.echo_target_language = echo_target_language
+        #: The phone will say it with the voice Android already ships, so no
+        #: speech is bought here. Spoken audio is ~80% of what a minute of
+        #: translation costs ($0.025 of $0.031) and the cloud voice spends a
+        #: second and a half before its first sound — producing it on the
+        #: device removes both.
+        self.speak_on_device = speak_on_device
         self._settings = settings
         self._queue: asyncio.Queue[GatewayEvent | None] = asyncio.Queue()
         self._closed = False
@@ -181,7 +188,9 @@ class CascadeTranslateGateway(AIGateway):
                 await self._queue.put(event)
                 if event.final and event.text.strip():
                     task = asyncio.create_task(
-                        self._translate_and_speak(event.text, event.lang)
+                        self._translate_and_speak(
+                            event.text, event.lang, event.utterance
+                        )
                     )
                     self._work.add(task)
                     task.add_done_callback(self._work.discard)
@@ -197,7 +206,7 @@ class CascadeTranslateGateway(AIGateway):
     # -- Steps 2 and 3: translate, then speak --------------------------------
 
     async def _translate_and_speak(
-        self, text: str, source_lang: str | None
+        self, text: str, source_lang: str | None, utterance: int | None = None
     ) -> None:
         if self._same_language(source_lang):
             # Already in the target. Saying it back is what
@@ -206,7 +215,7 @@ class CascadeTranslateGateway(AIGateway):
             return
         try:
             started = time.monotonic()
-            translated = await self._translator.translate(
+            translated, detected = await self._translator.translate(
                 text, source_lang=source_lang, target=self.target_language
             )
         except Exception as exc:  # noqa: BLE001 - one utterance, not the session
@@ -223,14 +232,33 @@ class CascadeTranslateGateway(AIGateway):
             translated_chars=len(translated),
             ms=int((time.monotonic() - started) * 1000),
         )
+        # The recogniser does not report a language, so the heard pane had no
+        # label at all — just "HEARD". The translator has just read the
+        # sentence and knows perfectly well what it was in, so it says, and the
+        # heard line is re-sent with its name attached. Safe now that every
+        # sentence is numbered: this updates that one, not whatever is newest.
+        if detected and detected != source_lang and utterance is not None:
+            await self._queue.put(
+                TranscriptEvent(
+                    role="user",
+                    text=text,
+                    final=True,
+                    lang=detected,
+                    utterance=utterance,
+                )
+            )
         await self._queue.put(
             TranscriptEvent(
                 role="assistant",
                 text=translated,
                 final=True,
                 lang=self.target_language,
+                utterance=utterance,
             )
         )
+        if self.speak_on_device:
+            # The words are already on their way to the phone; it speaks them.
+            return
         await self._speak(translated)
 
 
@@ -284,18 +312,28 @@ class _GeminiTextTranslator:
 
     async def translate(
         self, text: str, *, source_lang: str | None, target: str
-    ) -> str:
+    ) -> tuple[str, str | None]:
+        """Returns the translation and the language it was translated FROM.
+
+        The language comes back from here because the recogniser does not
+        report one, and this step has just read the sentence — asking for it
+        costs nothing on a call already being made, and it is what puts a name
+        above the heard text instead of a bare "HEARD".
+        """
         from google import genai
         from google.genai import types
 
         client = genai.Client(api_key=self._settings.gemini_api_key)
-        source = source_lang or "the source language"
+        source = source_lang or "whatever language it is in"
         prompt = (
-            f"Translate the following {source} text into {target}.\n"
-            "Reply with the translation only — no preamble, no notes, no "
-            "quotation marks, no alternatives. Keep names, numbers, times and "
-            "places exactly as they are. If the text is a fragment, translate "
-            "the fragment; do not complete it.\n\n"
+            f"Translate the following text, which is in {source}, into "
+            f"{target}.\n"
+            "Keep names, numbers, times and places exactly as they are. If the "
+            "text is a fragment, translate the fragment; do not complete it.\n"
+            "Reply with exactly two lines and nothing else — no numbering, no "
+            "labels, no quotation marks:\n"
+            "first line: the BCP-47 code of the language the text is IN\n"
+            "second line: the translation\n\n"
             f"{text}"
         )
         response = await asyncio.to_thread(
@@ -307,7 +345,12 @@ class _GeminiTextTranslator:
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
-        return (response.text or "").strip()
+        raw = (response.text or "").strip()
+        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        if len(lines) >= 2 and len(lines[0]) <= 12 and " " not in lines[0]:
+            return " ".join(lines[1:]), lines[0]
+        # It ignored the format. The translation is the part that matters.
+        return raw, None
 
 
 class _GeminiSpeaker:

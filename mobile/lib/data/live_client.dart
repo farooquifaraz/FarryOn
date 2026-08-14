@@ -39,6 +39,7 @@ class TranslateSessionConfig {
   const TranslateSessionConfig({
     required this.targetLanguage,
     this.echoTargetLanguage = false,
+    this.speakOnDevice = false,
   });
 
   /// BCP-47 code to translate *into*, e.g. `"hi"`.
@@ -48,9 +49,18 @@ class TranslateSessionConfig {
   /// already in [targetLanguage] instead of parroting it back.
   final bool echoTargetLanguage;
 
+  /// The phone will say the translation itself, so the server should send the
+  /// words and no audio.
+  ///
+  /// Spoken audio is about 80% of what a minute of translation costs, and the
+  /// cloud voice takes a second and a half to start. Android's own voice is
+  /// free and immediate.
+  final bool speakOnDevice;
+
   Map<String, dynamic> toJson() => {
         'targetLanguage': targetLanguage,
         'echoTargetLanguage': echoTargetLanguage,
+        'speakOnDevice': speakOnDevice,
       };
 }
 

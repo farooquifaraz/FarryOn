@@ -32,7 +32,17 @@ class TranslateTurn {
     this.translated = '',
     this.heardFinal = false,
     this.sameLanguage = false,
+    this.id,
   });
+
+  /// Which sentence this is, as the server numbered it.
+  ///
+  /// Sentences are translated concurrently and the speaker does not wait, so
+  /// a translation usually arrives after the NEXT sentence is already on
+  /// screen. Matching on this is what puts each translation under the words it
+  /// belongs to; without it the first sentence of a paragraph lost its
+  /// translation entirely (device-seen 2026-08-14).
+  final int? id;
 
   /// The recognised source text (may still be partial).
   final String heard;
@@ -64,6 +74,7 @@ class TranslateTurn {
     String? translated,
     bool? heardFinal,
     bool? sameLanguage,
+    int? id,
   }) =>
       TranslateTurn(
         heard: heard ?? this.heard,
@@ -71,6 +82,7 @@ class TranslateTurn {
         translated: translated ?? this.translated,
         heardFinal: heardFinal ?? this.heardFinal,
         sameLanguage: sameLanguage ?? this.sameLanguage,
+        id: id ?? this.id,
       );
 }
 

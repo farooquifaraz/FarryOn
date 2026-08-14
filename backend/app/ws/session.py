@@ -219,6 +219,7 @@ class Session:
                         echo_target_language=self._translate[
                             "echo_target_language"
                         ],
+                        speak_on_device=self._translate["speak_on_device"],
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.error(
@@ -527,12 +528,21 @@ class Session:
         self._translate = {
             "target_language": target,
             "echo_target_language": bool(block.get("echoTargetLanguage", False)),
+            # The phone can say the translation itself, with the voice Android
+            # already ships. Then we send the words and no audio at all.
+            #
+            # This is not a small saving: of the ~$0.031 a minute of translation
+            # costs, ~$0.025 is the spoken audio. Producing it on the device
+            # takes the bill to about a sixth, and removes the second and a half
+            # the cloud voice spends before its first sound.
+            "speak_on_device": bool(block.get("speakOnDevice", False)),
         }
         logger.info(
             "translate.mode",
             session_id=self.session_id,
             target=target,
             echo=self._translate["echo_target_language"],
+            speak_on_device=self._translate["speak_on_device"],
         )
         return True
 
@@ -875,6 +885,14 @@ class Session:
                     # thing the client cannot work out for itself. Omitted
                     # otherwise, so nothing on the agent path changes shape.
                     **({"lang": event.lang} if event.lang else {}),
+                    # Which sentence this is. The translate path runs several
+                    # in flight at once, so the client cannot assume the newest
+                    # turn is the one being answered.
+                    **(
+                        {"utterance": event.utterance}
+                        if event.utterance is not None
+                        else {}
+                    ),
                 }
             )
             if event.final and event.text:

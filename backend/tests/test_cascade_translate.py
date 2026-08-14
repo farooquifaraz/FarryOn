@@ -69,15 +69,24 @@ class _FakeListener(AIGateway):
 
 
 class _FakeTranslator:
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(self, *, fail: bool = False, detected: str | None = None) -> None:
         self.calls: list[tuple[str, str | None, str]] = []
         self._fail = fail
+        self.detected = detected
 
-    async def translate(self, text: str, *, source_lang: str | None, target: str) -> str:
+    async def translate(
+        self, text: str, *, source_lang: str | None, target: str
+    ) -> tuple[str, str | None]:
+        """Returns the translation AND the language it was translated from.
+
+        The second value is why the heard pane has a name above it again: the
+        recogniser reports no language, so the translator — which has just read
+        the sentence — says what it was.
+        """
         self.calls.append((text, source_lang, target))
         if self._fail:
             raise RuntimeError("the translate step is down")
-        return f"[{target}] {text}"
+        return f"[{target}] {text}", self.detected
 
 
 class _FakeSpeaker:
@@ -295,3 +304,84 @@ class TestPassThrough:
 
 
 
+
+
+class TestEverySentenceKeepsItsName:
+    """Translation runs while the speaker keeps talking, so answers come back
+    out of order and after the next sentence is already on screen. Every event
+    therefore carries the number of the sentence it belongs to.
+
+    Without it the client attached each translation to whatever was newest: on
+    the device the first sentence of a paragraph lost its Hindi entirely and
+    the second briefly wore it (2026-08-14).
+    """
+
+    async def test_the_translation_carries_its_sentences_number(self) -> None:
+        listener = _FakeListener([
+            TranscriptEvent(role="user", text="مرحبا", final=True, lang="ar",
+                            utterance=7),
+        ])
+        gw = CascadeTranslateGateway(
+            target_language="hi",
+            listener=listener,
+            translator=_FakeTranslator(),
+            speaker=_FakeSpeaker(),
+        )
+        await gw.connect()
+        events = await _collect(gw)
+
+        said = [
+            e for e in events
+            if e.type == EventType.TRANSCRIPT and e.role == "assistant"
+        ]
+        assert said, "nothing was translated"
+        assert said[0].utterance == 7, (
+            "the translation cannot be matched to its sentence"
+        )
+
+    async def test_the_heard_line_gets_its_language_back(self) -> None:
+        # The recogniser reports no language, so the heard pane read a bare
+        # "HEARD". The translator has just read the sentence and knows.
+        listener = _FakeListener([
+            TranscriptEvent(role="user", text="مرحبا", final=True, lang=None,
+                            utterance=0),
+        ])
+        gw = CascadeTranslateGateway(
+            target_language="hi",
+            listener=listener,
+            translator=_FakeTranslator(detected="ar"),
+            speaker=_FakeSpeaker(),
+        )
+        await gw.connect()
+        events = await _collect(gw)
+
+        named = [
+            e for e in events
+            if e.type == EventType.TRANSCRIPT and e.role == "user" and e.lang
+        ]
+        assert named, "the heard line never got a language"
+        assert named[-1].lang == "ar"
+        assert named[-1].utterance == 0, "it would land on the wrong card"
+        assert named[-1].text == "مرحبا", "the words must not change"
+
+    async def test_a_language_already_known_is_not_re_sent(self) -> None:
+        # Re-sending an unchanged line is a wasted message and a chance to
+        # flicker the screen for nothing.
+        listener = _FakeListener([
+            TranscriptEvent(role="user", text="مرحبا", final=True, lang="ar",
+                            utterance=0),
+        ])
+        gw = CascadeTranslateGateway(
+            target_language="hi",
+            listener=listener,
+            translator=_FakeTranslator(detected="ar"),
+            speaker=_FakeSpeaker(),
+        )
+        await gw.connect()
+        events = await _collect(gw)
+
+        heard = [
+            e for e in events
+            if e.type == EventType.TRANSCRIPT and e.role == "user"
+        ]
+        assert len(heard) == 1, f"the heard line was sent twice: {heard}"

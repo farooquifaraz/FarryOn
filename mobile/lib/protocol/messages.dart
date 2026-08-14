@@ -397,6 +397,7 @@ class TranscriptMessage extends ServerMessage {
     required this.text,
     required this.isFinal,
     this.lang,
+    this.utterance,
   });
 
   /// `"user"` (ASR) or `"assistant"`.
@@ -413,6 +414,16 @@ class TranscriptMessage extends ServerMessage {
   /// label what it just heard. Null on the assistant path.
   final String? lang;
 
+  /// Which sentence this belongs to, on translate sessions.
+  ///
+  /// Translation is asynchronous and the speaker does not wait for it, so by
+  /// the time a sentence has been translated the next one is usually already
+  /// on screen. Without this the client attached every translation to whatever
+  /// was newest — the first sentence of a paragraph lost its translation and
+  /// the second briefly wore somebody else's (device-seen 2026-08-14). Null on
+  /// the assistant path, where turns happen strictly one at a time.
+  final int? utterance;
+
   bool get isUser => role == 'user';
   bool get isAssistant => role == 'assistant';
 
@@ -422,6 +433,7 @@ class TranscriptMessage extends ServerMessage {
         text: json['text'] as String? ?? '',
         isFinal: json['final'] as bool? ?? false,
         lang: json['lang'] as String?,
+        utterance: json['utterance'] as int?,
       );
 }
 

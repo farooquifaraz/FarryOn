@@ -7,6 +7,7 @@ import '../../core/config.dart';
 import '../../core/logger.dart';
 import '../../core/notifications.dart';
 import '../../data/live_client.dart';
+import '../../playback/device_voice.dart';
 import '../../playback/pcm_player.dart';
 import '../../playback/voice_audio_mode.dart';
 import '../../protocol/frames.dart';
@@ -61,6 +62,7 @@ class TranslateController {
     required PcmPlayer player,
     required PermissionsService permissions,
     GlassesBridgeApi? glasses,
+    DeviceVoice? deviceVoice,
     VoiceAudioMode? voiceAudioMode,
     WebSocketLiveClient Function(AppConfig, TranslateSessionConfig, DeviceInfo Function())?
         clientFactory,
@@ -71,6 +73,7 @@ class TranslateController {
         _player = player,
         _permissions = permissions,
         _glasses = glasses,
+        _voice = deviceVoice ?? DeviceVoice(),
         _glassesGraceWindow = glassesGraceWindow ?? _defaultGlassesGrace,
         _clientFactory = clientFactory ?? _defaultClientFactory;
 
@@ -117,6 +120,11 @@ class TranslateController {
   final PcmPlayer _player;
   final PermissionsService _permissions;
   final GlassesBridgeApi? _glasses;
+
+  /// Android's own text-to-speech. Says the translation locally instead of
+  /// buying it: spoken audio is ~80% of what a minute of translation costs,
+  /// and the cloud voice waits a second and a half before its first sound.
+  final DeviceVoice _voice;
   final WebSocketLiveClient Function(
       AppConfig, TranslateSessionConfig, DeviceInfo Function()) _clientFactory;
 
@@ -281,6 +289,9 @@ class TranslateController {
     _glassesGrace?.cancel();
     _glassesGrace = null;
     if (!_state.isRunning && _client == null) return;
+    // Mid-sentence is where this usually lands, and a voice that keeps talking
+    // after the user pressed stop is alarming.
+    await _voice.stop();
     await _stopAudio();
     await _teardownSocket();
     await _player.flush();
@@ -294,6 +305,7 @@ class TranslateController {
 
   Future<void> _openSocket() async {
     final tx = TranslateSessionConfig(
+      speakOnDevice: true,
       targetLanguage:
           _state.targetLanguage.isEmpty ? 'en' : _state.targetLanguage,
     );
@@ -565,8 +577,20 @@ class TranslateController {
           unawaited(stop());
         }
         return;
-      case TranscriptMessage(:final role, :final text, :final isFinal, :final lang):
-        _applyTranscript(role: role, text: text, isFinal: isFinal, lang: lang);
+      case TranscriptMessage(
+          :final role,
+          :final text,
+          :final isFinal,
+          :final lang,
+          :final utterance
+        ):
+        _applyTranscript(
+          role: role,
+          text: text,
+          isFinal: isFinal,
+          lang: lang,
+          utterance: utterance,
+        );
       case ErrorMessage(:final code, :final message, :final fatal):
         // A quota heads-up is not a failure. Painting "10 minutes left" in the
         // same red as "translation is unavailable" teaches people to ignore
@@ -582,20 +606,46 @@ class TranslateController {
     }
   }
 
+  /// Say a finished translation with the phone's own voice.
+  ///
+  /// Tells the user ONCE if the phone has no voice for the language, rather
+  /// than going quietly silent — a translator that shows text and never speaks
+  /// looks broken, and the fix (installing the language's voice data) is
+  /// something only they can do.
+  Future<void> _say(String text) async {
+    final spoke = await _voice.speak(text, _state.targetLanguage);
+    if (spoke || _disposed) return;
+    if (_state.notice != null) return; // something is already on screen
+    _emit(_state.copyWith(
+      notice: 'This phone has no ${translateLanguageName(_state.targetLanguage)} '
+          'voice installed, so the translation is shown but not spoken. '
+          'Android Settings → Text-to-speech can add it.',
+    ));
+  }
+
   void _applyTranscript({
     required String role,
     required String text,
     required bool isFinal,
     String? lang,
+    int? utterance,
   }) {
     if (text.isEmpty) return;
     final turns = List<TranslateTurn>.of(_state.turns);
 
     if (role == 'user') {
-      // A finalised turn is closed; anything new starts the next one.
-      final openIndex = turns.isNotEmpty && !turns.last.heardFinal
-          ? turns.length - 1
-          : -1;
+      // Prefer the sentence's own number. The server re-sends a heard line once
+      // its language is known, and that must land on the same card rather than
+      // appearing as a duplicate.
+      var openIndex = utterance == null
+          ? -1
+          : turns.indexWhere((t) => t.id == utterance);
+      if (openIndex < 0) {
+        // No number, or a sentence not seen yet: fall back to the open turn.
+        openIndex = turns.isNotEmpty && !turns.last.heardFinal
+            ? turns.length - 1
+            : -1;
+      }
       // The model stays silent on speech already in the target language, so
       // that verdict can be reached the moment the language is known — no
       // waiting to see whether a translation shows up.
@@ -603,10 +653,11 @@ class TranslateController {
           lang != null && lang == _state.targetLanguage;
       final turn = TranslateTurn(
         heard: text,
-        heardLang: lang,
+        heardLang: lang ?? (openIndex >= 0 ? turns[openIndex].heardLang : null),
         heardFinal: isFinal,
         sameLanguage: sameLanguage,
         translated: openIndex >= 0 ? turns[openIndex].translated : '',
+        id: utterance ?? (openIndex >= 0 ? turns[openIndex].id : null),
       );
       if (openIndex >= 0) {
         turns[openIndex] = turn;
@@ -614,10 +665,20 @@ class TranslateController {
         turns.add(turn);
       }
     } else {
-      // The translation belongs to the most recent heard turn.
+      // The translation belongs to the sentence it was made from — NOT to
+      // whatever is newest. Sentences are translated concurrently while the
+      // speaker keeps talking, so by now the next one is usually on screen;
+      // matching by position lost the first sentence's translation entirely
+      // (device-seen 2026-08-14).
       if (turns.isEmpty) return;
-      turns[turns.length - 1] =
-          turns.last.copyWith(translated: text, sameLanguage: false);
+      final at = utterance == null
+          ? turns.length - 1
+          : turns.indexWhere((t) => t.id == utterance);
+      if (at < 0) return; // its sentence has scrolled out of the backlog
+      turns[at] = turns[at].copyWith(translated: text, sameLanguage: false);
+      // And this is where it is spoken. Only once it is final: saying a
+      // sentence twice because a delta arrived would be worse than silence.
+      if (isFinal && !_state.captionsOnly) unawaited(_say(text));
     }
 
     if (turns.length > maxTurns) {
@@ -634,6 +695,7 @@ class TranslateController {
 
   Future<void> dispose() async {
     _disposed = true;
+    await _voice.stop();
     _glassesGrace?.cancel();
     _glassesGrace = null;
     await _glassesSub?.cancel();

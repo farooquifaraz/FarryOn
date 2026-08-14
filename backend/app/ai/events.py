@@ -44,12 +44,22 @@ class TranscriptEvent(GatewayEvent):
             reports it. Only the translate path populates it — there the source
             language is *detected*, not configured, so the UI has no other way
             to label what it heard. ``None`` everywhere else.
+        utterance: Which sentence this belongs to, on the translate path.
+
+            Translation is asynchronous and the speaker does not wait for it:
+            by the time a sentence has been translated, the next one is often
+            already on screen. Without this the client attached each
+            translation to whatever was newest, so the first sentence of a
+            paragraph lost its Hindi entirely and the second briefly showed
+            somebody else's (device-seen 2026-08-14). ``None`` on the agent
+            path, where turns are strictly one at a time.
     """
 
     role: str
     text: str
     final: bool = False
     lang: str | None = None
+    utterance: int | None = None
     type: EventType = field(default=EventType.TRANSCRIPT, init=False)
 
 

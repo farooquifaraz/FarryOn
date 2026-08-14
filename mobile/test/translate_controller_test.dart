@@ -680,4 +680,74 @@ void main() {
           reason: 'on a headset nothing is missed, so say nothing');
     });
   });
+  group('sentences translated out of order', () {
+    /// Sentences are translated concurrently while the speaker keeps talking,
+    /// so a translation almost always arrives AFTER the next sentence is
+    /// already on screen. The client used to attach every translation to
+    /// whatever was newest: on the device the first sentence of a paragraph
+    /// lost its Hindi entirely and the second briefly wore it instead
+    /// (2026-08-14).
+    test('each translation lands under the words it came from', () async {
+      await connect();
+
+      fake.pushJson({'type': 'transcript', 'role': 'user', 'text': 'first.',
+        'final': true, 'lang': 'ar', 'utterance': 0});
+      fake.pushJson({'type': 'transcript', 'role': 'user', 'text': 'second.',
+        'final': true, 'lang': 'ar', 'utterance': 1});
+      // Now the translations come back — in the wrong order, as they do.
+      fake.pushJson({'type': 'transcript', 'role': 'assistant',
+        'text': 'दूसरा।', 'final': true, 'utterance': 1});
+      fake.pushJson({'type': 'transcript', 'role': 'assistant',
+        'text': 'पहला।', 'final': true, 'utterance': 0});
+      await pump(5);
+
+      final turns = controller.state.turns;
+      expect(turns.length, 2);
+      expect(turns[0].heard, 'first.');
+      expect(turns[0].translated, 'पहला।',
+          reason: 'the first sentence lost its translation');
+      expect(turns[1].heard, 'second.');
+      expect(turns[1].translated, 'दूसरा।');
+    });
+
+    test('a language named later updates the same card, not a new one', () {
+      // The recogniser reports no language, so the server re-sends the heard
+      // line once the translator has named it. That must not appear twice.
+      return connect().then((_) async {
+        fake.pushJson({'type': 'transcript', 'role': 'user', 'text': 'مرحبا.',
+          'final': true, 'utterance': 0});
+        await pump(3);
+        fake.pushJson({'type': 'transcript', 'role': 'user', 'text': 'مرحبا.',
+          'final': true, 'lang': 'ar', 'utterance': 0});
+        await pump(3);
+
+        expect(controller.state.turns.length, 1, reason: 'it was duplicated');
+        expect(controller.state.turns.first.heardLang, 'ar');
+      });
+    });
+
+    test('a translation for a sentence that scrolled away is dropped', () async {
+      // Rather than landing on an innocent bystander.
+      await connect();
+      fake.pushJson({'type': 'transcript', 'role': 'user', 'text': 'here.',
+        'final': true, 'utterance': 7});
+      fake.pushJson({'type': 'transcript', 'role': 'assistant',
+        'text': 'ghost', 'final': true, 'utterance': 999});
+      await pump(5);
+
+      expect(controller.state.turns.single.translated, isEmpty);
+    });
+
+    test('a server that sends no numbers still works', () async {
+      // The old shape, and the mock, both omit it.
+      await connect();
+      fake.pushJson({'type': 'transcript', 'role': 'user', 'text': 'hola.',
+        'final': true, 'lang': 'es'});
+      fake.pushJson({'type': 'transcript', 'role': 'assistant',
+        'text': 'नमस्ते।', 'final': true});
+      await pump(5);
+
+      expect(controller.state.turns.single.translated, 'नमस्ते।');
+    });
+  });
 }
