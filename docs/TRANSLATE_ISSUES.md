@@ -1,20 +1,38 @@
 # Live translation — issues found while testing
 
-**Status 2026-08-14, after the fixes.** I1, I2a, I2b and I2c are fixed and
-covered by tests; none has been seen on a device since, because none has
-been run on a device since — the next run is what closes them. I5 is
-mitigated but explicitly unproven. I3 is not ours. I4 stays open on one
-sighting.
+**Status 2026-08-14, all fixes verified on the S23 the same evening.**
 
 | | Fault | State |
 |---|---|---|
-| I1 | Decimal point read as a full stop | **fixed**, needs a device run |
+| I1 | Decimal point read as a full stop | **fixed** |
 | I2a | Watchdog closes on a pause mid-list | **fixed** (via I2c + context) |
-| I2b | Recogniser writes the full stop itself | **mitigated** — the translator now sees the previous fragment |
+| I2b | Recogniser writes the full stop itself | **fixed** — the translator sees the previous fragment |
 | I2c | Watchdog ignored the minimum length | **fixed**, and the minimum is now script-aware |
-| I3 | Words misheard | not fixable here |
+| I5 | Recogniser speaks and we pay for it | **fixed** — three sessions closed, no `model_spoke` |
+| I6 | The phone hears its own voice | **fixed** |
+| I3 / I3b | Words and characters misheard | not fixable here |
 | I4 | First sentence missing, seen once | open, awaiting a second sighting |
-| I5 | Recogniser speaks and we pay for it | **capped, unproven** — watch `gemini_asr.model_spoke` |
+
+What the device runs showed:
+
+- Chinese, which had been the worst case, went from seven cards with
+  three scraps among them to five whole sentences: 20, 26, 37, 30 and 31
+  characters, nothing shorter. 此外 survived and came out as
+  "Additionally" instead of "outside".
+- Three sessions have closed since the output budget was capped and none
+  logged `gemini_asr.model_spoke`. Before it, every session did.
+- Spoken into directly with the phone answering aloud — a 229-character
+  English sentence read out over several seconds — nothing came back
+  through the microphone. Every card carried a proper language label;
+  the unlabelled card was the tell, and there were none.
+- Latency went from a 1840 ms median to about 950 ms, best 528 ms, on a
+  live conversation rather than a recording.
+
+Still true and worth keeping in view: **the translation step has never
+been the problem.** Across nine runs in six languages the meaning and
+the numbers survived every time, including "4,900 millones" and "49億"
+both arriving as 4.9 billion. Everything fixed here was in the
+recogniser or in our own plumbing.
 
 ---
 
@@ -247,14 +265,32 @@ screen that nobody said.
 platform echo canceller has a playback reference, and it is plainly not
 catching text-to-speech.
 
-**Fix:** stop sending microphone audio to the recogniser while the phone
-is speaking. Nothing has to be detected or guessed — the translation is
-spoken by our own TTS, so we know exactly when it starts and when it
-finishes. A short tail after it stops covers the room's reverberation.
+**The guard already existed.** `_shouldHoldForEcho` has held the
+microphone during our own audio since 2026-08-10, when one English
+sentence came back as fourteen translations. It asked `_player`, which
+plays PCM arriving from the cloud. Moving the voice on-device to cut the
+cost meant the translation stopped passing through that player at all,
+so the guard saw silence and held nothing. A saving in one place
+disabled a defence in another, and every test kept passing because they
+all drove the old path.
 
-The alternative — filtering the echo out of the transcript afterwards —
-means recognising our own words in a different script, and by then the
-call has already been paid for.
+**Fixed** by having `DeviceVoice` answer the same question the player
+does. `awaitSpeakCompletion(true)` was already set, so `speak()` returns
+when the utterance ends and brackets exactly the window that must not be
+trusted. It counts rather than flags — sentences are spoken without
+waiting for the one before, so two can overlap — and `stop()` clears the
+count outright, since a count left raised would hold the microphone shut
+for the rest of the session.
+
+No detection and no guessing: the voice is ours, so we know when it
+starts and when it stops. The alternative, filtering the echo out of the
+transcript afterwards, means recognising our own words in a different
+script, and by then the call has already been paid for.
+
+Verified on the S23 the same evening: a 229-character English
+translation spoken aloud over several seconds, nothing back through the
+microphone. Two tests cover it and both fail if the second condition is
+removed.
 
 ---
 
