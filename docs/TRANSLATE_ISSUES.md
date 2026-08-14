@@ -153,6 +153,26 @@ Three slips across roughly 35 sentences. Nothing in the pipeline can
 correct these; a different or larger ASR model is the only lever, and it
 costs latency.
 
+### I3b — the first character after a pause goes missing
+
+A repeated shape rather than a one-off, and worth separating because it
+looks exactly like a cutting bug and is not one.
+
+| Run | Spoken | Heard | Effect |
+|---|---|---|---|
+| T7, T8 Chinese | 每天 (every day) | 天 | "Today" instead of "every day" |
+| T9 Chinese | 錢包/背包 (wallet/bag) | 包 | "bag," with no owner |
+
+Both losses fall immediately after a sentence-final 。 — which is where
+our own cut happens, so the suspicion is natural. It is not us:
+`_close` hands everything after the ending to the next utterance and
+drops nothing, and 此外 survived the same position once the watchdog
+stopped closing scraps. What remains is the recogniser clipping the
+onset of speech after a pause, and there is no lever for that here.
+
+Chinese suffers worst because a lost character is a lost word. In Latin
+script the same clipping loses a letter and the model reads through it.
+
 ---
 
 ## I5 — The recogniser speaks, and we pay for it
@@ -218,8 +238,18 @@ Recorded so they are not re-investigated:
   targets through English. It is visible in the input-transcription slot
   but does not affect output, and the cascade no longer relies on that
   slot for the source text.
-- **Latency.** 1.17–2.46 s across all five runs, worst case on the
-  longest sentence. This is at the good end of what cascaded systems
-  publish (1.4–1.7 s median).
+- **Latency.** Was 1.17–2.46 s. A client was being built for every
+  sentence, which meant a TLS handshake before each translation:
+  measured at 1021 ms per call against 674 ms reusing one client. With
+  the client hoisted, the device run gives 528–1671 ms, median around
+  950 ms — the first call is the slow one because that is when the
+  connection is opened. Well inside what cascaded systems publish
+  (1.4–1.7 s median).
+
+  What remains is not the model. The largest wait is the speaker
+  finishing their sentence, and no amount of speed touches that. Beating
+  it means translating a sentence before it ends and correcting
+  afterwards, which cannot be done with a voice — spoken words cannot be
+  taken back.
 - **On-device voice.** No cloud TTS call in any run; `speak_on_device`
   held throughout.
