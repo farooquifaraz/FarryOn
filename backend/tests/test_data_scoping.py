@@ -33,6 +33,27 @@ def dev_auth_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture
+def auth_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The opposite of [dev_auth_mode]: pin a REAL secret, so auth is enforced.
+
+    `Settings.auth_enabled` is simply `jwt_secret != "dev-insecure-change-me"`,
+    which means a test that asserts an unauthenticated call is refused is
+    really asserting something about the environment it happens to run in. A
+    developer with a real secret in `backend/.env` sees it pass; CI, which
+    sets only `AI_PROVIDER` and `DATABASE_URL`, has the default secret and so
+    has auth switched off — the call then falls through to the shared
+    anonymous user and the row is written instead of refused.
+
+    That is exactly how this went wrong: written 2026-08-14 and green on the
+    machine that wrote it, red on CI the moment it landed (2026-08-15) with a
+    foreign-key violation inserting a note for a user that did not exist. On
+    SQLite it surfaced as `database is locked`, which hid the cause entirely;
+    the Postgres job named it. Pin the condition rather than inherit it.
+    """
+    monkeypatch.setattr(get_settings(), "jwt_secret", "test-secret-not-the-default")
+
+
 def _client() -> TestClient:
     return TestClient(create_app())
 
@@ -357,6 +378,10 @@ def test_an_empty_or_enormous_note_is_refused() -> None:
         assert client.get("/notes", headers=_auth(token)).json() == []
 
 
-def test_saving_a_note_needs_an_account() -> None:
+def test_saving_a_note_needs_an_account(auth_enforced: None) -> None:
+    # Takes [auth_enforced] deliberately: with the default secret the app is
+    # in dev mode, where a call with no header is answered as the shared
+    # anonymous user and the note is WRITTEN. That is intended behaviour, not
+    # a bug — so this test has to say which of the two worlds it is in.
     with _client() as client:
         assert client.post("/notes", json={"text": "hello"}).status_code in (401, 403)
