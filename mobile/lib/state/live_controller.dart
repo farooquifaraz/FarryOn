@@ -187,12 +187,25 @@ class LiveController {
   /// The most recent camera frame (raw JPEG), or null if the camera is off.
   Uint8List? get lastFrame => _lastFrame;
 
-  /// The freshest camera frame, waiting up to ~2s if the camera just turned on
-  /// or resumed and the first frame (~1 fps) hasn't arrived yet — so the scan
-  /// button doesn't wrongly report "no camera frame".
+  /// The freshest camera frame, turning the camera on if it is off and waiting
+  /// up to ~2s for the first one to arrive.
+  ///
+  /// The camera no longer opens with the session, so "off" is the normal state
+  /// rather than something the user did. Returning null for it would have made
+  /// the scan button and the `identify_image` tool answer "no camera frame" on
+  /// a phone whose camera works perfectly — so this starts it instead. The
+  /// wait was already here for the case where the camera had just resumed;
+  /// starting from cold takes the same path.
+  ///
+  /// Leaves it on afterwards, deliberately: somebody who asked to be seen once
+  /// is usually about to ask again, and the toggle is right there when they
+  /// are done.
   Future<Uint8List?> grabFrame() async {
     if (_lastFrame != null) return _lastFrame;
-    if (!_state.cameraOn) return null;
+    if (!_state.cameraOn) {
+      await setCameraEnabled(true);
+      if (!_state.cameraOn) return null; // it refused — no camera, or denied
+    }
     for (var i = 0; i < 8 && _lastFrame == null; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
@@ -1009,12 +1022,23 @@ class LiveController {
     if (!identical(_videoSource, _audioSource)) {
       await _videoSource.initialize();
     }
-    // Start the camera immediately so the preview is live and ~1 fps frames
-    // begin flowing. Record the intent so a background release or a slow
-    // reconnect can restore it (see _ensureCameraMatchesIntent).
-    _cameraDesired = true;
+    // The camera stays OFF until somebody asks for it.
+    //
+    // It used to open with the session, so every conversation streamed a frame
+    // a second whether or not anyone wanted to be seen — an hour of talking
+    // sent 3,600 pictures of a ceiling to the model, and the camera is the
+    // most expensive thing the phone can leave running. It is also the honest
+    // default: an assistant that starts watching the moment it opens is not
+    // what someone would choose if asked.
+    //
+    // It also takes the camera out of the path on start-up, which is where the
+    // screen went black twice on a vivo V2246 (2026-08-15, see TEST_PLAN #12).
+    // That fault is NOT understood yet, so this is not a fix for it — but a
+    // camera that is not attached cannot be what breaks.
+    //
+    // Nothing is lost: [grabFrame] turns it on and waits for the first frame,
+    // so the scan button and the `identify_image` tool still see the room.
     _foreground = true;
-    await _startVideo();
 
     _client.start();
     // Keep the mic legal + the CPU awake while the screen is off, so the user
@@ -1388,11 +1412,19 @@ class LiveController {
       case 'capture_photo':
         unawaited(captureGlassesPhoto());
       case 'identify_image':
-        // The model often reaches for identify_image on "what is this". With
-        // the glasses (photo-trigger) there's no live frame, so snap one now —
-        // the backend tool waits for it. No-op if the phone camera is active
-        // (it already streams frames).
+        // The model reaches for this on "what is this?", and it needs a frame
+        // to look at. Two ways to get one, depending on what is capturing:
+        //
+        // Glasses are photo-trigger — there is no stream, so snap one now and
+        // the backend tool waits for it.
+        //
+        // The phone used to be streaming already, so this was a no-op for it.
+        // It no longer is: the camera stays off until asked, and asking is
+        // exactly what this tool call is. [grabFrame] starts it and waits for
+        // the first frame, and the listener ships frames onward from there, so
+        // the model gets its picture a beat later instead of never.
         unawaited(captureGlassesPhoto());
+        if (_videoSource is! GlassesCaptureSource) unawaited(grabFrame());
       case 'record_video':
         unawaited(startGlassesRecording(afterSpokenReply: true));
       case 'stop_recording':

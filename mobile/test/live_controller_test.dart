@@ -223,16 +223,64 @@ void main() {
 
   Future<void> tick() => Future<void>.delayed(Duration.zero);
 
-  test('connect starts video and opens the socket', () async {
+  test('connect opens the socket and leaves the camera alone', () async {
+    // The camera used to open with the session. It no longer does: every
+    // conversation was streaming a frame a second whether or not anyone
+    // wanted to be seen, and an assistant that starts watching the moment it
+    // opens is not what someone would pick if asked.
     final outcome = await controller.connect();
     await tick();
     expect(outcome, PermissionOutcome.granted);
-    expect(source.videoStarted, isTrue);
+    expect(source.videoStarted, isFalse);
+    expect(controller.state.cameraOn, isFalse);
+  });
+
+  test('asking for a frame turns the camera on and waits for one', () async {
+    // What keeps the scan button and `identify_image` working with the camera
+    // off. "Off" is now the resting state rather than something the user did,
+    // so answering "no camera frame" would be wrong on a phone whose camera
+    // is fine.
+    await controller.connect();
+    await tick();
+    expect(controller.state.cameraOn, isFalse);
+
+    final pending = controller.grabFrame();
+    await tick();
+    expect(source.videoStarted, isTrue, reason: 'it should have started it');
+
+    source.videoCtl.add(Uint8List.fromList([1, 2, 3]));
+    expect(await pending, isNotNull, reason: 'the frame it waited for');
     expect(controller.state.cameraOn, isTrue);
+  });
+
+  test('turning the camera off throws its last frame away', () async {
+    // Not an optimisation to reclaim: answering "what is this?" with the view
+    // from before the camera was switched off would be worse than taking a
+    // moment to look again. So the cached frame goes, and the next request
+    // starts the camera rather than serving something stale.
+    await controller.connect();
+    await tick();
+    await controller.setCameraEnabled(true);
+    source.videoCtl.add(Uint8List.fromList([9, 9, 9]));
+    await tick();
+    expect(controller.lastFrame, isNotNull);
+
+    await controller.setCameraEnabled(false);
+    expect(controller.lastFrame, isNull, reason: 'a stale view must not linger');
+
+    final pending = controller.grabFrame();
+    await tick();
+    expect(source.videoStarted, isTrue, reason: 'it looks again instead');
+    source.videoCtl.add(Uint8List.fromList([7, 7, 7]));
+    expect(await pending, equals(Uint8List.fromList([7, 7, 7])));
   });
 
   test('captured JPEG frames become 0x02 frames on the wire', () async {
     await controller.connect();
+    await tick();
+    // Explicit now: the camera no longer opens with the session, so a test
+    // about frames on the wire has to ask for the camera the way a user does.
+    await controller.setCameraEnabled(true);
     await tick();
     source.videoCtl.add(Uint8List.fromList([1, 2, 3]));
     await tick();
