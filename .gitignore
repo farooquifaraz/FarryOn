@@ -49,6 +49,10 @@ mobile/android/key.properties
 
 # Built APKs (large binaries; rebuild from mobile/). Keep the folder's README.
 apk/*.apk
+# Build outputs dropped at the repo root for sideloading. 60+ MB each and
+# rebuilt constantly — they belong on a phone, not in the history.
+*.apk
+*.aab
 
 # Golden PNGs from the design-preview tests. Not a regression gate (they're
 # skipped by default and their bytes differ per host), so committing them is

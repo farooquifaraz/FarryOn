@@ -44,6 +44,58 @@ Legend: ☐ not done · ☑ done+verified (date) · ⚠ blocked · ✗ dropped
 | 11 | Official Google "G" asset | Currently hand-drawn. Google's branding rules require theirs before release. |
 | 12 | **Black app surface right after signing up** | Open — see below. Twice on a vivo V2246, 2026-08-15. |
 
+### 13 — the app freezes, and the camera will not open (vivo V2246)
+
+Reported 2026-08-16 after an evening on the vivo: the app sometimes does
+not start on the first try, sometimes closes itself, answers sometimes
+and not others, and is slow throughout. Bluetooth does not auto-connect.
+The translator does not hear reliably.
+
+**Measured, from one logcat capture (00:15–00:26):**
+
+| | |
+|---|---|
+| Main-thread stalls | 10, the worst **1557 frames — about 26 seconds frozen** |
+| Others | 244, 225, 255, 269, 311 frames (4–5 s each), all around 00:15 |
+| Camera opens attempted | 2 |
+| Camera opens that succeeded | **0** — both `Camera: open \| onError` |
+| ANRs recorded | none |
+| App process deaths | none in the buffer |
+
+So "hanging" is real and measurable, and it is not one cause: the 26 s
+freeze sits right on top of a failed camera open (00:22:59 error →
+00:23:06 stall reported), while the five stalls at 00:15 have no camera
+activity near them at all.
+
+**The camera never opened successfully.** Both attempts errored. That is
+new — earlier the same evening, with the camera opening at session start,
+it captured steadily at 35 frames a minute. Opening it on demand instead
+is the change in between, so it is a suspect and must be checked first:
+if `grabFrame` cannot open the camera, the scan button and
+`identify_image` are both dead in a way that reads as "the feature is
+broken".
+
+**Do not fix any of this from the log alone.** Three guesses were made
+about the black screen on 2026-08-15 and two were wrong; the same
+discipline applies here. What settles it:
+
+1. **Test on the S23** — the same build, the same steps. This device is a
+   mid-range vivo and the S23 has absorbed problems it cannot. If the S23
+   is clean, the work is device-specific and should be measured there.
+2. **Test against the local backend, not live.** `farryon-DEV.apk` at the
+   repo root is built for `192.168.1.107:8000`, secure off. Local logs
+   make latency and dropped turns visible, which live does not.
+3. **Get a stall while watching**, then read what the app's own process
+   was doing in the 30 s before the Choreographer line — filtering by pid
+   is what turned the 26 s freeze into a camera-open error.
+
+Bluetooth auto-connect could not have worked at all until 2026-08-15:
+BLUETOOTH_SCAN and BLUETOOTH_CONNECT were both denied (see #12 below and
+the permission work). Re-test it now they are granted before treating it
+as a separate fault.
+
+---
+
 ### 12 — the screen goes black immediately after sign-up
 
 Seen twice on a **vivo V2246 (Android 15)**, both times in the moment
