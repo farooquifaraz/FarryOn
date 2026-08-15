@@ -101,10 +101,15 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
     final frame = await controller.grabFrame();
     if (!mounted) return;
     if (frame == null) {
+      // Reaching here now means the camera could not be started at all —
+      // denied, or in use elsewhere. It no longer means "you left it off",
+      // so it no longer tells the user to go and turn it on: [grabFrame]
+      // already tried that on their behalf.
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
         ..showSnackBar(const SnackBar(
-          content: Text('No camera frame yet — turn the camera on and try again.'),
+          content: Text("Couldn't get a camera picture — check the camera "
+              'permission, or close anything else using the camera.'),
         ));
       return;
     }
@@ -784,7 +789,15 @@ class _Controls extends StatelessWidget {
                 icon: Icons.center_focus_strong,
                 tooltip: 'Identify what the camera sees',
                 gradient: Aurora.gradPurple,
-                onPressed: state.cameraOn ? onScan : null,
+                // Live whether or not the camera is on. It used to be greyed
+                // out without one, which made sense when the camera opened
+                // with the session — "off" meant the user had turned it off.
+                // Now off is the resting state, so greying this out left the
+                // button dead on a phone whose camera is perfectly fine, with
+                // nothing on screen to explain it. `grabFrame` turns the
+                // camera on and waits for the first frame, so the tap that
+                // used to be refused is now the thing that starts it.
+                onPressed: onScan,
               ),
               _MicButton(
                 micOpen: state.micOpen,
