@@ -126,10 +126,17 @@ async def invite_user(
     role_ids: list[int],
 ) -> User:
     email_norm = email.lower()
+    # Live rows only. Soft delete keeps the address, and more than one deleted
+    # row for it is ordinary — asking for all of them made this raise
+    # MultipleResultsFound, so an admin could not re-invite anyone they had
+    # removed twice. Same reasoning as `auth.service.register`, where it was
+    # first seen on live (2026-08-15).
     existing = (
-        await db.execute(select(User).where(User.email == email_norm))
+        await db.execute(
+            select(User).where(User.email == email_norm, User.deleted_at.is_(None))
+        )
     ).scalar_one_or_none()
-    if existing is not None and existing.deleted_at is None:
+    if existing is not None:
         raise AppError(
             "EMAIL_TAKEN", "An account with this email already exists.",
             status_code=409, fields={"email": "already registered"},

@@ -69,6 +69,33 @@ async def test_the_address_can_sign_up_again(db_session, actor) -> None:
     assert second.email == EMAIL
 
 
+async def test_an_address_deleted_twice_is_still_usable(db_session, actor) -> None:
+    """The one that actually happened.
+
+    Two soft-deleted rows for one address is ordinary: sign up, get deleted,
+    sign up again, get deleted again. The check used to load every row for the
+    address and inspect `deleted_at` afterwards, so the second delete made
+    `scalar_one_or_none` raise MultipleResultsFound — an unhandled 500, which
+    reaches the phone as "something went wrong. try again" with no way past it.
+    On live this closed barirafaruqi@gmail.com permanently (2026-08-15).
+    """
+    settings = get_settings()
+
+    for _ in range(2):
+        made = await auth_service.register(
+            db_session, settings, email=EMAIL, password=PASSWORD, display_name="Barira"
+        )
+        await db_session.commit()
+        await users_service.soft_delete_user(db_session, actor=actor, user_id=made.id)
+        await db_session.commit()
+
+    third = await auth_service.register(
+        db_session, settings, email=EMAIL, password=PASSWORD, display_name="Barira"
+    )
+    await db_session.commit()
+    assert third.deleted_at is None
+
+
 async def test_a_live_address_is_still_refused(db_session) -> None:
     # The other half: reuse is allowed ONLY because the first row is deleted.
     # An address still in use must keep getting a clean 409 rather than a
@@ -86,3 +113,50 @@ async def test_a_live_address_is_still_refused(db_session) -> None:
             password=PASSWORD, display_name="Someone Else",
         )
     assert caught.value.code == "EMAIL_TAKEN"
+
+
+async def test_signing_in_after_two_deletions_is_refused_not_a_crash(
+    db_session, actor
+) -> None:
+    """The same fault, reached from the sign-in screen.
+
+    Every address lookup keyed on email had it. A person whose address had
+    been deleted twice could not sign up, could not sign in, could not ask for
+    a password reset and could not be re-invited by an admin — all four
+    answered 500, none of them said anything a user could act on.
+    """
+    settings = get_settings()
+    for _ in range(2):
+        made = await auth_service.register(
+            db_session, settings, email=EMAIL, password=PASSWORD, display_name="B"
+        )
+        await db_session.commit()
+        await users_service.soft_delete_user(db_session, actor=actor, user_id=made.id)
+        await db_session.commit()
+
+    with pytest.raises(AppError) as caught:
+        await auth_service.login(
+            db_session, settings, email=EMAIL, password=PASSWORD,
+            ip="127.0.0.1", user_agent="test",
+        )
+    assert caught.value.code == "INVALID_CREDENTIALS", (
+        "a deleted account must be refused the same way a wrong password is, "
+        "not crash the request"
+    )
+
+
+async def test_forgotten_password_after_two_deletions_stays_silent(
+    db_session, actor
+) -> None:
+    settings = get_settings()
+    for _ in range(2):
+        made = await auth_service.register(
+            db_session, settings, email=EMAIL, password=PASSWORD, display_name="B"
+        )
+        await db_session.commit()
+        await users_service.soft_delete_user(db_session, actor=actor, user_id=made.id)
+        await db_session.commit()
+
+    # Silence is the contract here — the endpoint must not reveal whether an
+    # address exists. A 500 broke that as loudly as an error message would.
+    await auth_service.forgot_password(db_session, settings, email=EMAIL)

@@ -138,10 +138,24 @@ async def register(
     db: AsyncSession, settings: Settings, *, email: str, password: str, display_name: str | None
 ) -> User:
     email_norm = email.lower()
+    # Ask for LIVE rows only, which is the actual question — is this address
+    # claimed? Soft-deleted rows keep the address, and there can be any number
+    # of them: delete, sign up again, delete again, and the table holds two.
+    # Fetching every row and then testing `deleted_at` meant `scalar_one_or_none`
+    # saw both and raised MultipleResultsFound, which is an unhandled 500, which
+    # the app can only report as "something went wrong. try again."
+    #
+    # An address deleted twice was permanently unusable, and nothing in the
+    # product could clear it (live 2026-08-15: barirafaruqi@gmail.com, rows 3
+    # and 4, both deactivated, third signup 500). The partial unique index
+    # guarantees at most one live row, so one-or-none is now a promise the
+    # database keeps rather than an assumption this code was making.
     existing = (
-        await db.execute(select(User).where(User.email == email_norm))
+        await db.execute(
+            select(User).where(User.email == email_norm, User.deleted_at.is_(None))
+        )
     ).scalar_one_or_none()
-    if existing is not None and existing.deleted_at is None:
+    if existing is not None:
         # Same generic shape as any other validation error — but this one
         # DOES reveal the email is taken (unlike login/forgot-password). The
         # register endpoint's whole purpose is claiming an address, so a
@@ -245,14 +259,23 @@ async def login(
             status_code=429,
         )
 
+    # Live rows only: an address can carry any number of soft-deleted rows,
+    # and asking for all of them made `scalar_one_or_none` raise once there
+    # were two — a 500 in place of a clean "incorrect email or password".
+    # A deleted account already failed `valid_account` below, so nothing here
+    # changes except that the lookup can no longer explode.
     user = (
-        await db.execute(select(User).where(User.email == email_norm))
+        await db.execute(
+            select(User).where(User.email == email_norm, User.deleted_at.is_(None))
+        )
     ).scalar_one_or_none()
 
     # Constant-shape failure path: verify against a real hash when the user
     # exists, otherwise against a fixed dummy hash — so response timing
     # doesn't leak whether the email exists (verify_password is
-    # constant-time internally; this just ensures we always call it).
+    # constant-time internally; this just ensures we always call it). Still
+    # correct with the filter above: a deleted address now takes the dummy
+    # branch, which is the same work the "unknown address" branch does.
     password_ok = False
     if user is not None and user.password_hash is not None:
         password_ok = verify_password(password, user.password_hash)
@@ -395,8 +418,12 @@ async def logout(db: AsyncSession, *, raw_refresh_token: str) -> int | None:
 async def forgot_password(db: AsyncSession, settings: Settings, *, email: str) -> None:
     """Always no-op silently for an unknown email — same response either way."""
     email_norm = email.lower()
+    # Live rows only — see the note in [login]. The `deleted_at` test below is
+    # kept as well: it costs nothing and states the intent at the point of use.
     user = (
-        await db.execute(select(User).where(User.email == email_norm))
+        await db.execute(
+            select(User).where(User.email == email_norm, User.deleted_at.is_(None))
+        )
     ).scalar_one_or_none()
     if user is None or user.deleted_at is not None or user.password_hash is None:
         return
