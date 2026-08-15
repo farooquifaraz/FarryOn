@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart' show openAppSettings;
 
 import '../../core/theme.dart';
 import '../../state/providers.dart';
+import '../glasses_lab/glasses_permissions.dart';
 
 /// True while a connect flow is running — a second tap (dashboard pill AND
 /// Settings card share this) must not start a second scan.
@@ -27,10 +29,39 @@ Future<bool> runGlassesConnectFlow(BuildContext context, WidgetRef ref) async {
 }
 
 Future<bool> _runFlow(BuildContext context, WidgetRef ref) async {
+  // Ask for Bluetooth first, and say so if it is refused.
+  //
+  // Without BLUETOOTH_SCAN an Android 12+ scan finds nothing — not an error
+  // the user can see, just an empty list. This flow used to report that as
+  // "no glasses found", so someone whose permission was missing went off to
+  // check the glasses were charged and in range while the app sat there
+  // never having asked for the one thing it needed. On a vivo V2246 the
+  // glasses were paired, powered and inches away (2026-08-15).
+  //
+  // The Glasses Lab screen has always done this properly; this path just
+  // never called the same helper.
+  if (!await requestGlassesBlePermissions()) {
+    if (!context.mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('FarryOn needs the Nearby devices permission to '
+            'find your glasses'),
+        action: SnackBarAction(
+          label: 'Settings',
+          onPressed: openAppSettings,
+        ),
+        duration: Duration(seconds: 6),
+      ),
+    );
+    return false;
+  }
+
   final notifier = ref.read(liveProvider.notifier);
   final hits = await notifier.scanGlassesForPicker();
   if (!context.mounted) return false;
   if (hits.isEmpty) {
+    // Now this means what it says: permission is granted and the scan came
+    // back empty.
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('No glasses found — make sure they are on and nearby'),
