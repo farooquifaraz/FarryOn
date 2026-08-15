@@ -522,6 +522,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
     <li><a href="#glasses">Glasses</a></li>
     <li><a href="#pricing">Pricing</a></li>
     <li><a href="#faq">FAQ</a></li>
+    <li><a href="/login">Sign in</a></li>
   </ul>
   <a href="#pricing" class="nav-cta">Get FarryOn</a>
   <button class="hamburger" onclick="toggleMenu()"><span></span><span></span><span></span></button>
@@ -915,7 +916,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
       </div>
       <div class="footer-col"><h4>Product</h4><ul><li><a href="#features">Features</a></li><li><a href="#glasses">Glasses</a></li><li><a href="#pricing">Pricing</a></li><li><a href="/download/arm64">Download App</a></li><li><a href="#">Changelog</a></li></ul></div>
       <div class="footer-col"><h4>Company</h4><ul><li><a href="#">About</a></li><li><a href="#">Blog</a></li><li><a href="#">Careers</a></li><li><a href="#">Press</a></li></ul></div>
-      <div class="footer-col"><h4>Support</h4><ul><li><a href="#">FAQ</a></li><li><a href="#">SDK Docs</a></li><li><a href="#">WhatsApp</a></li><li><a href="#">Privacy Policy</a></li><li><a href="#">Terms</a></li></ul></div>
+      <div class="footer-col"><h4>Support</h4><ul><li><a href="#faq">FAQ</a></li><li><a href="/login">Sign in</a></li><li><a href="#">SDK Docs</a></li><li><a href="#">WhatsApp</a></li><li><a href="#">Privacy Policy</a></li><li><a href="#">Terms</a></li></ul></div>
     </div>
     <div class="footer-bottom">
       <p>© 2026 FarryOn. Dubai, UAE.</p>
@@ -1053,7 +1054,12 @@ if(orb){let a=0;(function spin(){a+=.5;const r=a*Math.PI/180;const cx=372,cy=268
    SMOOTH SCROLL
 ═══════════════════════════════════════════ */
 document.querySelectorAll('a[href^="#"]').forEach(a=>
-  a.addEventListener('click',e=>{const t=document.querySelector(a.getAttribute('href'));
+  a.addEventListener('click',e=>{
+    const h=a.getAttribute('href');
+    // Placeholder link for a page that does not exist yet. Swallow the
+    // click rather than let querySelector('#') throw on every tap.
+    if(h==='#'){e.preventDefault();return;}
+    const t=document.querySelector(h);
     if(t){e.preventDefault();t.scrollIntoView({behavior:'smooth',block:'start'});}
   })
 );
