@@ -42,6 +42,42 @@ Legend: ☐ not done · ☑ done+verified (date) · ⚠ blocked · ✗ dropped
 | 9 | Cost optimization P0-2, P0-3, P1-5, P1-7, B1–B5 | P0-1 + Vision-403 done |
 | 10 | Roadmap #4 — Location | Tool exists; needs a real GPS device test |
 | 11 | Official Google "G" asset | Currently hand-drawn. Google's branding rules require theirs before release. |
+| 12 | **Black app surface right after signing up** | Open — see below. Twice on a vivo V2246, 2026-08-15. |
+
+### 12 — the screen goes black immediately after sign-up
+
+Seen twice on a **vivo V2246 (Android 15)**, both times in the moment
+after a successful sign-up. The app is not broken underneath: it is
+connected to the backend, the microphone is running, frames are being
+captured, and there is no Dart exception anywhere in logcat. It simply
+paints nothing.
+
+**A fresh launch always fixes it**, which is the same sentence already in
+`android/app/src/main/AndroidManifest.xml` about Impeller on Vulkan — the
+reason Impeller is switched off there. It is switched off, and this still
+happens, so that mitigation does not cover this device.
+
+Ruled out by measurement, not by argument:
+
+- **Not the frame pileup.** The first sighting had the UI thread stalled
+  7–8.5 s at a time and the capture rate decaying from 31/min to 1/min.
+  That was a real fault and is fixed (temp files are deleted now, and
+  frames already inside the size limit skip the decode/re-encode). After
+  the fix: 35 captures/min, steady, zero dropped-frame warnings — and the
+  screen was still black. Two faults, not one.
+- **Not sleep/wake.** Screen off, ten seconds, unlock, back to the app:
+  renders fine.
+
+What is left, and untested: sign-up ends with
+`Navigator.of(context).pop()` (`features/auth/signup_screen.dart`), so
+the screen underneath rebuilds as signed-in and mounts the live screen —
+which attaches the camera preview, a platform view, in the middle of a
+route transition. That is a known way to get a black surface on the
+legacy renderer. **A guess, and the third one; the first two were wrong.**
+
+Next step is to establish whether sign-IN does it too (it did not on
+2026-08-15) or only sign-UP. If only sign-up, the transition is the
+suspect and delaying the camera attach by a frame is the thing to try.
 
 ---
 

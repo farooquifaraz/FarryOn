@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show File;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart'; // compute() — off-main-isolate work
@@ -21,12 +22,41 @@ class _JpegJob {
   final int quality;
 }
 
+/// Whether this JPEG is already small enough to send as it is.
+///
+/// Reads only the frame header — `startDecode` walks to the SOF marker for the
+/// dimensions and stops, so this costs microseconds against the tens of
+/// milliseconds a full decode takes.
+///
+/// It exists because the answer is almost always yes and we were not asking.
+/// The camera runs at [ResolutionPreset.medium], which on every device tested
+/// is at or under [VideoFormat.maxWidth] — so the "downscale" decoded and
+/// re-encoded a whole frame, once a second, for a resize that never happened.
+/// Passing the camera's own JPEG through skips the decode, the re-encode, the
+/// isolate spawn and two full-frame copies. Same picture, same wire format.
+///
+/// Returns false when the header cannot be read, which routes the frame down
+/// the old path rather than trusting bytes we could not measure.
+@visibleForTesting
+bool jpegFitsWithin(Uint8List jpeg, int maxDim) {
+  try {
+    final info = img.JpegDecoder().startDecode(jpeg);
+    if (info == null || info.width == 0 || info.height == 0) return false;
+    final longEdge = info.width > info.height ? info.width : info.height;
+    return longEdge <= maxDim;
+  } catch (_) {
+    return false;
+  }
+}
+
 /// Top-level (isolate-safe) JPEG decode + downscale + re-encode.
 ///
 /// Runs on a background isolate via `compute` so the heavy `img.decodeImage`
 /// (which previously ran on the UI isolate every ~1s and stalled audio
 /// forwarding + WS sends — the "voice slow" symptom) no longer blocks the event
 /// loop. Returns null if decoding fails.
+///
+/// Only reached now when the frame really is oversized — see [jpegFitsWithin].
 Uint8List? _downscaleJpegInIsolate(_JpegJob job) {
   final decoded = img.decodeImage(job.source);
   if (decoded == null) return null;
@@ -310,6 +340,19 @@ class PhoneCaptureSource implements CaptureSource {
     }
   }
 
+  /// Remove the file [takePicture] left behind, quietly.
+  ///
+  /// Separate so the capture path stays readable, and never throws: a frame
+  /// that could not be deleted is a wasted file, not a reason to drop the
+  /// picture we already read out of it.
+  Future<void> _discard(XFile shot) async {
+    try {
+      await File(shot.path).delete();
+    } catch (e) {
+      _log.debug('could not delete captured frame: $e');
+    }
+  }
+
   Future<void> _captureFrame() async {
     final camera = _camera;
     if (camera == null || !camera.value.isInitialized) return;
@@ -318,13 +361,28 @@ class PhoneCaptureSource implements CaptureSource {
     try {
       final shot = await camera.takePicture();
       final raw = await shot.readAsBytes();
+      // The file `takePicture()` wrote is dead the moment we have the bytes,
+      // and nothing else was deleting it. At one frame a second that is 3,600
+      // JPEGs an hour left in the cache directory — and the phone slows down
+      // as they pile up. On a vivo V2246 a ten-minute session decayed from 31
+      // frames a minute to 1, and the UI thread stalled for seven and eight
+      // seconds at a stretch, which shows on screen as an app that has died
+      // (device-seen 2026-08-15). Best-effort: a frame is not worth failing
+      // over, and the bytes are already in hand.
+      unawaited(_discard(shot));
+
       // CHANGED (UX Spec BUG 3 / latency): downscale on a background isolate so
       // the per-second JPEG decode never blocks the UI isolate that also
-      // forwards mic audio + WS frames.
-      final jpeg = await compute(
-        _downscaleJpegInIsolate,
-        _JpegJob(raw, VideoFormat.maxWidth, jpegQuality),
-      );
+      // forwards mic audio + WS frames. Only when there is something to
+      // downscale, though — at [ResolutionPreset.medium] the camera's own JPEG
+      // is already within [VideoFormat.maxWidth], so the common case now skips
+      // the decode, the re-encode and the isolate entirely.
+      final jpeg = jpegFitsWithin(raw, VideoFormat.maxWidth)
+          ? raw
+          : await compute(
+              _downscaleJpegInIsolate,
+              _JpegJob(raw, VideoFormat.maxWidth, jpegQuality),
+            );
       if (jpeg != null && !_videoController.isClosed) {
         _videoController.add(jpeg);
       }
