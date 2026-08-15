@@ -8,7 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 /// A saved copy is read later by someone who was not in the room, so it has to
 /// stand on its own.
 void main() {
-  TranslateTurn _turn(
+  TranslateTurn turn(
     String heard, {
     String? lang,
     String translated = '',
@@ -28,7 +28,7 @@ void main() {
   test('both sides of every line are kept, with the language named', () {
     final note = renderTranslationNote(
       turns: [
-        _turn('La reunión empieza a las 4:30.',
+        turn('La reunión empieza a las 4:30.',
             lang: 'es', translated: 'बैठक 4:30 बजे शुरू होगी।'),
       ],
       targetLanguage: 'hi',
@@ -46,8 +46,8 @@ void main() {
     // and worse, it can be a sentence that was never actually said.
     final note = renderTranslationNote(
       turns: [
-        _turn('Bonjour.', lang: 'fr', translated: 'नमस्ते।'),
-        _turn('la réu', lang: 'fr', finalised: false),
+        turn('Bonjour.', lang: 'fr', translated: 'नमस्ते।'),
+        turn('la réu', lang: 'fr', finalised: false),
       ],
       targetLanguage: 'hi',
       at: at,
@@ -59,7 +59,7 @@ void main() {
 
   test('a deliberate silence says so, rather than looking like a failure', () {
     final note = renderTranslationNote(
-      turns: [_turn('बैठक 4:30 बजे शुरू होगी।', lang: 'hi', same: true)],
+      turns: [turn('बैठक 4:30 बजे शुरू होगी।', lang: 'hi', same: true)],
       targetLanguage: 'hi',
       at: at,
     );
@@ -71,7 +71,7 @@ void main() {
     // Detection answers with a bare `zh`; the target list carries zh-Hans and
     // zh-Hant. This rendered as the literal string "zh" on screen once.
     final note = renderTranslationNote(
-      turns: [_turn('会议将于下午4点半开始', lang: 'zh', translated: 'बैठक…')],
+      turns: [turn('会议将于下午4点半开始', lang: 'zh', translated: 'बैठक…')],
       targetLanguage: 'hi',
       at: at,
     );
@@ -83,15 +83,15 @@ void main() {
     test('no, while nothing has settled', () {
       expect(hasSomethingToSave(const []), isFalse);
       expect(
-        hasSomethingToSave([_turn('la réu', finalised: false)]),
+        hasSomethingToSave([turn('la réu', finalised: false)]),
         isFalse,
         reason: 'the button must not offer to save a blank note',
       );
-      expect(hasSomethingToSave([_turn('   ')]), isFalse);
+      expect(hasSomethingToSave([turn('   ')]), isFalse);
     });
 
     test('yes, once one line has', () {
-      expect(hasSomethingToSave([_turn('Bonjour.', lang: 'fr')]), isTrue);
+      expect(hasSomethingToSave([turn('Bonjour.', lang: 'fr')]), isTrue);
     });
   });
 }
