@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -33,6 +34,15 @@ from app.observability import metrics
 from app.tools.base import ToolContext
 
 logger = get_logger(__name__)
+
+#: How recently a frame must have arrived to count as the answer to a capture
+#: request that is only now starting to wait for one.
+#:
+#: Covers the gap between a device acting on a tool call and the tool reaching
+#: its wait — measured at about half a second on a phone over Wi-Fi. Kept small
+#: on purpose: any longer and a picture taken before the question was asked
+#: starts being offered as the answer to it.
+RECENT_FRAME_SECONDS = 2.0
 
 #: Callback signature for surfacing tool lifecycle to the client UI.
 ClientNotify = Callable[[dict[str, Any]], Awaitable[None]]
@@ -208,6 +218,27 @@ class Orchestrator:
         """
         if timeout is None:
             timeout = self._frame_wait_seconds
+
+        # A frame that landed a moment ago IS the frame this tool wants.
+        #
+        # The waiter below only ever hears about the NEXT frame, so a capture
+        # that arrives while the tool call is still being routed is missed
+        # entirely and the tool sits out its whole timeout with the picture
+        # already in hand. Measured end to end on 2026-08-16: the phone
+        # captured at 12:53:10.698 and closed its camera at .161, the tool
+        # began waiting at .267, and answered blind 9.4 s later.
+        #
+        # The window is deliberately short. Long enough to cover the gap
+        # between a device acting on the tool call and the tool starting to
+        # wait; short enough that a frame from before the question was asked
+        # is not passed off as an answer to it.
+        if (
+            self.last_frame is not None
+            and self.last_frame_at is not None
+            and (time.monotonic() - self.last_frame_at) <= RECENT_FRAME_SECONDS
+        ):
+            return True
+
         loop = asyncio.get_running_loop()
         future: asyncio.Future[bool] = loop.create_future()
         self._frame_waiters.append(future)

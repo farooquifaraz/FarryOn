@@ -1979,18 +1979,25 @@ class LiveController {
       // Always keep the freshest frame for the scan button / identify_image,
       // even while the assistant is speaking.
       _lastFrame = jpeg;
-      // Glasses photos are one-shots: surface each captured frame as a chat
-      // preview so the user can see EXACTLY what was sent for recognition
-      // (confirms the photo matches where the glasses point — the diagnostic
-      // for "it described the wrong scene"). Phone frames stream ~1 fps, so we
-      // don't spam the preview with those.
-      if (oneShotCamera) {
+      // Every DELIBERATE capture is shown in the chat, so the user can see
+      // exactly what was sent for recognition. That was the diagnostic for
+      // "it described the wrong scene" on the glasses, and it is just as
+      // useful on the phone now that a question takes one picture: what the
+      // model was looking at stops being a guess.
+      //
+      // Only one-shots. A continuous stream is ~1 fps and would bury the
+      // conversation under a filmstrip.
+      if (oneShotCamera || _oneShotPending) {
         _emit(_state.copyWith(
           lastCapturedPhoto: jpeg,
           lastCapturedAt: DateTime.now(),
         ));
-        // A glasses still is a deliberate capture — save it to the gallery so
-        // it isn't lost when the glasses' own storage is later cleared.
+      }
+      if (oneShotCamera) {
+        // Glasses only. A glasses still is the sole copy once the glasses'
+        // own storage is cleared; a phone capture is a passing look at
+        // something the user is holding, and filling their gallery with those
+        // would be a surprise nobody asked for.
         _saveCaptureToGallery(jpeg);
       }
       // Don't feed CONTINUOUS frames while the assistant is speaking: they
