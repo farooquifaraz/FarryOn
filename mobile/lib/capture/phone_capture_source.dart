@@ -142,8 +142,20 @@ class PhoneCaptureSource implements CaptureSource {
 
   @override
   Future<void> initialize() async {
+    // The microphone only. The camera device is NOT opened here.
+    //
+    // Turning the camera off by default stopped the frames but not this: the
+    // hardware was still claimed the moment a session started, for a feature
+    // that was switched off. It shows on screen as "Camera off" while the
+    // camera light is on, it costs battery, it blocks other apps, and it is
+    // the path the app was on when the surface went black on both an S23 and
+    // a vivo (2026-08-16 — `Camera: open | onDisconnected` and a dead-thread
+    // handler, zero frames ever captured).
+    //
+    // [startVideo] opens it, and that is reached from [grabFrame] when the
+    // scan button or `identify_image` actually needs a picture. Nothing that
+    // wants the camera goes without it; nothing that doesn't want it pays.
     await _openRecorder();
-    await _openCamera();
   }
 
   // ---- Audio -------------------------------------------------------------
