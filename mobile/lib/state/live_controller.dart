@@ -184,6 +184,14 @@ class LiveController {
   // server-side frame) the identify_image tool can inspect the current view.
   Uint8List? _lastFrame;
 
+  /// Set while a deliberately-requested single frame is in flight.
+  ///
+  /// The frame listener drops frames while the assistant is speaking, which is
+  /// right for a continuous stream and wrong for a picture something is
+  /// waiting on. This marks the difference for the phone; the glasses are
+  /// one-shot by nature and never needed it.
+  bool _oneShotPending = false;
+
   /// The most recent camera frame (raw JPEG), or null if the camera is off.
   Uint8List? get lastFrame => _lastFrame;
 
@@ -216,7 +224,15 @@ class LiveController {
       // The listener has to exist BEFORE the shutter, or the frame is emitted
       // into a stream nobody is reading and the answer comes back blind.
       await _attachFrameListener();
-      await _videoSource.captureOnce();
+      // Mark it as asked-for, so the "drop frames while speaking" rule lets it
+      // through — the model is usually talking at exactly this moment.
+      _oneShotPending = true;
+      try {
+        await _videoSource.captureOnce();
+      } catch (_) {
+        _oneShotPending = false;
+        rethrow;
+      }
     }
     for (var i = 0; i < 8 && _lastFrame == null; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -1979,11 +1995,20 @@ class LiveController {
       }
       // Don't feed CONTINUOUS frames while the assistant is speaking: they
       // can't influence the in-flight reply and would only pile up in the
-      // realtime model's context. But a glasses photo is a one-shot the model
-      // explicitly requested — it MUST reach the model even mid-speech, else a
-      // "take a photo and tell me about it" (model narrates → TTS active) drops
-      // the frame and comes back with no information.
-      if (_ttsActive && !oneShotCamera) return;
+      // realtime model's context. A one-shot is the opposite — somebody asked
+      // for that exact picture and something is waiting on it, so it MUST get
+      // through even mid-speech. Otherwise "what am I looking at?" makes the
+      // model start talking, the talking drops the frame, and it answers blind.
+      //
+      // "One-shot" used to mean only the glasses. The phone takes single
+      // frames now too (see [grabFrame]), and they arrive at the worst
+      // possible moment: the model calls identify_image, starts narrating, and
+      // the narration was throwing away the picture it had just asked for.
+      // Measured on an S23, 2026-08-16: the tool waited its full 8 s and timed
+      // out with a camera that had captured perfectly.
+      final oneShot = oneShotCamera || _oneShotPending;
+      if (_oneShotPending) _oneShotPending = false;
+      if (_ttsActive && !oneShot) return;
       _client.sendVideo(jpeg);
     });
   }

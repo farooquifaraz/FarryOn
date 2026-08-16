@@ -138,4 +138,47 @@ void main() {
     expect(framesSent(), sentWhileOn,
         reason: 'the camera is off — nothing else may go out');
   });
+
+  test('a frame that was asked for gets through while Farry is talking',
+      () async {
+    // The trap this fell into. Continuous frames are dropped while the
+    // assistant speaks — right, because they cannot affect the reply already
+    // in flight. But asking "what am I looking at?" makes the model start
+    // talking AND ask for a picture, so the rule was throwing away the very
+    // frame the tool was blocked on. Measured on an S23 (2026-08-16): the
+    // backend waited its full 8 s and timed out while the camera had captured
+    // perfectly.
+    await controller.connect();
+    await tick();
+
+    // The assistant starts speaking, exactly as it does when answering.
+    fake.pushJson({'type': 'audio_start'});
+    await tick();
+
+    final before = framesSent();
+    await controller.grabFrame();
+    await tick();
+
+    expect(framesSent(), before + 1,
+        reason: 'the picture it asked for must reach the model mid-sentence');
+  });
+
+  test('continuous frames are still dropped while Farry is talking', () async {
+    // The other half — the rule this must not undo.
+    await controller.connect();
+    await tick();
+    await controller.setCameraEnabled(true);
+    await tick();
+
+    fake.pushJson({'type': 'audio_start'});
+    await tick();
+    final before = framesSent();
+
+    source.videoCtl.add(Uint8List.fromList([1, 2, 3]));
+    source.videoCtl.add(Uint8List.fromList([4, 5, 6]));
+    await tick();
+
+    expect(framesSent(), before,
+        reason: 'a stream nobody is waiting on still waits its turn');
+  });
 }
