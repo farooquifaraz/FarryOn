@@ -209,7 +209,18 @@ class LiveController {
   /// is usually about to ask again, and the toggle is right there when they
   /// are done.
   Future<Uint8List?> grabFrame() async {
-    if (_lastFrame != null) return _lastFrame;
+    // A cached frame counts ONLY while the camera is streaming, where it is at
+    // most a second old and is genuinely what the camera sees.
+    //
+    // With the camera off it is stale by definition — the camera was closed
+    // after it was taken — and returning it was quietly ruining every question
+    // after the first. `grabFrame` handed back the old bytes, took no new
+    // picture and sent nothing, so the tool waiting at the other end sat out
+    // its full eight seconds and the model answered blind. On the phone this
+    // read as "it captured, and the answer was wrong": the first question
+    // worked, every one after it was guesswork (device-seen 2026-08-16 —
+    // tool.ok at 8002, 8003, 8004 ms, one lone frame_forwarded between them).
+    if (_state.cameraOn && _lastFrame != null) return _lastFrame;
     if (!_state.cameraOn) {
       // ONE frame, then the camera closes again. It used to switch the camera
       // on and leave it on, so a single tap on Scan bought a frame a second
@@ -227,6 +238,9 @@ class LiveController {
       // Mark it as asked-for, so the "drop frames while speaking" rule lets it
       // through — the model is usually talking at exactly this moment.
       _oneShotPending = true;
+      // Drop the old one first, so the wait below is watching for THIS
+      // picture and cannot be satisfied by the last one.
+      _lastFrame = null;
       try {
         await _videoSource.captureOnce();
       } catch (_) {

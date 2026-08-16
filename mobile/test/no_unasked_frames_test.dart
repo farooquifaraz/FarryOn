@@ -89,17 +89,45 @@ void main() {
     expect(framesSent(), 1, reason: 'one picture asked for, one picture sent');
   });
 
-  test('a second question takes another single frame', () async {
+  test('a second question takes a NEW picture, not the last one', () async {
+    // The one that shipped broken. `grabFrame` returned the cached frame
+    // whenever it had one, so after the first question it took no picture and
+    // sent nothing — the tool at the other end waited its full eight seconds
+    // and the model answered blind. It looked like "the camera worked and the
+    // answer was wrong", which is the hardest kind of wrong to trace.
+    //
+    // With the camera off, a cached frame is stale by definition: the camera
+    // was closed after it was taken.
     await controller.connect();
     await tick();
 
     await controller.grabFrame();
     await tick();
-    // The cached frame is deliberately reused while it is the freshest thing
-    // there is; clearing it is what a real new question does after the camera
-    // has been off. Assert the shape that matters: still not streaming.
-    expect(source.videoStarted, isFalse);
     expect(source.captureOnceCalls, 1);
+    final afterFirst = framesSent();
+
+    await controller.grabFrame();
+    await tick();
+
+    expect(source.captureOnceCalls, 2, reason: 'every question looks again');
+    expect(framesSent(), afterFirst + 1,
+        reason: 'and the new picture reaches the model');
+    expect(source.videoStarted, isFalse, reason: 'still not streaming');
+  });
+
+  test('while streaming, a question reuses the live frame', () async {
+    // The other side of the same rule. With the camera on, the cached frame is
+    // at most a second old and IS what the camera sees — waking the shutter
+    // again would be waste, and the stream is already sending frames.
+    await controller.connect();
+    await tick();
+    await controller.setCameraEnabled(true);
+    await tick();
+    source.videoCtl.add(Uint8List.fromList([9, 9, 9]));
+    await tick();
+
+    expect(await controller.grabFrame(), isNotNull);
+    expect(source.captureOnceCalls, 0, reason: 'no extra shutter while live');
   });
 
   test('turning the camera on by hand DOES stream — that is the one way in',
