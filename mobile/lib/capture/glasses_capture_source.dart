@@ -390,6 +390,15 @@ class GlassesCaptureSource implements CaptureSource {
   Future<void> stopVideo() async {}
 
   @override
+  Future<void> captureOnce() async {
+    // The glasses were always one-shot — [capturePhoto] is the only thing that
+    // ever puts a frame on [jpegFrames], and it emits exactly one. So this is
+    // the same promise the phone now makes, and there is nothing to close
+    // afterwards: nothing was left open.
+    await capturePhoto();
+  }
+
+  @override
   Future<void> releaseCamera() async {}
 
   @override

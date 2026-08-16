@@ -203,8 +203,20 @@ class LiveController {
   Future<Uint8List?> grabFrame() async {
     if (_lastFrame != null) return _lastFrame;
     if (!_state.cameraOn) {
-      await setCameraEnabled(true);
-      if (!_state.cameraOn) return null; // it refused — no camera, or denied
+      // ONE frame, then the camera closes again. It used to switch the camera
+      // on and leave it on, so a single tap on Scan bought a frame a second
+      // for the rest of the conversation — thousands of pictures of whatever
+      // the phone was pointing at, none of them asked for.
+      //
+      // The camera button is the other way in and still streams: someone who
+      // turns it on has asked to be watched, and can see the preview and turn
+      // it off. What must never happen is frames going out because something
+      // else needed one picture.
+      //
+      // The listener has to exist BEFORE the shutter, or the frame is emitted
+      // into a stream nobody is reading and the answer comes back blind.
+      await _attachFrameListener();
+      await _videoSource.captureOnce();
     }
     for (var i = 0; i < 8 && _lastFrame == null; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -1927,7 +1939,21 @@ class LiveController {
   }
 
   Future<void> _startVideo() async {
+    await _attachFrameListener();
     await _videoSource.startVideo();
+    // Only here, not in [_attachFrameListener]: listening for frames is not
+    // the same as the camera being on, and a one-shot must not light this up.
+    _emit(_state.copyWith(cameraOn: true));
+  }
+
+  /// Subscribe to the source's frames WITHOUT starting a stream.
+  ///
+  /// Split out because a one-shot capture needs somewhere for its frame to
+  /// land. The listener used to be attached only by [_startVideo], so once the
+  /// camera stopped opening with the session, a `captureOnce()` frame was
+  /// emitted into a stream nobody was listening to and the scan button got
+  /// nothing back — caught by the test, not by a device.
+  Future<void> _attachFrameListener() async {
     await _videoSub?.cancel();
     // A glasses source only emits on an explicit capture (photo-trigger), so
     // its frames are one-shot and must always be sent. A phone camera streams
@@ -1960,7 +1986,6 @@ class LiveController {
       if (_ttsActive && !oneShotCamera) return;
       _client.sendVideo(jpeg);
     });
-    _emit(_state.copyWith(cameraOn: true));
   }
 
   Future<void> _stopVideo() async {

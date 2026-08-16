@@ -51,6 +51,21 @@ abstract class CaptureSource {
   /// Stop streaming camera frames.
   Future<void> stopVideo();
 
+  /// Take exactly ONE frame, put it on [jpegFrames], and leave the camera the
+  /// way it was found.
+  ///
+  /// This is what the scan button and the `identify_image` tool use. They want
+  /// a picture of this moment, not a subscription: before this existed they
+  /// switched the camera on and left it running, so one tap on Scan meant a
+  /// frame a second going to the model for the rest of the conversation —
+  /// thousands of pictures nobody asked for, of whatever the phone happened to
+  /// be facing.
+  ///
+  /// If the camera was already streaming (the user turned it on deliberately),
+  /// this takes a frame and leaves it streaming. If it was off, it opens the
+  /// camera, takes the one frame, and closes it again.
+  Future<void> captureOnce();
+
   /// Fully release the camera device (dispose the controller) so a fresh one is
   /// created on the next [startVideo] — used to recover the camera after the OS
   /// invalidates it when the app is backgrounded. Default: no-op.

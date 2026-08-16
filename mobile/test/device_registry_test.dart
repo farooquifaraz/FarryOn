@@ -29,6 +29,8 @@ class _FakeSource implements CaptureSource {
   @override
   Future<void> stopVideo() async {}
   @override
+  Future<void> captureOnce() async {}
+  @override
   Future<void> releaseCamera() async {}
 
   @override

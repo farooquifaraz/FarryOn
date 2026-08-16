@@ -51,6 +51,14 @@ class FakeCaptureSource implements CaptureSource {
   @override
   Future<void> stopVideo() async => videoStarted = false;
   @override
+  Future<void> captureOnce() async {
+    // One frame, and the camera is NOT left streaming — the whole point.
+    captureOnceCalls++;
+    videoCtl.add(Uint8List.fromList([42]));
+  }
+
+  int captureOnceCalls = 0;
+  @override
   Future<void> releaseCamera() async {}
 
   @override
@@ -235,22 +243,21 @@ void main() {
     expect(controller.state.cameraOn, isFalse);
   });
 
-  test('asking for a frame turns the camera on and waits for one', () async {
+  test('asking for a frame takes ONE and leaves the camera off', () async {
     // What keeps the scan button and `identify_image` working with the camera
-    // off. "Off" is now the resting state rather than something the user did,
-    // so answering "no camera frame" would be wrong on a phone whose camera
-    // is fine.
+    // off. "Off" is the resting state, so answering "no camera frame" would be
+    // wrong on a phone whose camera is fine — but neither may it answer by
+    // switching the camera on and leaving it running, which is what it used to
+    // do: one tap on Scan then sent a frame a second for the whole
+    // conversation.
     await controller.connect();
     await tick();
     expect(controller.state.cameraOn, isFalse);
 
-    final pending = controller.grabFrame();
-    await tick();
-    expect(source.videoStarted, isTrue, reason: 'it should have started it');
-
-    source.videoCtl.add(Uint8List.fromList([1, 2, 3]));
-    expect(await pending, isNotNull, reason: 'the frame it waited for');
-    expect(controller.state.cameraOn, isTrue);
+    expect(await controller.grabFrame(), isNotNull, reason: 'it still answers');
+    expect(source.captureOnceCalls, 1, reason: 'exactly one picture');
+    expect(source.videoStarted, isFalse, reason: 'and the camera is closed');
+    expect(controller.state.cameraOn, isFalse);
   });
 
   test('turning the camera off throws its last frame away', () async {
@@ -268,11 +275,10 @@ void main() {
     await controller.setCameraEnabled(false);
     expect(controller.lastFrame, isNull, reason: 'a stale view must not linger');
 
-    final pending = controller.grabFrame();
-    await tick();
-    expect(source.videoStarted, isTrue, reason: 'it looks again instead');
-    source.videoCtl.add(Uint8List.fromList([7, 7, 7]));
-    expect(await pending, equals(Uint8List.fromList([7, 7, 7])));
+    // It looks again — with one shot, not by starting the camera up.
+    expect(await controller.grabFrame(), isNotNull);
+    expect(source.captureOnceCalls, 1);
+    expect(source.videoStarted, isFalse);
   });
 
   test('captured JPEG frames become 0x02 frames on the wire', () async {

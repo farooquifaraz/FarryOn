@@ -273,6 +273,27 @@ class PhoneCaptureSource implements CaptureSource {
   }
 
   @override
+  Future<void> captureOnce() async {
+    // Already streaming means the user asked for a live view — take the frame
+    // and leave their camera alone.
+    final wasStreaming = _frameTimer != null;
+    await _openCamera();
+    if (_camera == null) {
+      _log.warn('captureOnce: no camera');
+      return;
+    }
+    try {
+      await _captureFrame();
+    } finally {
+      // Closed again, not just paused. The camera light going out is the
+      // user-visible promise that nothing more is being taken, and holding the
+      // device open would keep it from other apps for no reason.
+      if (!wasStreaming) await releaseCamera();
+    }
+    _log.info('captureOnce: one frame${wasStreaming ? '' : ', camera closed'}');
+  }
+
+  @override
   Future<void> releaseCamera() async {
     _frameTimer?.cancel();
     _frameTimer = null;
