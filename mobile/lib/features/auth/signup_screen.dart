@@ -83,7 +83,19 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
         );
     if (!mounted) return;
     if (result.tokens != null) {
-      Navigator.of(context).pop();
+      // Deliberately does NOT pop. `FarryApp` watches for signedIn and runs
+      // `popUntil(isFirst)` the moment the tokens land — which happens while
+      // the await above is still running, so by the time we get here the
+      // stack is already back to its first route. Popping again pops THAT,
+      // leaving an empty Navigator: a black screen with the system bars
+      // dimmed, over an app that is otherwise signed in, connected and fine.
+      //
+      // That is exactly what shipped. Sign-IN never showed it because the
+      // login screen already leaves the popping to the listener; sign-UP
+      // kept a pop from before the listener existed. The comment on that
+      // listener warns that a per-screen pop "is a thing you can forget on
+      // the sixth" — it was the reverse: the central one was added and this
+      // one was left behind (S23 and vivo, 2026-08-15/16).
       return;
     }
     if (result.accountCreated) {
@@ -113,7 +125,9 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
     final result = await ref.read(authProvider.notifier).signInWithGoogle();
     if (!mounted) return;
     if (result.tokens != null) {
-      Navigator.of(context).pop();
+      // Same as the password path above: the listener in `FarryApp` has
+      // already unwound the stack. Popping here would take the app's own
+      // screen with it.
       return;
     }
     setState(() {
