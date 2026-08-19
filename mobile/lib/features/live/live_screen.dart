@@ -1380,6 +1380,19 @@ class _CapturedPhotoPreview extends StatelessWidget {
                     photo,
                     width: 88,
                     height: 66,
+                    // Decode at thumbnail size, not camera size. `width` and
+                    // `height` above only lay the picture out — without these
+                    // the full frame is decoded first and then shrunk, so an
+                    // 88x66 preview cost a 1280x720 bitmap, several megabytes,
+                    // rebuilt every time the chat scrolled past it. On a vivo
+                    // V2246 that showed up as the app freezing on every fling:
+                    // fifteen stalls in three minutes, the worst 1042 frames
+                    // (~17 s), with the audio underrunning through all of it
+                    // and the microphone restarting nine times (2026-08-19).
+                    cacheWidth:
+                        (88 * MediaQuery.devicePixelRatioOf(context)).round(),
+                    cacheHeight:
+                        (66 * MediaQuery.devicePixelRatioOf(context)).round(),
                     fit: BoxFit.cover,
                     gaplessPlayback: true, // don't flash between captures
                   ),
