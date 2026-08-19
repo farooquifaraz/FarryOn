@@ -50,6 +50,24 @@ void main() {
       expect(jpegFitsWithin(_jpeg(720, 2400), VideoFormat.maxWidth), isFalse);
     });
 
+    test('a truncated JPEG is refused, header or no header', () {
+      // The one that got through. A file read while it was still being written
+      // has a perfectly good header — dimensions and all — and no ending. The
+      // header is all this check reads, so it waved the frame past, and a
+      // half-written picture went to the model and to the chat preview, where
+      // Android's decoder answered "Input contained an error" (vivo V2246,
+      // 2026-08-19).
+      //
+      // The full decode used to catch this by accident, by failing. Skipping
+      // the decode to save the work lost the accident with it.
+      final whole = _jpeg(640, 480);
+      expect(jpegFitsWithin(whole, VideoFormat.maxWidth), isTrue);
+
+      final cut = Uint8List.sublistView(whole, 0, whole.length - 64);
+      expect(jpegFitsWithin(cut, VideoFormat.maxWidth), isFalse,
+          reason: 'no end-of-image marker — the file is not finished');
+    });
+
     test('bytes that are not a readable JPEG take the old path', () {
       // Deliberately false rather than true: a frame we could not measure is
       // sent to the decoder, which either handles it or reports failure. The

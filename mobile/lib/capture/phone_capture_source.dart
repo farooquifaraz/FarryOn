@@ -40,6 +40,7 @@ class _JpegJob {
 @visibleForTesting
 bool jpegFitsWithin(Uint8List jpeg, int maxDim) {
   try {
+    if (!_looksComplete(jpeg)) return false;
     final info = img.JpegDecoder().startDecode(jpeg);
     if (info == null || info.width == 0 || info.height == 0) return false;
     final longEdge = info.width > info.height ? info.width : info.height;
@@ -47,6 +48,29 @@ bool jpegFitsWithin(Uint8List jpeg, int maxDim) {
   } catch (_) {
     return false;
   }
+}
+
+/// Whether these bytes are a whole JPEG, not the start of one.
+///
+/// Start-of-image at the front, end-of-image at the back. A file that was read
+/// while it was still being written has a perfectly good header and no ending,
+/// which is precisely the case that has to be caught here: the header is all
+/// [jpegFitsWithin] reads.
+///
+/// The full decode used to do this by accident — a truncated frame decoded to
+/// null and was dropped. Passing the camera's own bytes through to skip that
+/// decode lost the accident with it, and a half-written frame went to the model
+/// AND to the chat preview, where Android's decoder gave up with
+/// "Input contained an error" (vivo V2246, 2026-08-19).
+///
+/// Cheap on purpose: two bytes at each end, no scan. Anything that fails goes
+/// down the decode path, which either repairs it or drops it — the same
+/// treatment it had before.
+bool _looksComplete(Uint8List jpeg) {
+  if (jpeg.length < 4) return false;
+  final soi = jpeg[0] == 0xFF && jpeg[1] == 0xD8;
+  final eoi = jpeg[jpeg.length - 2] == 0xFF && jpeg[jpeg.length - 1] == 0xD9;
+  return soi && eoi;
 }
 
 /// Top-level (isolate-safe) JPEG decode + downscale + re-encode.
