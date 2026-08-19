@@ -73,17 +73,24 @@ async def _await_parked_waiter(orch: Orchestrator) -> None:
 
 
 async def test_slow_glasses_photo_is_accepted_by_identify(monkeypatch) -> None:
-    """identify_image waits for a late glasses still and detects on it."""
-    seen: dict[str, object] = {}
+    """identify_image waits for a late glasses still and answers on it.
 
-    async def fake_run(mode, *, settings, image_data=None, image_url=None, question=None):
-        seen["mode"] = mode
-        seen["image_data"] = image_data
-        return {
-            "ok": True,
-            "mode": "product",
-            "result": {"product_name": "Sony WH-1000XM5"},
-        }
+    The point of this test is the WAIT: the shutter plus the BLE transfer take
+    seconds, and the tool must still be there when the photo lands instead of
+    having given up. That is unchanged.
+
+    What changed is what happens next. `auto` used to be handed to the
+    detector; it is now answered by the live model, which already has the
+    photo — the same frame delivery that wakes this wait is what puts it in
+    the model's context. So the detector must NOT be called, and the proof the
+    wait worked is that the tool returns ok rather than a capture failure.
+    """
+    called = False
+
+    async def fake_run(*args, **kwargs):  # pragma: no cover - must not run
+        nonlocal called
+        called = True
+        return {"ok": True, "mode": "product"}
 
     monkeypatch.setattr(identify_mod, "run_detection", fake_run)
 
@@ -99,9 +106,8 @@ async def test_slow_glasses_photo_is_accepted_by_identify(monkeypatch) -> None:
     orch.notify_new_frame()
 
     result = await task
-    assert result.ok is True
-    assert seen["mode"] == "auto"
-    assert seen["image_data"] == base64.b64encode(b"\xff\xd8glasses-photo").decode()
+    assert result.ok is True, "the late photo was accepted, not timed out"
+    assert called is False, "auto is answered by the model that can see it"
 
 
 async def test_capture_failure_reason_is_surfaced(monkeypatch) -> None:
