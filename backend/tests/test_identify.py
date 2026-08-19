@@ -136,21 +136,32 @@ async def test_product_has_no_send_location_instruction(db_session, monkeypatch)
 
     monkeypatch.setattr(identify_mod, "run_detection", fake_run)
     ctx = _fresh_frame_ctx(db_session, b"x")
-    res = await IdentifyImageTool().run(ctx, kind="auto")
+    # Explicit `product` — that is what still reaches the detector now that
+    # `auto` is answered by the live model.
+    res = await IdentifyImageTool().run(ctx, kind="product")
     assert "_instruction" not in res
 
 
 async def test_invalid_kind_coerces_to_auto(db_session, monkeypatch) -> None:
-    seen: dict[str, object] = {}
+    """A nonsense kind is still treated as auto — which is now the fast path.
 
-    async def fake_run(mode, *, settings, image_data=None, image_url=None, question=None):
-        seen["mode"] = mode
-        return {"ok": True, "mode": "landmark", "result": {"count": 0, "landmarks": []}}
+    The coercion has not changed; what auto MEANS has. It used to reach the
+    detector as mode="auto"; it is now answered by the model already looking
+    at the picture, so the proof of coercion is that the detector is not
+    called at all.
+    """
+    called = False
+
+    async def fake_run(*args, **kwargs):  # pragma: no cover - must not run
+        nonlocal called
+        called = True
+        return {"ok": True, "mode": "landmark"}
 
     monkeypatch.setattr(identify_mod, "run_detection", fake_run)
     ctx = _fresh_frame_ctx(db_session, b"x")
-    await IdentifyImageTool().run(ctx, kind="garbage")
-    assert seen["mode"] == "auto"
+    res = await IdentifyImageTool().run(ctx, kind="garbage")
+    assert called is False
+    assert "already in your context" in res["_instruction"]
 
 
 async def test_a_question_is_answered_by_the_model_that_already_sees_it(
@@ -174,7 +185,7 @@ async def test_a_question_is_answered_by_the_model_that_already_sees_it(
 
     monkeypatch.setattr(identify_mod, "run_detection", _must_not_run)
 
-    ctx = _fresh_frame_ctx(db_session, b"\xff\xd8jpeg\xff\xd9")
+    ctx = _fresh_frame_ctx(db_session, b"jpegbytes")
     result = await IdentifyImageTool().run(ctx, question="who is sitting here?")
 
     assert result["ok"] is True
@@ -196,8 +207,50 @@ async def test_identification_still_goes_the_long_way(db_session, monkeypatch) -
 
     monkeypatch.setattr(identify_mod, "run_detection", _detect)
 
-    ctx = _fresh_frame_ctx(db_session, b"\xff\xd8jpeg\xff\xd9")
+    ctx = _fresh_frame_ctx(db_session, b"jpegbytes")
     result = await IdentifyImageTool().run(ctx, kind="product")
 
     assert called is True, "identification still needs the detector"
     assert result["mode"] == "product"
+
+async def test_auto_is_answered_by_the_live_model_too(db_session, monkeypatch) -> None:
+    """"Who is this?" is the commonest thing anyone asks a camera, and it is
+    exactly what `auto` is worst at: it runs landmark detection, falls back to
+    product, finds nothing in either, and takes twelve seconds to do it. The
+    live model then answers from the picture it had all along.
+
+    Measured on a vivo V2246, 2026-08-19: frame in hand at 5.3 s, the tool
+    returning at 17.3 s, the first word spoken at 18.8 s.
+    """
+    called = False
+
+    async def _must_not_run(*args, **kwargs):  # pragma: no cover - the point
+        nonlocal called
+        called = True
+        return {"ok": True, "mode": "landmark"}
+
+    monkeypatch.setattr(identify_mod, "run_detection", _must_not_run)
+
+    ctx = _fresh_frame_ctx(db_session, b"jpegbytes")
+    result = await IdentifyImageTool().run(ctx, kind="auto")
+
+    assert result["ok"] is True
+    assert called is False, "auto has nothing the live model cannot do faster"
+
+
+async def test_no_kind_at_all_is_treated_as_auto(db_session, monkeypatch) -> None:
+    # The model often calls this with no arguments whatsoever.
+    called = False
+
+    async def _must_not_run(*args, **kwargs):  # pragma: no cover - the point
+        nonlocal called
+        called = True
+        return {"ok": True, "mode": "landmark"}
+
+    monkeypatch.setattr(identify_mod, "run_detection", _must_not_run)
+
+    ctx = _fresh_frame_ctx(db_session, b"jpegbytes")
+    result = await IdentifyImageTool().run(ctx)
+
+    assert result["ok"] is True
+    assert called is False

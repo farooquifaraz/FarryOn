@@ -129,7 +129,19 @@ class IdentifyImageTool(Tool):
         # Identification is different and still goes the long way: landmark
         # and product lookups are what produce the Maps and shopping links,
         # and those cannot come from the live model's own eyes.
-        if question:
+        # `auto` belongs here too, and that is where the time was going.
+        #
+        # Auto runs landmark detection and then falls back to product. Asked
+        # "who is this?" — the commonest thing anyone asks a camera — both
+        # find nothing, and they take twelve seconds to find it (measured
+        # 2026-08-19: frame in hand at 5.3 s, tool returning at 17.3 s, first
+        # word spoken at 18.8 s). The live model then answers from the picture
+        # it had all along.
+        #
+        # So the detector is now reserved for what only it can do: an explicit
+        # landmark or product lookup, which is where the Maps and shopping
+        # links come from.
+        if question or kind == "auto":
             return {
                 "ok": True,
                 "mode": "direct",
