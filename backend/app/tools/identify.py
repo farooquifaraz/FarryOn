@@ -115,6 +115,32 @@ class IdentifyImageTool(Tool):
 
         frame, _ = _current()
         assert frame is not None  # guaranteed by the _fresh() gate above
+
+        # A question about the view is answered by the model that is already
+        # looking at it.
+        #
+        # The frame reached the live model on its way here — that is what the
+        # wait above was for — so it has the picture in context. Sending it to
+        # a SECOND vision model and waiting for that answer added 4.4 seconds
+        # to every "what is this?" (measured 2026-08-19: frame in hand at
+        # 1.6 s, tool returning at 6.0 s). The user asks, and nothing happens
+        # for six seconds; long enough to assume the camera never fired.
+        #
+        # Identification is different and still goes the long way: landmark
+        # and product lookups are what produce the Maps and shopping links,
+        # and those cannot come from the live model's own eyes.
+        if question:
+            return {
+                "ok": True,
+                "mode": "direct",
+                "_instruction": (
+                    "The camera image is already in your context — the frame "
+                    "you asked for has just been delivered. Answer the user's "
+                    "question from it yourself, now, in one or two sentences. "
+                    "Do not call this tool again for the same question."
+                ),
+            }
+
         image_data = base64.b64encode(frame).decode("utf-8")
         # CHANGED (UX Spec §3.3): wrap the vision call so a Vision API outage,
         # bad credentials, or quota error becomes a friendly {ok:false,error}
