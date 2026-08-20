@@ -12,7 +12,7 @@ import json
 
 import websockets
 
-URI = "wss://farryon-backend.onrender.com/ws/live"
+URI = "wss://farryon.izylrn.com/ws/live"
 
 
 async def run() -> None:

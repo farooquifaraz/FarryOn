@@ -88,7 +88,7 @@ features = [
     ("Voice task management", "Both", "Complete / edit / delete tasks by voice", "Done · verified", ""),
     ("Reminders (local notifications)", "App", "Fire at exact time even asleep/locked", "Done · verified", "alarmClock mode"),
     ("Voice device-control", "Both", "Mute mic, camera on/off, rotate, end session", "Done · verified", ""),
-    ("Cloud deploy (Render)", "Infra", "Always-on backend at farryon-backend.onrender.com", "Done · live", "Blocks SMTP"),
+    ("Cloud deploy (Hostinger VPS)", "Infra", "Always-on backend at farryon.izylrn.com", "Done · live", "SMTP allowed"),
     ("Reconnect button", "App", "Restart a session after it ends/drops", "Done · verified", ""),
     ("Performance (long chats)", "App", "Transcript capped; video paused during TTS", "Done · verified", ""),
     ("Location (\"where am I\")", "Both", "GPS + reverse-geocoded address via get_location", "Done · not device-tested", "Needs GPS test"),

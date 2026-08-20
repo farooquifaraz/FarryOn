@@ -17,15 +17,20 @@ import '../debug/debug_logs_screen.dart';
 import '../glasses/glasses_connect_flow.dart';
 import 'subscription_screen.dart';
 
-/// The live, cloud-hosted FarryOn backend (Render). Mirrors the constants the
-/// old settings sheet used so the Cloud/Local presets behave identically.
-const String _kCloudHost = 'farryon-backend.onrender.com';
-const int _kCloudPort = 443;
+/// The live, cloud-hosted FarryOn backend. Mirrors the constants the old
+/// settings sheet used so the Cloud/Local presets behave identically.
+///
+/// This must stay the host the website hands out builds for. It used to name
+/// the old Render deployment, which is a *separate* server with a *separate*
+/// database — so tapping "Cloud" quietly moved you to a backend where your
+/// account did not exist, and the sign-in that had just worked stopped working.
+const String kCloudHost = 'farryon.izylrn.com';
+const int kCloudPort = 443;
 const String _kLocalHost = '192.168.1.107';
 const int _kLocalPort = 8000;
 
 bool _isCloud(AppConfig c) =>
-    c.host.trim() == _kCloudHost && c.secure && c.port == _kCloudPort;
+    c.host.trim() == kCloudHost && c.secure && c.port == kCloudPort;
 
 String _providerSubtitle(String p) => switch (p) {
       'openai' => 'OpenAI · premium',
@@ -77,7 +82,7 @@ class SettingsScreen extends ConsumerWidget {
             ? emailAccts.first.address
             : '${emailAccts.length} mailboxes';
     final serverSub =
-        _isCloud(cfg) ? 'Cloud · Render' : '${cfg.host}:${cfg.port}';
+        _isCloud(cfg) ? 'Cloud' : '${cfg.host}:${cfg.port}';
 
     return Scaffold(
       backgroundColor: Aurora.base,
@@ -1022,11 +1027,11 @@ class _ServerPageState extends ConsumerState<_ServerPage> {
   }
 
   bool get _cloud =>
-      _hostCtl.text.trim() == _kCloudHost && _secure && _portCtl.text == '443';
+      _hostCtl.text.trim() == kCloudHost && _secure && _portCtl.text == '443';
 
   void _useCloud() => setState(() {
-        _hostCtl.text = _kCloudHost;
-        _portCtl.text = '$_kCloudPort';
+        _hostCtl.text = kCloudHost;
+        _portCtl.text = '$kCloudPort';
         _secure = true;
       });
 
@@ -1085,7 +1090,7 @@ class _ServerPageState extends ConsumerState<_ServerPage> {
           onChanged: (_) => setState(() {}),
           decoration: const InputDecoration(
             labelText: 'Host',
-            hintText: 'farryon-backend.onrender.com',
+            hintText: 'farryon.izylrn.com',
             border: OutlineInputBorder(),
           ),
         ),

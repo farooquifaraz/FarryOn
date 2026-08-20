@@ -5,7 +5,7 @@ name: Build Android APK
 # automatically when anything under mobile/ changes on the dev branch.
 # Download the APK from the run's "Artifacts" section and sideload it on a phone
 # (enable "Install unknown apps"). Point it at your deployed backend in the app's
-# in-app settings sheet (⚙️): host = <name>.onrender.com, port = 443, secure = ON.
+# in-app settings sheet (⚙️): host = farryon.izylrn.com, port = 443, secure = ON.
 #
 # Note: mobile/android is committed and is what we build. It used to be
 # scaffolded here with `flutter create`, from a time when the repo did not

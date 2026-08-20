@@ -1,12 +1,12 @@
 # Testing FarryOn on a real phone (cloud build + deploy)
 
-This path needs **nothing installed on your machine** — the backend runs on
-Render, the Android APK is built by GitHub Actions, and you just install the APK
-and point it at the backend.
+This path needs **nothing installed on your machine** — the backend already runs
+at <https://farryon.izylrn.com>, the Android APK is built by GitHub Actions, and
+you just install the APK and point it at the backend.
 
 > ⚠️ **Before you start — rotate your API keys.** Any key pasted into a chat or
 > committed to git must be considered compromised. Create fresh keys and put
-> them only in Render's secret env vars (never in the repo).
+> them only in the server's secret env file (never in the repo).
 >
 > ⚠️ **Use realtime/live models.** FarryOn streams audio over the realtime APIs,
 > so you must use a realtime-capable model:
@@ -16,23 +16,23 @@ and point it at the backend.
 
 ---
 
-## Step 1 — Deploy the backend (Render)
+## Step 1 — Check the backend is up
 
-1. Go to <https://render.com> → **New → Blueprint**.
-2. Connect this GitHub repo and select the dev branch. Render reads
-   [`render.yaml`](../render.yaml) and creates the `farryon-backend` web service.
-3. Open the service → **Environment** and set the secret values:
-   - `OPENAI_API_KEY` = your rotated OpenAI key (if using `AI_PROVIDER=openai`), or
-   - `GEMINI_API_KEY` = your rotated Gemini key (set `AI_PROVIDER=gemini`).
-4. **Deploy**. When it's live you'll have a URL like
-   `https://farryon-backend-xxxx.onrender.com`.
-5. Sanity-check in a browser:
-   - `https://farryon-backend-xxxx.onrender.com/healthz` → `{"status":"ok",...}`
-   - `https://farryon-backend-xxxx.onrender.com/readyz` → `{"status":"ready",...}`
+The backend is deployed to the Hostinger VPS by the `deploy-hostinger` workflow,
+which runs on every push to `main`. There is nothing to set up per test — just
+confirm it is answering:
 
-The phone will connect to `wss://farryon-backend-xxxx.onrender.com:443/ws/live`.
+- <https://farryon.izylrn.com/healthz> → `{"status":"ok",...}`
+- <https://farryon.izylrn.com/readyz> → `{"status":"ready",...}`
 
-> Free instances sleep when idle; the first request cold-starts (~30–60s).
+The phone connects to `wss://farryon.izylrn.com:443/ws/live`.
+
+Secrets (`GEMINI_API_KEY`, `OPENAI_API_KEY`, …) live in the env file on the VPS,
+not in the repo. See [DEPLOYMENT.md](DEPLOYMENT.md) for the deploy itself.
+
+> Render is no longer used. It ran a **separate database**, so an account made
+> against the live backend does not exist there — pointing a phone at the old
+> `*.onrender.com` host looks like a broken login, not a wrong address.
 
 ---
 
@@ -54,7 +54,7 @@ The phone will connect to `wss://farryon-backend-xxxx.onrender.com:443/ws/live`.
 1. Copy the APK to your Android phone and install it (allow **Install unknown
    apps** for your file manager/browser).
 2. Open **FarryOn** → tap the **⚙️ settings** icon and enter:
-   - **Host:** `farryon-backend-xxxx.onrender.com`
+   - **Host:** `farryon.izylrn.com`
    - **Port:** `443`
    - **Secure (wss):** `ON`
 3. Grant **camera** and **microphone** permissions when prompted.
@@ -77,7 +77,7 @@ on a Mac and running on a device. (Android is the quickest way to test today.)
 | Symptom | Likely cause / fix |
 | --- | --- |
 | App stuck "connecting" | Backend asleep (wait for cold start) or wrong host/port. Verify `/healthz` in a browser. |
-| Connects then drops immediately | Realtime stream rejected — check the model is a **realtime/live** model and the key is valid (Render logs). |
-| No audio reply | Mic permission denied, or provider key/model wrong. Check Render logs for `gateway` errors. |
-| Tools never fire | Check Render logs; `web_search` falls back to mock unless `WEB_SEARCH_PROVIDER`/key are set. |
+| Connects then drops immediately | Realtime stream rejected — check the model is a **realtime/live** model and the key is valid (VPS logs). |
+| No audio reply | Mic permission denied, or provider key/model wrong. Check the VPS logs for `gateway` errors. |
+| Tools never fire | Check the VPS logs; `web_search` falls back to mock unless `WEB_SEARCH_PROVIDER`/key are set. |
 | `flutter build apk` fails in CI | First-compile dependency nudge — share the Actions log. |
