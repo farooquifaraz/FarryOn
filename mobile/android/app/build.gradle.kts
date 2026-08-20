@@ -32,6 +32,26 @@ android {
         versionName = flutter.versionName
     }
 
+    // The APK is downloaded from farryon.izylrn.com, not installed from the
+    // Play Store, so the size that matters is the one that crosses the wire.
+    //
+    // Flutter's default leaves every .so STORED, uncompressed: the loader can
+    // then map them straight out of the APK, which is the right trade when a
+    // store serves the download and the user only ever sees the install size.
+    // We are the store. Uncompressed, the native libraries alone were 19.5 MB
+    // of a 22.2 MB download — most of a phone-data download spent on entropy
+    // that zip would have removed for free.
+    //
+    // Compressing them costs disk on the device (the libraries are extracted at
+    // install time, so they exist twice) and a little first-launch time. That
+    // is the trade we want here, and it is only safe to make BECAUSE we do not
+    // ship to Play, which requires the uncompressed form.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.
