@@ -17,11 +17,14 @@ import '../protocol/protocol.dart';
 /// [flush] supports barge-in/interrupt: it drops any audio still queued so the
 /// assistant goes quiet immediately when the user starts talking.
 class PcmPlayer {
-  PcmPlayer();
+  /// [player] exists so a test can stand in for the platform engine and count
+  /// how many times a stream is opened. Production passes nothing.
+  PcmPlayer({FlutterSoundPlayer? player})
+      : _player = player ?? FlutterSoundPlayer();
 
   static final _log = Logger('PcmPlayer');
 
-  final FlutterSoundPlayer _player = FlutterSoundPlayer();
+  final FlutterSoundPlayer _player;
   bool _opened = false;
   bool _streaming = false;
 
@@ -48,12 +51,32 @@ class PcmPlayer {
     return DateTime.now().isBefore(until.add(tail));
   }
 
+  /// Set while [initialize] or [start] is in flight, so concurrent callers
+  /// join the attempt already running instead of launching another one.
+  ///
+  /// Both flags guard the same shape of bug: the `_opened` / `_streaming`
+  /// booleans are only true AFTER their await returns, so a second caller
+  /// arriving during that await sees "not started yet" and starts again.
+  /// Audio frames arrive off the socket every few tens of milliseconds and the
+  /// controller forwards them with `unawaited`, so "a second caller during the
+  /// await" is the normal case, not a rare one.
+  Future<void>? _opening;
+  Future<void>? _starting;
+
   /// Prepare the audio engine. Idempotent; call before [start].
-  Future<void> initialize() async {
-    if (_opened) return;
-    await _player.openPlayer();
-    _opened = true;
-    _log.debug('player opened');
+  Future<void> initialize() {
+    if (_opened) return Future<void>.value();
+    return _opening ??= _open();
+  }
+
+  Future<void> _open() async {
+    try {
+      await _player.openPlayer();
+      _opened = true;
+      _log.debug('player opened');
+    } finally {
+      _opening = null;
+    }
   }
 
   /// Begin a playback stream at [AudioFormat.ttsSampleRate] (24 kHz), mono.
@@ -64,6 +87,23 @@ class PcmPlayer {
   Future<void> start() async {
     await initialize();
     if (_streaming) return;
+    // Join an attempt already in flight rather than opening a second stream on
+    // the same player — see [_starting]. Eight of those in one second is what
+    // killed playback for the rest of the session (device log 2026-08-20).
+    return _starting ??= _start();
+  }
+
+  Future<void> _start() async {
+    try {
+      await _startStream();
+      _streaming = true;
+      _log.info('playback stream started @ ${AudioFormat.ttsSampleRate}Hz');
+    } finally {
+      _starting = null;
+    }
+  }
+
+  Future<void> _startStream() async {
     await _player.startPlayerFromStream(
       codec: Codec.pcm16,
       numChannels: AudioFormat.channels,
@@ -79,8 +119,6 @@ class PcmPlayer {
       bufferSize: 32768,
       interleaved: true,
     );
-    _streaming = true;
-    _log.info('playback stream started @ ${AudioFormat.ttsSampleRate}Hz');
   }
 
   /// Feed one chunk of PCM16 LE mono 24 kHz audio for playback.
