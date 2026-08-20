@@ -9,16 +9,25 @@
 ///
 ///   native capture watchdog (8 s, command to notify)
 ///   + rolling BLE transfer watchdog (3 s/chunk, stall detection)
-///     < backend `GLASSES_FRAME_WAIT_SECONDS` (18 s)
-///     < [captureTimeout] (Dart, 22 s)
+///     < backend `GLASSES_FRAME_WAIT_SECONDS` (32 s)
+///     < [captureTimeout] (Dart, 38 s)
 ///
 /// The Dart backstop sits ABOVE the backend budget on purpose: a slow but real
-/// transfer (10-12 s under A2DP radio contention, measured 2026-07-11) must
-/// resolve as a delivered photo, never be pre-empted by a Dart timeout firing
-/// a spurious captureFailed while the backend would still accept the frame.
+/// transfer must resolve as a delivered photo, never be pre-empted by a Dart
+/// timeout firing a spurious captureFailed while the backend would still
+/// accept the frame.
+///
+/// The numbers come from the hardware, and the hardware moved. They were set
+/// against 10-12 s (2026-07-11). Re-measured on an L802 mid-session
+/// (2026-08-21): the glasses take the picture in 2.4 s and then send the
+/// thumbnail over BLE in 19 chunks about 830 ms apart — 28 s in total. The old
+/// 22 s backstop fired six seconds early, so a photo that had genuinely been
+/// taken was reported as a failure, and the model told the wearer it could not
+/// see. Anything tuned here must be checked against a real transfer, not
+/// against how long a wait feels acceptable.
 class GlassesCaptureConfig {
   const GlassesCaptureConfig({
-    this.captureTimeout = const Duration(seconds: 22),
+    this.captureTimeout = const Duration(seconds: 38),
     this.connectWait = const Duration(seconds: 6),
     this.maxRetries = 1,
     this.retryDelay = const Duration(milliseconds: 800),

@@ -449,12 +449,26 @@ class Settings(BaseSettings):
     # plus the BLE thumbnail transfer. In the Glasses Lab (no other radio use)
     # that transfer is 3.1-4.6 s, but in a LIVE voice session the glasses' A2DP
     # audio link (TTS out) contends for the same 2.4 GHz radio and the transfer
-    # balloons to 10-12 s typical (measured 2026-07-11). The budget must outlast
-    # that so a genuine, if slow, photo is never cut off — the success path is
-    # event-driven (the frame wakes the wait early), so a longer budget only
-    # affects the failure backstop.
+    # balloons — 10-12 s typical when this was first measured (2026-07-11).
+    #
+    # Re-measured on an L802 in a live session (2026-08-21) and it is now far
+    # worse: the thumbnail comes over BLE in 19 chunks with a ~830 ms gap
+    # between them, for 28 s command-to-photo. An 18 s budget gave up ten
+    # seconds before the picture landed, so the model answered "I couldn't get
+    # a clear view" about a photo that arrived, went to the gallery, and was
+    # never shown to it. From the wearer's side the camera had plainly worked.
+    #
+    # The budget must outlast the transfer so a genuine, if slow, photo is never
+    # cut off. The success path is event-driven — the frame wakes the wait early
+    # — so a longer budget costs nothing when the glasses are quick, and only
+    # changes how long the failure backstop takes to admit defeat.
+    #
+    # This does NOT cover the worst case seen the same night: 141 s, command to
+    # photo. Nothing sensible waits that long with the model held mid-sentence.
+    # The fix for that one is to stop discarding a photo that arrives after its
+    # question — see docs/GLASSES_LATE_PHOTO.md.
     glasses_frame_wait_seconds: float = Field(
-        default=18.0,
+        default=32.0,
         description="Max seconds a vision tool waits for a fresh camera frame "
         "when the active camera is smart glasses (photo-trigger capture).",
     )
