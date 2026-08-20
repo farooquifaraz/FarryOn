@@ -29,6 +29,13 @@ class ConfigStore {
   static const String _authNameKey = 'auth.name';
   static const String _authUserIdKey = 'auth.userId';
 
+  /// Set once the first-run permission introduction has been shown.
+  ///
+  /// Shown, not granted — someone who declines everything must not be asked
+  /// again on every launch. Each feature still asks for what it needs when it
+  /// needs it, which is the path that has always existed.
+  static const String _permissionIntroKey = 'onboarding.permissionIntro';
+
   /// account id -> app password, hydrated from the keystore during [init] so
   /// the synchronous [load] can attach secrets without an await.
   static final Map<String, String> _pwCache = {};
@@ -146,6 +153,14 @@ class ConfigStore {
   /// Null for a missing OR blank string, so a blank falls back to the default.
   static String? _nonBlank(String? v) =>
       (v == null || v.trim().isEmpty) ? null : v;
+
+  /// Whether the first-run permission introduction has already been shown.
+  static bool permissionIntroSeen() =>
+      _prefs?.getBool(_permissionIntroKey) ?? false;
+
+  /// Remember that it has been shown, whatever the user chose.
+  static Future<void> markPermissionIntroSeen() async =>
+      _prefs?.setBool(_permissionIntroKey, true);
 
   static Future<void> save(AppConfig c) async {
     final p = _prefs;

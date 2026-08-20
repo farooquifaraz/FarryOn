@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/config_store.dart';
 import 'core/theme.dart';
 import 'features/auth/splash_screen.dart';
 import 'features/live/live_screen.dart';
+import 'features/onboarding/permission_intro_screen.dart';
 import 'state/auth.dart';
 
 /// Root widget: "Midnight Aurora" theming and the auth-gated home route.
@@ -55,14 +57,36 @@ class _FarryOnAppState extends ConsumerState<FarryOnApp> {
 /// (including the `?token=` for the handshake) is final — which
 /// [AuthNotifier] guarantees before it ever reports signedIn. The brief
 /// [_RestoreSplash] on cold start is what buys that guarantee.
-class AuthGate extends ConsumerWidget {
+class AuthGate extends ConsumerStatefulWidget {
   const AuthGate({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends ConsumerState<AuthGate> {
+  /// Whether the first-run permission introduction still has to be shown.
+  ///
+  /// Read once into state rather than watched: it is written from inside the
+  /// screen below, and a provider rebuilding the gate mid-flow would swap the
+  /// screen out from under the platform dialog it is waiting on.
+  late bool _introPending = !ConfigStore.permissionIntroSeen();
+
+  @override
+  Widget build(BuildContext context) {
     final auth = ref.watch(authProvider);
     if (auth.isRestoring) return const _RestoreSplash();
-    return auth.isSignedIn ? const LiveScreen() : const SplashScreen();
+    if (!auth.isSignedIn) return const SplashScreen();
+    // Sits between signing in and the live screen ON PURPOSE. LiveScreen
+    // connects and asks for the microphone the moment it mounts, so anything
+    // explaining the permissions has to come first or it explains a dialog
+    // the user has already answered.
+    if (_introPending) {
+      return PermissionIntroScreen(
+        onDone: () => setState(() => _introPending = false),
+      );
+    }
+    return const LiveScreen();
   }
 }
 
