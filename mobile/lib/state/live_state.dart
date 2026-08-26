@@ -87,6 +87,8 @@ class LiveSessionState {
     this.videoKind = 'phone',
     this.glassesConnected = false,
     this.glassesBattery,
+    this.glassesAudioReady,
+    this.glassesAudioPaired,
     this.glassesName,
     this.glassesTalking = false,
     this.glassesWorn = false,
@@ -144,6 +146,13 @@ class LiveSessionState {
   /// Glasses link status (only meaningful when audioKind == 'glasses').
   final bool glassesConnected;
   final int? glassesBattery;
+
+  /// Whether the glasses' AUDIO link is up, and whether they are paired at all.
+  /// [glassesConnected] is the BLE control link — battery, photos, mic — and it
+  /// can be perfectly healthy while the voice still comes out of the phone.
+  /// Null until the phone has answered.
+  final bool? glassesAudioReady;
+  final bool? glassesAudioPaired;
 
   /// Device name of the (last) connected glasses, e.g. "L802_2B1D" — shown on
   /// the dashboard card. Kept across a drop so the card can say WHICH pair.
@@ -208,6 +217,8 @@ class LiveSessionState {
     String? videoKind,
     bool? glassesConnected,
     int? glassesBattery,
+    bool? glassesAudioReady,
+    bool? glassesAudioPaired,
     String? glassesName,
     bool? glassesTalking,
     bool? glassesWorn,
@@ -238,6 +249,8 @@ class LiveSessionState {
         videoKind: videoKind ?? this.videoKind,
         glassesConnected: glassesConnected ?? this.glassesConnected,
         glassesBattery: glassesBattery ?? this.glassesBattery,
+        glassesAudioReady: glassesAudioReady ?? this.glassesAudioReady,
+        glassesAudioPaired: glassesAudioPaired ?? this.glassesAudioPaired,
         glassesName: glassesName ?? this.glassesName,
         glassesTalking: glassesTalking ?? this.glassesTalking,
         glassesWorn: glassesWorn ?? this.glassesWorn,

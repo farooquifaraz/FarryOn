@@ -188,9 +188,16 @@ class GlassesCaptureSource implements CaptureSource {
         final state = event.data['state'] as String?;
         _connectedMac =
             state == 'connected' ? event.data['mac'] as String? : null;
-        _pushStatus(_lastStatus.copyWith(
+        _pushStatus(GlassesStatus(
           connected: _connectedMac != null,
           battery: _connectedMac == null ? null : _lastStatus.battery,
+          talking: _lastStatus.talking,
+          // Deliberately NOT carried over: what we knew about the audio link
+          // belonged to the connection that just ended. copyWith cannot express
+          // "forget this", and a stale "audio is fine" is worse than not
+          // knowing — it is the exact claim that misled us.
+          audioReady: _connectedMac == null ? null : _lastStatus.audioReady,
+          audioPaired: _connectedMac == null ? null : _lastStatus.audioPaired,
         ));
         // A drop mid-capture means the thumbnail can never arrive — fail the
         // awaiting request now instead of running out its budget.
@@ -198,6 +205,11 @@ class GlassesCaptureSource implements CaptureSource {
           _completeCapture(const GlassesCaptureResult.failed(
               GlassesCaptureFailure.notConnected));
         }
+      case 'audioLink':
+        _pushStatus(_lastStatus.copyWith(
+          audioReady: event.data['connected'] as bool?,
+          audioPaired: event.data['bonded'] as bool?,
+        ));
       case 'battery':
         final pct = (event.data['pct'] as num?)?.toInt();
         if (pct != null) _pushStatus(_lastStatus.copyWith(battery: pct));
@@ -442,6 +454,8 @@ class GlassesStatus {
     this.connected = false,
     this.battery,
     this.talking = false,
+    this.audioReady,
+    this.audioPaired,
   });
 
   final bool connected;
@@ -450,10 +464,36 @@ class GlassesStatus {
   /// True while glasses-mic PCM is actively streaming (user is long-pressing).
   final bool talking;
 
-  GlassesStatus copyWith({bool? connected, int? battery, bool? talking}) =>
+  /// Whether the glasses' AUDIO link (classic Bluetooth A2DP) is up — null
+  /// until the phone has been asked and answered.
+  ///
+  /// [connected] only covers the BLE control link, which carries battery,
+  /// heartbeats, photos and the mic. The assistant's VOICE goes out over A2DP,
+  /// a separate connection that can be missing while everything else works. On
+  /// a phone the glasses were never paired with, it always is missing: the app
+  /// showed a healthy "L801 100%" and Farry spoke from the phone's own speaker,
+  /// with nothing to explain the difference (device-seen 2026-08-26).
+  final bool? audioReady;
+
+  /// Whether the glasses are paired in the phone's Bluetooth settings. When
+  /// this is false the audio link cannot come up at all, and no retry will fix
+  /// it — the wearer has to pair them (and disconnect them from whatever other
+  /// phone is holding them). This is the difference between "wait" and "do
+  /// something", so the UI needs it separately.
+  final bool? audioPaired;
+
+  GlassesStatus copyWith({
+    bool? connected,
+    int? battery,
+    bool? talking,
+    bool? audioReady,
+    bool? audioPaired,
+  }) =>
       GlassesStatus(
         connected: connected ?? this.connected,
         battery: battery ?? this.battery,
         talking: talking ?? this.talking,
+        audioReady: audioReady ?? this.audioReady,
+        audioPaired: audioPaired ?? this.audioPaired,
       );
 }

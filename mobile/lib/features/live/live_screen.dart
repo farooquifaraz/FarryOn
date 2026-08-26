@@ -606,8 +606,15 @@ class _GlassesPillState extends State<_GlassesPill> {
     final battery = widget.state.glassesBattery;
     final low = battery != null && battery <= 20;
     final connecting = !connected && _connecting;
+    // The control link being up does NOT mean the voice is going to the
+    // glasses: that rides a separate classic-Bluetooth (A2DP) link, and on a
+    // phone the glasses were never paired with it never comes up at all. The
+    // chip used to go green on the control link alone, so a wearer hearing the
+    // phone's own loudspeaker had nothing anywhere telling them why.
+    final noAudio = connected && widget.state.glassesAudioReady == false;
+    final unpaired = noAudio && widget.state.glassesAudioPaired == false;
     final color = connected
-        ? (low ? Aurora.danger : Aurora.teal)
+        ? (low || noAudio ? Aurora.danger : Aurora.teal)
         : connecting
             ? Aurora.amber
             : Aurora.textMuted;
@@ -625,7 +632,9 @@ class _GlassesPillState extends State<_GlassesPill> {
           children: [
             Icon(
               connected
-                  ? Icons.bluetooth_connected
+                  ? (noAudio
+                      ? Icons.volume_off_rounded
+                      : Icons.bluetooth_connected)
                   : connecting
                       ? Icons.bluetooth_searching
                       : Icons.bluetooth_disabled,
@@ -641,7 +650,14 @@ class _GlassesPillState extends State<_GlassesPill> {
                         fontSize: 12,
                         fontWeight: FontWeight.w600)),
               ],
-              if (battery != null) ...[
+              if (noAudio) ...[
+                const SizedBox(width: 6),
+                Text(unpaired ? 'pair for audio' : 'no audio',
+                    style: TextStyle(
+                        color: color,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700)),
+              ] else if (battery != null) ...[
                 const SizedBox(width: 6),
                 Icon(low ? Icons.battery_alert : Icons.battery_full,
                     size: 13, color: color),

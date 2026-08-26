@@ -1006,6 +1006,8 @@ class LiveController {
           glassesConnected: s.connected,
           glassesBattery: s.battery,
           glassesTalking: s.talking,
+          glassesAudioReady: s.audioReady,
+          glassesAudioPaired: s.audioPaired,
         ));
       });
     } else {

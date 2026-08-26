@@ -27,6 +27,15 @@ class GlassesChannels private constructor(
 
     companion object {
         /**
+         * How long to wait before re-reading the A2DP state after asking for a
+         * connection. Long enough for a classic-BT link to actually come up
+         * (measured 1.5-3 s on an L801/L802 that is already paired), short
+         * enough that a wearer hearing the phone instead of the glasses is told
+         * why while they are still wondering about it.
+         */
+        private const val AUDIO_LINK_CHECK_MS = 4500L
+
+        /**
          * [appContext] unlocks the real SDK (it needs an Application for BLE
          * setup); the old context-less call keeps compiling and yields the
          * stub, so nothing outside this folder is forced to change.
@@ -134,6 +143,76 @@ class GlassesChannels private constructor(
      * No public connect API exists, so we call the hidden
      * BluetoothA2dp.connect(device) via reflection (mirror of the disconnect).
      */
+    /**
+     * Tell Flutter whether the glasses' AUDIO link is really up.
+     *
+     * The BLE control link and the classic-BT audio link are separate, and only
+     * the first one is needed for battery, heartbeats, photos and the mic. So
+     * the app could show a healthy green "L801 100%" while the assistant's
+     * voice came out of the phone's own loudspeaker, and nothing anywhere said
+     * why — the glasses were, in every sense the app checked, connected.
+     *
+     * [bonded] is the actionable half: A2DP cannot connect to a device that was
+     * never paired in the phone's Bluetooth settings, and no amount of retrying
+     * from here will change that. The UI can then say the one useful thing
+     * instead of looking fine.
+     */
+    private fun emitAudioLink(connected: Boolean, bonded: Boolean) {
+        eventSink?.success(
+            mapOf(
+                "type" to "audioLink",
+                "data" to mapOf("connected" to connected, "bonded" to bonded),
+            ),
+        )
+    }
+
+    /** Re-read the A2DP state once the radio has had time to finish. */
+    private fun scheduleAudioLinkCheck(mac: String) {
+        val ctx = appContext ?: return
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
+                    ctx.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    return@postDelayed
+                }
+                val mgr = ctx.getSystemService(android.content.Context.BLUETOOTH_SERVICE)
+                    as? android.bluetooth.BluetoothManager ?: return@postDelayed
+                val adapter = mgr.adapter ?: return@postDelayed
+                val device = adapter.getRemoteDevice(mac) ?: return@postDelayed
+                adapter.getProfileProxy(
+                    ctx,
+                    object : android.bluetooth.BluetoothProfile.ServiceListener {
+                        override fun onServiceConnected(
+                            profile: Int,
+                            proxy: android.bluetooth.BluetoothProfile,
+                        ) {
+                            try {
+                                val up = proxy.getConnectionState(device) ==
+                                    android.bluetooth.BluetoothProfile.STATE_CONNECTED
+                                val bonded = device.bondState ==
+                                    android.bluetooth.BluetoothDevice.BOND_BONDED
+                                android.util.Log.i(
+                                    "GlassesLab",
+                                    "A2DP check → $mac connected=$up bonded=$bonded",
+                                )
+                                emitAudioLink(connected = up, bonded = bonded)
+                            } finally {
+                                adapter.closeProfileProxy(profile, proxy)
+                            }
+                        }
+
+                        override fun onServiceDisconnected(profile: Int) {}
+                    },
+                    android.bluetooth.BluetoothProfile.A2DP,
+                )
+            } catch (e: Exception) {
+                android.util.Log.i("GlassesLab", "A2DP check failed: $e")
+            }
+        }, AUDIO_LINK_CHECK_MS)
+    }
+
     private fun connectClassicAudio(mac: String) {
         val ctx = appContext ?: return
         if (mac.isBlank()) return
@@ -160,18 +239,33 @@ class GlassesChannels private constructor(
                         proxy: android.bluetooth.BluetoothProfile,
                     ) {
                         try {
+                            val bonded = device.bondState ==
+                                android.bluetooth.BluetoothDevice.BOND_BONDED
                             if (proxy.getConnectionState(device) ==
                                 android.bluetooth.BluetoothProfile.STATE_CONNECTED
                             ) {
                                 android.util.Log.i("GlassesLab", "A2DP already connected → $mac")
+                                emitAudioLink(connected = true, bonded = bonded)
                             } else {
                                 proxy.javaClass
                                     .getMethod("connect", android.bluetooth.BluetoothDevice::class.java)
                                     .invoke(proxy, device)
-                                android.util.Log.i("GlassesLab", "A2DP connect → $mac")
+                                android.util.Log.i(
+                                    "GlassesLab",
+                                    "A2DP connect → $mac (bonded=$bonded)",
+                                )
+                                // The reflective connect() returns before the
+                                // link exists — and returns false outright for a
+                                // device that was never paired in Bluetooth
+                                // settings, which is the common case on a phone
+                                // the glasses have not been used with. Look
+                                // again once the radio has had time, and report
+                                // what is actually true.
+                                scheduleAudioLinkCheck(mac)
                             }
                         } catch (e: Exception) {
                             android.util.Log.i("GlassesLab", "A2DP connect reflection failed: $e")
+                            emitAudioLink(connected = false, bonded = false)
                         } finally {
                             adapter.closeProfileProxy(profile, proxy)
                         }
