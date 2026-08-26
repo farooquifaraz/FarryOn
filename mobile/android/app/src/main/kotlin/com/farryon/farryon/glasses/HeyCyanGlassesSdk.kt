@@ -771,6 +771,15 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         main.postDelayed({ finish() }, timeoutMs)
     }
 
+    override val connectedMac: String?
+        get() = if (BleOperateManager.getInstance().isConnected &&
+            lastConnectionState == "connected"
+        ) {
+            pendingMac
+        } else {
+            null
+        }
+
     override fun connect(mac: String) {
         Log.i(TAG, "connect $mac")
         if (!bluetoothEnabled()) {

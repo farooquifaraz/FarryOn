@@ -415,6 +415,10 @@ class GlassesChannels private constructor(
                             "sdkVersion" to sdk.sdkVersion,
                             "lastMac" to prefs?.getString("last_mac", null),
                             "lastName" to prefs?.getString("last_name", null),
+                            // Live state, not history: lets the caller skip a
+                            // connect that would land on an already-open link
+                            // and be answered with a re-emitted state.
+                            "connectedMac" to sdk.connectedMac,
                         )
                     )
                 }

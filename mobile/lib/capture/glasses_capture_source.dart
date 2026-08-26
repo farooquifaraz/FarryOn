@@ -171,7 +171,17 @@ class GlassesCaptureSource implements CaptureSource {
     try {
       final infoMap = await _bridge.bridgeInfo();
       final lastMac = infoMap['lastMac'] as String?;
-      if (lastMac != null && lastMac.isNotEmpty) {
+      final liveMac = infoMap['connectedMac'] as String?;
+      if (liveMac != null && liveMac.isNotEmpty) {
+        // The native side auto-connects on boot, so by the time we get here the
+        // link is often already up. Asking for it again was answered with a
+        // re-emitted connected state, which re-ran the whole post-connect
+        // sequence — retention, video duration, A2DP bring-up — and left every
+        // glasses event arriving twice for the rest of the session.
+        _log.info('glasses: already connected to $liveMac — not reconnecting');
+        _connectedMac = liveMac;
+        _pushStatus(_lastStatus.copyWith(connected: true));
+      } else if (lastMac != null && lastMac.isNotEmpty) {
         _log.info('glasses: auto-connecting to saved $lastMac');
         await _bridge.connect(lastMac);
       } else {

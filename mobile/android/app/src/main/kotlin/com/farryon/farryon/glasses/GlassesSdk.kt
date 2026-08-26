@@ -42,6 +42,22 @@ interface GlassesSdk {
     val implementationName: String
     val sdkVersion: String
 
+    /**
+     * MAC of the device currently connected, or null.
+     *
+     * Exists so the Dart side can tell "nothing is connected, please connect"
+     * apart from "already connected, leave it alone". Without it, startup
+     * always asked for a connect: the native side auto-connects on boot, the
+     * request arrived on a live link, and the SDK answered by re-emitting the
+     * connected state — which ran the whole post-connect sequence a second
+     * time (retention, video duration, A2DP bring-up) and doubled every event
+     * the app saw from then on.
+     *
+     * Defaults to null so an implementation that cannot answer simply keeps
+     * the old behaviour rather than claiming a connection it does not have.
+     */
+    val connectedMac: String? get() = null
+
     /** All device data flows through this single listener as (type, data). */
     fun setListener(listener: GlassesSdkListener?)
 
