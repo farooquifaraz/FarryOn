@@ -103,6 +103,24 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
          *  glasses' WiFi-P2P never comes up (e.g. on the charger). */
         private const val WIFI_SYNC_STALL_TIMEOUT_MS = 60_000L
 
+        /** Hard ceiling on one whole sync run, regardless of how many signs of
+         *  life arrive.
+         *
+         *  The stall watchdog is pushed forward by every callback that looks
+         *  like progress, which is right until a callback repeats forever
+         *  WITHOUT progress — and `onGlassesControlSuccess` does exactly that.
+         *  A run then never times out: the banner sat on "WiFi sync started ·
+         *  0%" indefinitely, `syncActive` stayed true so nothing else could
+         *  start, and WiFi-P2P kept working the radio and the main thread.
+         *  Device-seen 2026-08-26: the UI froze in ~6 s blocks (1043 frames
+         *  skipped in one), the keyboard took seconds to appear, and typing
+         *  lagged behind the finger.
+         *
+         *  This deadline is armed once when a run starts and is cleared only by
+         *  a terminal outcome. Generous enough for a real multi-clip transfer
+         *  over the glasses' slow WiFi; short enough that a wedged one lets go. */
+        private const val WIFI_SYNC_TOTAL_BUDGET_MS = 240_000L
+
         /** How long to let both sides settle after a P2P reset before the one
          *  retry. The glasses' WiFi takes seconds to come down and back up;
          *  retrying immediately just re-wedges it. */
@@ -964,6 +982,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                                     fullCleanupActive = true
                                     syncActive = true
                                     syncRecoveryTried = false
+                                    armSyncDeadline()
                                     armSyncWatchdog()
                                     GlassesControl.getInstance(app)?.importAlbum()
                                 }
@@ -1074,12 +1093,20 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         // WiFi sync callbacks (Task 2.6a). Every sign of life pushes the
         // stall watchdog forward; terminal callbacks clear it.
         override fun onGlassesControlSuccess() {
-            armSyncWatchdog()
+            // Deliberately does NOT push the stall watchdog forward. This is
+            // the ack for a control command, not evidence that a file is
+            // moving, and the vendor SDK repeats it — so treating it as
+            // progress kept a wedged sync alive forever (see
+            // WIFI_SYNC_TOTAL_BUDGET_MS). The watchdog armed when the run
+            // started is the one that should decide.
+            if (syncStartAnnounced) return
+            syncStartAnnounced = true
             emit("syncProgress", mapOf("file" to "WiFi sync started", "pct" to 0))
         }
 
         override fun onGlassesFail(errorCode: Int) {
             cancelSyncWatchdog()
+            cancelSyncDeadline()
             syncActive = false
             syncRecoveryTried = false
             emit("deviceEvent", mapOf("hex" to "wifi glassesFail err=$errorCode"))
@@ -1148,6 +1175,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
         override fun fileDownloadComplete() {
             cancelSyncWatchdog()
+            cancelSyncDeadline()
             syncActive = false
             syncRecoveryTried = false
             syncIndex = 0
@@ -2131,6 +2159,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             return
         }
         syncActive = true
+        armSyncDeadline()
         emit(
             "syncProgress",
             mapOf("file" to "checking glasses media…", "pct" to 0, "speedKbps" to 0.0)
@@ -2279,6 +2308,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
         syncActive = true
         syncRecoveryTried = false
+        armSyncDeadline()
         armSyncWatchdog()
         GlassesControl.getInstance(app)?.importAlbum()
     }
@@ -2316,6 +2346,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 recoverStalledSync()
                 return@Runnable
             }
+            cancelSyncDeadline()
             syncActive = false
             syncRecoveryTried = false
             syncIndex = 0
@@ -2390,8 +2421,62 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         syncWatchdog = null
     }
 
+    /** Whether this run has already announced itself, so a repeating control
+     *  ack cannot keep resetting the banner to 0% and make a stuck sync look
+     *  busy. Cleared with the deadline, i.e. once per run. */
+    @Volatile private var syncStartAnnounced = false
+
+    private var syncDeadline: Runnable? = null
+
+    /**
+     * Arm the whole-run ceiling. Separate from [armSyncWatchdog] on purpose:
+     * that one is re-armed by progress callbacks and so can be pushed forward
+     * indefinitely, which is exactly the failure this guards.
+     */
+    private fun armSyncDeadline() {
+        cancelSyncDeadline()
+        syncStartAnnounced = false
+        val r = Runnable {
+            if (!syncActive) return@Runnable
+            Log.i(TAG, "sync exceeded its total budget — giving up")
+            cancelSyncWatchdog()
+            syncActive = false
+            syncRecoveryTried = false
+            syncIndex = 0
+            syncTotal = 0
+            fullCleanupActive = false
+            emit(
+                "deviceEvent",
+                mapOf(
+                    "hex" to "WiFi sync ran past its budget with nothing " +
+                        "finishing — abandoned so the app stays responsive"
+                )
+            )
+            // pct=100 is what releases the caller's in-flight guard; the text
+            // is what tells the truth.
+            emit(
+                "syncProgress",
+                mapOf(
+                    "file" to "Sync gave up — switch the glasses off and on, " +
+                        "then try again",
+                    "pct" to 100,
+                    "speedKbps" to 0.0,
+                )
+            )
+        }
+        syncDeadline = r
+        main.postDelayed(r, WIFI_SYNC_TOTAL_BUDGET_MS)
+    }
+
+    private fun cancelSyncDeadline() {
+        syncDeadline?.let(main::removeCallbacks)
+        syncDeadline = null
+        syncStartAnnounced = false
+    }
+
     override fun stopWifiSync() {
         cancelSyncWatchdog()
+        cancelSyncDeadline()
         syncActive = false
         // Verified against the .aar: the vendor exposes no cancel/stop for a
         // running importAlbum — the sync runs to completion.
@@ -2704,6 +2789,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         cancelPhotoWatchdog()
         cancelThumbnailWatchdog()
         cancelSyncWatchdog()
+        cancelSyncDeadline()
         cancelVideoTimers()
         videoRequestId = null
         videoConfirmed = false

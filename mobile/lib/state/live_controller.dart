@@ -924,10 +924,19 @@ class LiveController {
 
   Timer? _pendingMediaTimer;
 
-  /// Comfortably past the native stall-recovery worst case (60 s stall + 6 s
-  /// settle + 60 s retry). A backstop that fires DURING a recovery is worse
-  /// than no backstop.
-  static const _autoSyncGuardTimeout = Duration(seconds: 150);
+  /// Comfortably past the native side's own ceiling, which is now a hard
+  /// whole-run deadline (`WIFI_SYNC_TOTAL_BUDGET_MS`, 240 s) rather than the
+  /// old 60 s stall + 6 s settle + 60 s retry. That chain could be pushed
+  /// forward indefinitely by a repeating control ack, which is what left a
+  /// sync running — and the UI stuttering — for as long as the glasses stayed
+  /// connected (device-seen 2026-08-26).
+  ///
+  /// This must OUTLAST the native deadline. A backstop that fires first clears
+  /// the in-flight guard while a transfer is still going, and the next photo
+  /// starts a second sync on top of it — two concurrent importAlbum calls
+  /// wedge the P2P session, which is the state we are trying to get out of.
+  @visibleForTesting
+  static const autoSyncGuardTimeout = Duration(seconds: 270);
 
   /// Settings / dashboard "Sync now": transfer whatever is waiting, on demand.
   /// Reports refusals through [_state.lastError] rather than doing nothing.
@@ -947,7 +956,7 @@ class LiveController {
     if (_autoSyncing) return; // already running
     _autoSyncing = true;
     _autoSyncWatchdog?.cancel();
-    _autoSyncWatchdog = Timer(_autoSyncGuardTimeout, () {
+    _autoSyncWatchdog = Timer(autoSyncGuardTimeout, () {
       _autoSyncing = false;
     });
     try {
@@ -985,7 +994,7 @@ class LiveController {
     // 60 s retry — or this fires mid-recovery and lets a second transfer start
     // on top of the one being rescued.
     _autoSyncWatchdog?.cancel();
-    _autoSyncWatchdog = Timer(_autoSyncGuardTimeout, () {
+    _autoSyncWatchdog = Timer(autoSyncGuardTimeout, () {
       _autoSyncing = false;
     });
     unawaited(bridge.startWifiSync().catchError((Object e) {
