@@ -701,7 +701,17 @@ class Session:
                     gap_ms=int((now_audio - self._last_audio_frame_at) * 1000),
                 )
             self._last_audio_frame_at = now_audio
-            self._last_activity = time.monotonic()  # real user turn (idle reset)
+            # NOT an idle reset. The mic streams every 20-100 ms whether or not
+            # anyone is talking, so counting frames as activity meant the idle
+            # cap could never fire while the app was open — device-seen
+            # 2026-08-28: a forgotten session sat 40 min in silence, billing
+            # input audio, until the 30-min hard cap (which counts from
+            # session start) was the only thing that ever ended anything.
+            # Agent-mode activity is now the user actually being HEARD (the
+            # transcript path) or typing; a translator has no turns, so for
+            # translate the streamed speech itself stays the signal of life.
+            if self._mode == "translate":
+                self._last_activity = now_audio
             # Translate audio is billed to its OWN meter, never to
             # `voice_seconds`: that is the assistant's allowance, and half an
             # hour of translating a meeting would empty it — leaving someone
@@ -769,7 +779,12 @@ class Session:
     async def _dispatch_control(self, message: dict[str, Any]) -> None:
         """Handle a client control message by ``type`` (``PROTOCOL.md`` §3)."""
         mtype = message.get("type")
-        self._last_activity = time.monotonic()  # any control msg = still alive
+        # Heartbeat pings arrive every 5 s from any OPEN app — counting them as
+        # activity meant the idle cap never fired (the second half of the
+        # never-idles bug; see the INPUT_AUDIO note). Substantive control
+        # messages (typed text, config, device events) still count.
+        if mtype != "ping":
+            self._last_activity = time.monotonic()
         if mtype == "text":
             text = (message.get("text") or "").strip()
             if text:
@@ -1051,6 +1066,10 @@ class Session:
                 and not event.final
             ):
                 now = time.monotonic()
+                # THE idle reset for agent mode: the model is transcribing the
+                # user's words right now — real activity, unlike the always-on
+                # mic stream or the 5-second heartbeat pings.
+                self._last_activity = now
                 if self._t_user_first == 0.0:
                     self._t_user_first = now
                     logger.info(

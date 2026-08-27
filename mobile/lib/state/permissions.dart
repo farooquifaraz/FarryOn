@@ -54,6 +54,28 @@ class PermissionsService {
     return PermissionOutcome.denied;
   }
 
+  /// Request the Nearby-Wi-Fi-devices permission (Android 13+).
+  ///
+  /// Wi-Fi Direct — how the glasses hand their photos/videos over — is gated
+  /// behind NEARBY_WIFI_DEVICES since API 33. Without the grant the vendor
+  /// SDK's P2P calls fail SILENTLY and a sync sits at "0%" forever
+  /// (root-caused on-device 2026-08-28, after the S23 Ultra's Android 16
+  /// upgrade left it ungranted). On older Android the plugin reports granted
+  /// without a prompt, so calling this is always safe.
+  Future<PermissionOutcome> requestNearbyWifi() async {
+    final nearby = await Permission.nearbyWifiDevices.request();
+    _log.info('permissions nearbyWifiDevices=$nearby');
+    if (nearby.isGranted) return PermissionOutcome.granted;
+    if (nearby.isPermanentlyDenied) return PermissionOutcome.permanentlyDenied;
+    return PermissionOutcome.denied;
+  }
+
+  /// Whether Nearby-Wi-Fi is already granted (no prompt shown).
+  Future<bool> hasNearbyWifi() async {
+    final s = await Permission.nearbyWifiDevices.status;
+    return s.isGranted;
+  }
+
   /// Whether both permissions are already granted (no prompt shown).
   Future<bool> hasMicAndCamera() async {
     final mic = await Permission.microphone.status;

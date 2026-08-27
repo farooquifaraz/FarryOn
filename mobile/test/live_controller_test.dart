@@ -191,6 +191,11 @@ class GrantingPermissions implements PermissionsService {
   @override
   Future<PermissionOutcome> requestMicrophone() async =>
       PermissionOutcome.granted;
+  @override
+  Future<PermissionOutcome> requestNearbyWifi() async =>
+      PermissionOutcome.granted;
+  @override
+  Future<bool> hasNearbyWifi() async => true;
 }
 
 void main() {

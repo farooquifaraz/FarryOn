@@ -1146,6 +1146,20 @@ class LiveController {
           lastError: "Can't sync while the glasses are recording."));
       return;
     }
+    // Wi-Fi Direct is gated behind NEARBY_WIFI_DEVICES on Android 13+ —
+    // without the grant the P2P transfer fails SILENTLY at 0% (device-seen
+    // 2026-08-28, after an OS upgrade dropped the grant). Ask at the moment
+    // of use; older Android reports granted with no prompt.
+    final nearby = await _permissions.requestNearbyWifi();
+    if (nearby != PermissionOutcome.granted) {
+      _emit(_state.copyWith(
+          lastError: nearby == PermissionOutcome.permanentlyDenied
+              ? 'Syncing needs the "Nearby devices" permission — enable it '
+                  'in Settings → Apps → FarryOn → Permissions.'
+              : 'Syncing needs the "Nearby devices" permission to reach the '
+                  "glasses' Wi-Fi."));
+      return;
+    }
     if (_autoSyncing) return; // already running
     _autoSyncing = true;
     _autoSyncWatchdog?.cancel();
@@ -1190,10 +1204,24 @@ class LiveController {
     _autoSyncWatchdog = Timer(autoSyncGuardTimeout, () {
       _autoSyncing = false;
     });
-    unawaited(bridge.startWifiSync().catchError((Object e) {
-      _log.warn('auto glasses sync failed: $e');
-      _autoSyncing = false;
-    }));
+    unawaited(() async {
+      // A background trigger must not pop an OS prompt — but without the
+      // NEARBY_WIFI_DEVICES grant the transfer can only stall at 0% (the
+      // Android 13+ Wi-Fi Direct gate; device-seen 2026-08-28). Skip and
+      // leave the media on the glasses; the manual Sync button asks properly.
+      if (!await _permissions.hasNearbyWifi()) {
+        _log.warn('auto glasses sync skipped: Nearby-devices permission '
+            'missing — use Sync now once to grant it');
+        _autoSyncing = false;
+        return;
+      }
+      try {
+        await bridge.startWifiSync();
+      } catch (e) {
+        _log.warn('auto glasses sync failed: $e');
+        _autoSyncing = false;
+      }
+    }());
   }
 
   /// Mirror the glasses status into state when glasses back the mic, so the
