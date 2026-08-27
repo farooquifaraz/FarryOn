@@ -1,0 +1,390 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FarryOn — Complete User Guide</title><style>
+:root{--teal:#1D9E75;--mint:#5DCAA5;--deep:#0F6E56;--ink:#12241f;--muted:#5a6b66;
+--bg:#f6faf8;--card:#ffffff;--brd:#dbeae4;--note:#eef8f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;line-height:1.65}
+.wrap{max-width:860px;margin:0 auto;padding:0 22px 80px}
+.masthead{background:linear-gradient(135deg,#0F6E56,#1D9E75 55%,#5DCAA5);color:#fff;
+padding:44px 22px;margin-bottom:8px}
+.masthead .in{max-width:860px;margin:0 auto}
+.masthead h1{margin:0 0 6px;font-size:2rem;letter-spacing:-.5px}
+.masthead p{margin:0;opacity:.92}
+h1,h2,h3{line-height:1.25}
+h2{margin-top:40px;font-size:1.5rem;color:var(--deep);border-bottom:2px solid var(--brd);padding-bottom:8px}
+h3{margin-top:26px;font-size:1.15rem;color:#134e3f}
+a{color:var(--teal)}
+code{background:#eef3f1;padding:2px 6px;border-radius:6px;font-size:.92em}
+ul,ol{padding-left:22px}li{margin:5px 0}
+table{border-collapse:collapse;width:100%;margin:16px 0;font-size:.95rem}
+th,td{border:1px solid var(--brd);padding:9px 12px;text-align:left;vertical-align:top}
+th{background:#e8f4ee;color:var(--deep)}
+tr:nth-child(even) td{background:#fbfdfc}
+blockquote{margin:16px 0;padding:12px 18px;background:var(--note);
+border-left:4px solid var(--teal);border-radius:8px;color:#204a3d}
+blockquote p{margin:6px 0}
+hr{border:none;border-top:1px solid var(--brd);margin:28px 0}
+strong{color:#0f3a2f}
+</style></head>
+<body><div class="masthead"><div class="in"><h1>FarryOn — Complete User Guide</h1>
+<p>Setup &amp; configuration for the FarryOn Android app</p></div></div>
+<div class="wrap"><h1>FarryOn — Complete User Guide</h1>
+<p><strong>Setup &amp; configuration for the FarryOn Android app</strong>
+Version 1.0 · Everything you can set up, step by step</p>
+<hr />
+<h2>Before you begin — how settings work</h2>
+<p>FarryOn is a voice-first AI assistant for Android. You talk, and Farry listens, sees through your phone camera or smart glasses, remembers, and gets things done.</p>
+<p>All configuration lives in one place: the <strong>Settings</strong> screen (tap the gear icon). Settings are grouped into sections — <strong>Assistant, Devices, Connections, Your stuff, Account, About</strong>.</p>
+<blockquote>
+<p><strong>Important — "Save &amp; reconnect".</strong> Most settings pages have a <strong>Save &amp; reconnect</strong> button pinned at the bottom. Your changes only take effect after you tap it — Farry briefly reconnects to apply them. A few quick toggles (like capture devices) apply instantly and have no Save button.</p>
+</blockquote>
+<hr />
+<h2>1. Getting started</h2>
+<h3>1.1 Install the app</h3>
+<ol>
+<li>Open the FarryOn website on your Android phone and tap <strong>Download for Android</strong>.</li>
+<li>When prompted, allow installing apps from your browser (Android → <em>Install unknown apps</em>).</li>
+<li>Open the downloaded APK, tap <strong>Install</strong>, then <strong>Open</strong>.</li>
+</ol>
+<h3>1.2 Set the server address (only if asked to)</h3>
+<p>Most users can skip this — the app ships pointed at the FarryOn cloud. Change it only if you were given a different server.
+1. On the <strong>Sign In</strong> screen, tap the small <strong>host : port</strong> chip at the bottom (globe icon).
+2. In the <strong>Server address</strong> sheet, enter <strong>Host</strong>, <strong>Port</strong>, and turn <strong>Use TLS (https/wss)</strong> on or off.
+3. Tap <strong>Save</strong>.</p>
+<h3>1.3 Create an account</h3>
+<ol>
+<li>On the welcome screen tap <strong>Create Account</strong>.</li>
+<li>Fill in <strong>First name</strong> and <strong>Last name</strong> (optional), <strong>Email</strong>, and <strong>Password</strong>.
+   - Password must be <strong>at least 8 characters</strong>.</li>
+<li>Tap <strong>Sign Up</strong>. You are signed in automatically.
+   - <em>Or</em> tap <strong>Continue with Google</strong> (shown only if Google sign-in is enabled for your build).</li>
+</ol>
+<h3>1.4 Sign in</h3>
+<ol>
+<li>Tap <strong>Sign In</strong>, enter your <strong>Email</strong> and <strong>Password</strong> (use the eye icon to reveal it), tap <strong>Sign In</strong>.</li>
+<li><strong>Google:</strong> tap <strong>Continue with Google</strong> if available.</li>
+<li><strong>Two-factor (2FA):</strong> if your account has 2FA on, after your password you'll see <strong>Two-factor check</strong> — enter the <strong>6-digit code</strong> from your authenticator app (or a <strong>recovery code</strong>) and tap <strong>Verify Code</strong>.</li>
+</ol>
+<h3>1.5 Grant permissions</h3>
+<p>FarryOn asks for permissions only when a feature needs them (see the full list in <strong>Section 15</strong>). Tap <strong>Allow</strong> when prompted so voice, camera, glasses, reminders and contacts work. If you accidentally deny one, you can re-enable it from Android <strong>Settings → Apps → FarryOn → Permissions</strong>.</p>
+<hr />
+<h2>2. Connecting your smart glasses (L801 / L802)</h2>
+<p>Both the <strong>L801</strong> and <strong>L802</strong> connect the same way — the app finds them over Bluetooth by name, so these steps apply to either model.</p>
+<h3>2.1 Before you start</h3>
+<ul>
+<li><strong>Power the glasses on</strong> and keep them <strong>near your phone</strong>.</li>
+<li>Turn <strong>Bluetooth</strong> on.</li>
+<li>When asked, grant the <strong>Nearby devices</strong> permission (Android 12+). On older phones this uses Location instead.</li>
+</ul>
+<h3>2.2 Connect</h3>
+<ol>
+<li>Go to <strong>Settings → Devices → Glasses</strong>.</li>
+<li>The app scans for a few seconds:
+   - <strong>One pair found</strong> → it connects automatically.
+   - <strong>Several found</strong> → a <strong>Choose glasses</strong> list appears. Each entry shows <em>Paired with this phone</em>, <em>Nearby (signal strength)</em>, or <em>Not seen nearby — may be off</em>, with its address. Tap the one you want.
+   - <strong>Nothing found</strong> → you'll see <em>"No glasses found — make sure they are on and nearby."</em> Check they're powered on and retry.</li>
+<li>Once connected, the <strong>Glasses</strong> tile shows <strong>Connected · NN% battery</strong>. The app remembers this pair and <strong>auto-reconnects</strong> next time.</li>
+</ol>
+<blockquote>
+<p><strong>Tip.</strong> If the glasses are already busy/connected they may not show up in a scan even though they still work — the app will tell you rather than hide them.</p>
+</blockquote>
+<h3>2.3 Glasses speaker volume</h3>
+<ol>
+<li>Go to <strong>Settings → Devices → Glasses volume</strong>.</li>
+<li>Drag the slider (0–100%). This controls the <strong>glasses' own speaker</strong>, separate from your phone volume.</li>
+<li>It's saved and re-applied every time you connect — you can even set it while disconnected; it takes effect on the next connect.</li>
+</ol>
+<h3>2.4 Disconnect</h3>
+<ol>
+<li><strong>Settings → Devices → Glasses</strong> (while connected) → tap the tile.</li>
+<li>Confirm <strong>Disconnect</strong>. The glasses stay disconnected until you connect again.</li>
+</ol>
+<blockquote>
+<p><strong>Glasses Lab</strong> (Settings → About → Glasses Lab) is a hardware test bench that appears only in developer/debug builds. Regular users won't see it.</p>
+</blockquote>
+<hr />
+<h2>3. Choosing your capture devices (mic &amp; camera)</h2>
+<p>Pick where Farry listens and looks from. Microphone and camera are chosen independently.</p>
+<ol>
+<li>Go to <strong>Settings → Devices → Capture devices</strong>.</li>
+<li><strong>Microphone</strong> — choose one:
+   - <strong>Phone / earbuds mic</strong> (default).
+   - <strong>Glasses mic (long-press to talk)</strong> — requires glasses connected.</li>
+<li><strong>Camera</strong> — choose one:
+   - <strong>Phone camera (live, 1 fps)</strong> (default).
+   - <strong>Glasses camera</strong> — say <em>"what is this?"</em> or tap the 📷 button. Requires glasses connected.</li>
+<li>Your choice applies immediately — there's no Save button here.</li>
+</ol>
+<hr />
+<h2>4. Video recording &amp; syncing media (glasses)</h2>
+<ol>
+<li>Go to <strong>Settings → Devices → Video recording</strong>.</li>
+<li><strong>Clip length</strong> — choose <strong>30 seconds / 1 minute / 2 minutes / 4 minutes</strong> (4 min is the maximum). Start a clip with the 📹 button or by saying <em>"record a video"</em>; the glasses stop automatically at your chosen length.</li>
+<li><strong>Copying photos &amp; videos to your phone</strong> — choose:
+   - <strong>Automatically</strong> (default).
+   - <strong>Only when I ask.</strong></li>
+<li><strong>Sync now</strong> — pulls any waiting photos/videos off the glasses. It's tappable only when the glasses are connected and something is waiting.</li>
+</ol>
+<blockquote>
+<p><strong>Good to know.</strong> During a transfer the glasses can't record or take photos. A 4-minute clip is a few hundred MB. Files are saved to <strong>DCIM/FarryOn</strong> on your phone. The glasses must be <strong>off the charger</strong> to transfer. Recording several clips? Set <strong>Only when I ask</strong> and sync once at the end.</p>
+</blockquote>
+<hr />
+<h2>5. Voice &amp; mic mode</h2>
+<ol>
+<li>Go to <strong>Settings → Assistant → Voice &amp; mic</strong>.</li>
+<li>Toggle <strong>Hands-free mic</strong>:
+   - <strong>On</strong> (default) — <em>Always listening</em>. Best in a quiet room; Farry detects when you start and stop talking.
+   - <strong>Off</strong> — <em>Tap-to-talk</em>. The mic stays closed until you tap it. Best around background noise or a TV, so stray sounds don't trigger Farry.</li>
+<li>Tap <strong>Save &amp; reconnect</strong>.</li>
+</ol>
+<hr />
+<h2>6. AI model</h2>
+<ol>
+<li>Go to <strong>Settings → Assistant → AI model</strong>.</li>
+<li>Choose a provider:
+   - <strong>Gemini ⚡</strong> (default) — fast, best value.
+   - <strong>OpenAI ⚡</strong> — premium.
+   - <strong>Mock</strong> — offline test mode (no real AI).</li>
+<li>Tap <strong>Save &amp; reconnect</strong>.</li>
+</ol>
+<hr />
+<h2>7. Languages</h2>
+<ol>
+<li>Go to <strong>Settings → Assistant → Languages</strong>.</li>
+<li>Pick a <strong>Primary</strong> and a <strong>Secondary</strong> language from the grids. Available: English, Hindi, Urdu, Arabic, Bengali, Punjabi, Marathi, Tamil, Telugu, Gujarati, Spanish, French.</li>
+<li>Tap <strong>Save &amp; reconnect</strong>.</li>
+</ol>
+<blockquote>
+<p>Farry always replies in whatever language you speak. These two are just tie-breakers for short or mixed sentences, and for messages Farry starts itself (like reminders) — <strong>primary wins</strong>. Picking the same language the other slot holds simply swaps them.</p>
+</blockquote>
+<hr />
+<h2>8. Email setup (up to 2 mailboxes)</h2>
+<p>Farry can read, summarize and send email by voice — for example a personal <strong>Gmail</strong> and your <strong>official / work email</strong> (any provider). You can connect <strong>up to 2 mailboxes</strong>.</p>
+<h3>8.1 First, get an app password</h3>
+<p>Most providers (Gmail, Outlook, Yahoo, Hostinger…) require an <strong>app-specific password</strong> — not your normal login password.
+- <strong>Gmail:</strong> turn on 2-Step Verification, then create an <strong>App Password</strong> (16 digits) in your Google Account security settings. You'll paste that into FarryOn.
+- Other providers: create an app password (or use the mailbox password if your provider allows it) from your mail account's security settings.</p>
+<h3>8.2 Add a mailbox</h3>
+<ol>
+<li>Go to <strong>Settings → Connections → Email inbox</strong>.</li>
+<li>Tap <strong>Add account</strong>.</li>
+<li>Fill in:
+   - <strong>Label</strong> — e.g. <em>Personal</em> or <em>Work</em> (defaults to "Email" if left blank).
+   - <strong>Provider</strong> — tap <strong>Gmail</strong>, <strong>Outlook / 365</strong>, <strong>Yahoo</strong>, <strong>Hostinger</strong>, or <strong>Custom</strong>.
+   - <strong>Email address</strong> — e.g. <em>you@example.com</em>.
+   - <strong>App password</strong> — paste the app password from step 8.1 (Gmail = 16 digits).
+   - <strong>Custom only:</strong> if you chose <strong>Custom</strong>, also enter <strong>IMAP host (incoming)</strong>, <strong>SMTP host (outgoing)</strong> and <strong>Port</strong> (default 587). Preset providers fill these in for you.</li>
+<li>Tap <strong>Test connection</strong> — a green <em>"Connected · inbox reachable"</em> means it works. A red message means wrong password, unreachable host, or a network problem — fix and retry.</li>
+<li><strong>Set as primary</strong> — turn on if this should be Farry's default mailbox. (If it's your only mailbox, it's always primary.)</li>
+<li>Tap <strong>Save &amp; reconnect</strong>.</li>
+</ol>
+<h3>8.3 Add a second mailbox / set the default</h3>
+<ul>
+<li>Repeat <strong>8.2</strong> to add a second mailbox (maximum 2). To add more you must remove one first.</li>
+<li>Exactly one mailbox is the <strong>primary</strong>. Farry reads and sends from the primary unless you name the other by its label — e.g. <em>"check my work email."</em></li>
+<li>If you don't say which account when sending, Farry asks, so a reply never leaves the wrong address.</li>
+</ul>
+<h3>8.4 Edit or remove a mailbox</h3>
+<ol>
+<li><strong>Settings → Connections → Email inbox</strong> → tap the mailbox card.</li>
+<li>Change any field, or tap <strong>Remove account</strong> (red).</li>
+<li>Tap <strong>Save &amp; reconnect</strong>.</li>
+</ol>
+<blockquote>
+<p><strong>Security.</strong> Your app password is stored in the phone's secure keystore, never in plain settings.</p>
+</blockquote>
+<hr />
+<h2>9. Web search</h2>
+<ol>
+<li>Go to <strong>Settings → Connections → Web search</strong>.</li>
+<li>Choose a <strong>Provider</strong>: <strong>Tavily</strong> (default), <strong>Serper</strong>, or <strong>SerpAPI</strong>.</li>
+<li><strong>API key</strong> — leave <strong>blank to use the server default</strong>, or paste your own key.</li>
+<li><strong>Fallback API key (optional)</strong> — used automatically when your primary key runs out of free credits.</li>
+<li>Tap <strong>Save &amp; reconnect</strong>.</li>
+</ol>
+<blockquote>
+<p>Web searches count against your plan's search quota (see Section 12).</p>
+</blockquote>
+<hr />
+<h2>10. WhatsApp, Telegram &amp; SMS (voice-driven)</h2>
+<p>These are <strong>hands-free, voice-driven</strong> — there is <strong>nothing to set up inside FarryOn</strong> (no accounts or keys in the app). You just speak, Farry prepares the message, and your normal messaging app opens with it ready to send.</p>
+<h3>10.1 WhatsApp</h3>
+<ol>
+<li>Make sure <strong>WhatsApp is installed and signed in</strong> on your phone, and grant FarryOn the <strong>Contacts</strong> permission (so a spoken name finds the right number).</li>
+<li>Say, for example, <em>"WhatsApp Ali: running late."</em></li>
+<li>Farry confirms the recipient and message, then <strong>opens WhatsApp with the text pre-filled</strong> — you tap <strong>Send</strong> once.</li>
+</ol>
+<h3>10.2 SMS</h3>
+<ol>
+<li>Say <em>"text Sara: on my way."</em></li>
+<li>Your Messages app opens with the text ready — tap <strong>Send</strong>.</li>
+</ol>
+<h3>10.3 Telegram</h3>
+<ol>
+<li>Say <em>"Telegram Ahmed: call me."</em></li>
+<li>What happens depends on how Telegram delivery is set up on the FarryOn server:
+   - <strong>Direct send</strong> — if enabled, Farry sends it for you.
+   - <strong>Bot send</strong> — Farry can message anyone who has first sent <strong>/start</strong> to the FarryOn Telegram bot. Ask your contact to do that once.
+   - <strong>Otherwise</strong> — Farry copies the message to your clipboard and opens the Telegram chat; you <strong>paste and send</strong> (Telegram links can't pre-fill text).</li>
+</ol>
+<blockquote>
+<p>WhatsApp/SMS/Telegram need no API keys from you. Contacts permission is what lets a spoken name become the right number, all on your device.</p>
+</blockquote>
+<hr />
+<h2>11. Your stuff — Notes, Reminders &amp; Conversations</h2>
+<p>You <strong>add</strong> these by voice; the screens are for viewing and tidying up. Open them from <strong>Settings → Your stuff</strong> (or the top bar on the main screen).</p>
+<h3>11.1 Notes (things Farry remembered)</h3>
+<ul>
+<li><strong>Settings → Your stuff → Notes.</strong> These are things Farry saved when you said <em>"remember…"</em> — its memory of your preferences and facts.</li>
+<li><strong>Add:</strong> say <em>"remember I park on level 3."</em></li>
+<li><strong>Delete:</strong> swipe a note and confirm.</li>
+<li><strong>Refresh:</strong> pull down.</li>
+</ul>
+<h3>11.2 Reminders</h3>
+<ul>
+<li><strong>Settings → Your stuff → Reminders.</strong> Grouped into Overdue, Today, Tomorrow, This week, Later.</li>
+<li><strong>Add:</strong> say <em>"remind me to call the bank at 5."</em></li>
+<li><strong>Mark done:</strong> tap the check circle.</li>
+<li><strong>Delete:</strong> swipe and confirm.</li>
+<li>For reminders to fire on time, allow <strong>Notifications</strong>, <strong>Exact alarms</strong>, and the <strong>battery-optimization exemption</strong> when asked.</li>
+</ul>
+<h3>11.3 Conversations</h3>
+<ul>
+<li><strong>Settings → Your stuff → Conversations.</strong> Your past chats, newest first — tap one to read the full transcript.</li>
+<li><strong>Delete one:</strong> swipe and confirm. <strong>Clear all:</strong> top-right (permanent).</li>
+<li>Chats are saved on your phone when you end a session.</li>
+</ul>
+<hr />
+<h2>12. Subscription &amp; plans</h2>
+<ol>
+<li>Go to <strong>Settings → Account → Subscription</strong>.</li>
+<li>You'll see:
+   - <strong>Your current plan</strong> and price.
+   - <strong>Usage meters</strong> — Voice time, Image scans, Web searches — each showing used vs. your cap (or <em>Unlimited</em>, or <em>Not included in this plan</em>).
+   - <strong>Upgrade options</strong> with prices.</li>
+<li>To upgrade, tap a higher plan.</li>
+</ol>
+<blockquote>
+<p><strong>Note.</strong> Online payments may not be switched on yet — upgrade tiles can show <strong>"Coming soon."</strong> They'll become tappable once payments are enabled.</p>
+</blockquote>
+<hr />
+<h2>13. Advanced — server address (Cloud vs Local)</h2>
+<ol>
+<li>Go to <strong>Settings → Connections → Server.</strong></li>
+<li>The top banner shows your live connection and the server it's using.</li>
+<li>Tap a preset, or enter values manually:
+   - <strong>Cloud</strong> — <em>Always online</em> (the FarryOn cloud, TLS on). Recommended.
+   - <strong>Local (Dev)</strong> — <em>Your PC on Wi-Fi</em> (for developers running the backend themselves).
+   - <strong>Manual</strong> — set <strong>Host</strong>, <strong>Port</strong>, and the <strong>Secure (TLS)</strong> switch yourself.</li>
+<li>Tap <strong>Save &amp; reconnect</strong>.</li>
+</ol>
+<hr />
+<h2>14. About &amp; debug</h2>
+<p><strong>Settings → About</strong> shows:
+- <strong>Debug logs</strong> — view or share Farry's tool + error trail (handy when reporting a problem).
+- <strong>Version</strong> — your app version.
+- <strong>Glasses Lab</strong> — appears in developer builds only.</p>
+<hr />
+<h2>15. Permissions FarryOn uses</h2>
+<table>
+<thead>
+<tr>
+<th>Permission</th>
+<th>Why it's needed</th>
+<th>When it's asked</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Microphone</td>
+<td>Hearing your voice</td>
+<td>When you start a session</td>
+</tr>
+<tr>
+<td>Camera</td>
+<td>"See &amp; Ask" / photos</td>
+<td>When you start a session</td>
+</tr>
+<tr>
+<td>Location</td>
+<td>"Where am I?" answers; glasses scan on older phones</td>
+<td>On first location use</td>
+</tr>
+<tr>
+<td>Nearby devices (Bluetooth)</td>
+<td>Finding &amp; connecting glasses</td>
+<td>On glasses scan</td>
+</tr>
+<tr>
+<td>Nearby Wi-Fi</td>
+<td>Syncing glasses photos/videos</td>
+<td>On media sync (Android 13+)</td>
+</tr>
+<tr>
+<td>Notifications + Exact alarms</td>
+<td>Reminders firing on time</td>
+<td>On first reminder</td>
+</tr>
+<tr>
+<td>Battery-optimization exemption</td>
+<td>Reminders not delayed by power saving</td>
+<td>On first reminder</td>
+</tr>
+<tr>
+<td>Contacts</td>
+<td>Turning a spoken name into a number (WhatsApp/SMS/Telegram)</td>
+<td>On first message-by-name</td>
+</tr>
+</tbody>
+</table>
+<p>You can review or change all of these in Android <strong>Settings → Apps → FarryOn → Permissions</strong>.</p>
+<hr />
+<h2>16. Signing out</h2>
+<ol>
+<li>Go to <strong>Settings → Account → Sign out</strong>.</li>
+<li>Confirm <strong>Sign out</strong>. This ends the session on this device; you'll sign in again next time.</li>
+</ol>
+<hr />
+<h2>17. Quick troubleshooting</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Try this</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A setting didn't apply</td>
+<td>Tap <strong>Save &amp; reconnect</strong> at the bottom of the page.</td>
+</tr>
+<tr>
+<td>Glasses won't connect</td>
+<td>Power them on, keep them near, allow <strong>Nearby devices</strong>, then retry the scan.</td>
+</tr>
+<tr>
+<td>Email won't connect</td>
+<td>Use an <strong>app password</strong> (not your login password); tap <strong>Test connection</strong>; check the address/host.</td>
+</tr>
+<tr>
+<td>Reminders don't fire</td>
+<td>Allow <strong>Notifications</strong>, <strong>Exact alarms</strong>, and the <strong>battery-optimization exemption</strong>.</td>
+</tr>
+<tr>
+<td>A message name isn't found</td>
+<td>Grant the <strong>Contacts</strong> permission.</td>
+</tr>
+<tr>
+<td>Can't upgrade a plan</td>
+<td>Payments may not be enabled yet ("Coming soon").</td>
+</tr>
+<tr>
+<td>Farry hears the TV</td>
+<td>Turn <strong>Hands-free mic</strong> off (tap-to-talk) in Voice &amp; mic.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<p><em>FarryOn — your voice-first AI companion. This guide covers every user-configurable feature in the app.</em></p></div></body></html>

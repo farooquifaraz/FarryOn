@@ -350,3 +350,134 @@ cd backend && .venv/Scripts/python.exe -m pytest -q      # 246 tests, ~8 min
 cd mobile  && flutter test                                # 120 tests, ~30 s
 cd mobile  && flutter analyze                             # 2 known pre-existing infos
 ```
+
+---
+
+## Part 3 — Full functional device checklist (2026-08-27, robustness sprint)
+
+Everything a release-candidate build must prove on a real phone. ☑ = verified
+today over USB-adb (screenshots + backend log + DB), ☐ = pending, ⚠ = open bug.
+
+### 🔴 Open bugs found today (fix before anything else)
+
+| # | Bug | Evidence |
+|---|---|---|
+| A1 | ⚠ **P0 — TTS audio never plays.** Server streams reply audio (`speak_ms` > 0 every turn), phone stays silent; audio_flinger shows output in Standby, last audio patch hours old — the app's PcmPlayer never engages. Repro: any turn on 2026-08-27 morning build. Debug via app's Debug-Logs export. | dumpsys audio 27-08 |
+| A2 | ⚠ **P1 — reconnect loses conversation context** (no session resume). Proven: Farry asked "save kar doon?", Wi-Fi flap reconnected, "haan save kar do" landed in a new session → "Kya save karna hai?". Needs Gemini `sessionResumption` + pending-confirmation replay. | transcripts 07:11-07:12 UTC |
+| A3 | ⚠ **P2 — backend has no supervisor.** The detached uvicorn died overnight; phone woke to a dead server and got signed out. Wrap it in NSSM / Task Scheduler / a visible terminal Faraz owns. | log gap 17:12 → 07:08 |
+| A4 | ⚠ **env — home Wi-Fi flaps** (phone↔PC path). Sessions churn ~40 s despite client fixes. Router/band/Intelligent-Wi-Fi settings; retest on another network or USB-irrelevant (VPS) path. | ping 100% loss 26-08 |
+
+### T1 — Auth & session
+- ☑ Google sign-in button present, sign-in works (27-08)
+- ☑ Signed-in identity correct (Faraz Ahmed card in Settings)
+- ☐ Email+password sign-in, wrong-password error copy
+- ☐ 2FA challenge path
+- ☐ Sign-out → clean return to login, no ghost session
+- ☐ Cold-start restore (kill app → open → still signed in, connects)
+- ☐ Overnight token survival (phone idle 8h with server UP → no login screen)
+- ☐ Sign-up flow incl. "account created, not signed in" copy
+
+### T2 — Text conversation
+- ☑ Typed turn → reply (1509 ms first audio; transcript correct both sides)
+- ☑ Chat overlay shows You/Farry bubbles correctly
+- ☐ Long message (multi-line) send + render
+- ☐ Hindi/Hinglish/English mixed typing → reply language mirrors user
+
+### T3 — Voice conversation (blocked by A1 until audio plays)
+- ☐ Hands-free turn: speak → hear reply (target respond < 2.5 s)
+- ☑ turn.timing telemetry logs every turn (26-08, response_ms 1249–2331)
+- ☐ Tap-to-talk mode (hands-free OFF): mic opens only on tap
+- ☐ Barge-in: speak over Farry's reply → TTS stops
+- ☐ Language mirroring voice: Hindi question → Hindi reply, instant switch
+- ☐ Echo suppression: Farry's own voice from speaker never becomes a "user" turn
+- ☐ Mic mute button honored (no turns while red)
+- ☐ Screen off mid-conversation → next question still heard & answered (FGS + 5s ping)
+
+### T4 — Vision / camera
+- ☑ identify with camera off auto-takes ONE frame then closes (6.7 s incl. cold start, 27-08 morning)
+- ☐ camera_off fast-fail: identify with app backgrounded → precise spoken reason in ~2 s (new fix, untested)
+- ☐ Camera toggle streams; "what is this?" answered from live view
+- ☐ Zoom chips 1×/2×/4× + set_camera_zoom by voice
+- ☐ Front/back flip, portrait rotate
+- ☐ Scan button (Finder): result sheet with Maps/Wiki/shop links
+- ☐ Background → foreground: preview recovers (no frozen camera)
+
+### T5 — Agent tools (each: ask → confirm → act → verify in Your Stuff/DB)
+- ☑ create_note with confirmation ("Note save ho gaya" + DB row, 27-08)
+- ☐ list/read notes by voice; delete_note
+- ☐ create_task with time → notification FIRES at the time (Doze test — the R8/alarm history)
+- ☐ update_task / complete_task / delete_task
+- ☐ web_search (tavily) → spoken answer with fresh facts
+- ☐ get_location → correct address (GPS on, real fix)
+- ☐ send_whatsapp / send_telegram (confirmation + actually delivered)
+- ☐ send_email + read_emails, both mailboxes by label (Gmail + Hostinger)
+- ☐ resolve_contact privacy flow (name → masked pick on device)
+- ☐ Tool refusal path: deny confirmation → nothing happens
+
+### T6 — Your Stuff
+- ☑ Notes screen loads, correct empty state (27-08)
+- ☐ Notes list after creation, swipe-delete with confirm
+- ☐ Reminders list + done/undone + delete
+- ☐ Conversations: history saved per session, readable, survives app kill
+
+### T7 — Glasses (L802)
+- ☐ Connect via Settings flow; auto-reconnect on app open
+- ☐ Connect by voice ("connect glasses") incl. Bluetooth-off path
+- ☐ Photo (plain + AI photo → thumbnail reaches model, answer describes real scene)
+- ☐ Video recording V1–V10 plan (start/stop/length/firmware cap) — still pending from 08-06
+- ☐ Media sync (photos+videos) + auto-sync toggle + retention/delete policy
+- ☐ Glasses speaker TTS + volume slider; phone-speaker fallback
+- ☐ Wear-to-talk; battery-low warning
+- ☐ Glasses camera while phone camera off: identify uses glasses frame (32 s budget)
+
+### T8 — Live translation
+- ☐ Start translate session, pick target language, hear translated speech
+- ☐ Captions-only mode
+- ☐ Return to assistant afterwards (session swap clean)
+
+### T9 — Robustness / network (the sprint's fixes)
+- ☑ Server hostile-input probe 6/6 (scripts/robustness_probe.py, 26-08)
+- ☑ 3 consecutive turns one session after heartbeat fix (26-08)
+- ☐ 2–3 min silence → same session answers next question (no churn)
+- ☐ Wi-Fi OFF → ON → reconnect within ~2 s (connectivity nudge, untested)
+- ☐ Airplane-mode 30 s mid-chat → recovery + honest UI status
+- ☐ App switch / background 5 min → return: still connected or clean reconnect
+- ☐ Reconnect mid-confirmation — KNOWN FAIL until A2 ships (document to user)
+
+### T10 — Settings
+- ☑ Server page truth: Connected + URL; Local (Dev) chip restores saved host (27-08)
+- ☐ Cloud chip → farryon.izylrn.com works end-to-end, then back to Local
+- ☐ Provider switch Gemini↔OpenAI reconnects and answers
+- ☐ Hands-free toggle, languages pair, video length, retention — persist across restart
+- ☐ Debug Logs screen: export shares a readable log
+
+### T11 — Billing / quota
+- ☐ Subscription screen shows plan + today's usage
+- ☐ Voice-seconds cap: hit cap → honest message + Upgrade offer (quota flag ON)
+- ☐ Stripe checkout sandbox round-trip
+
+### T12 — Performance targets (from farryon_turn_* metrics)
+- ☐ p50 response_ms < 2000, p95 < 4000 over a 20-turn session
+- ☐ No-tool turn speak starts < 2.5 s after user stops
+- ☐ identify turn < 8 s warm camera, < 10 s cold
+- ☐ Reconnect-to-listening < 3 s on stable network
+
+### 2026-08-27 evening — autonomous full-battery run (USB, loopback tunnel)
+
+Root cause of the week's "hang / not proper" class FOUND & FIXED: flutter_sound's
+Android recorder burned ~105% of a core on the main thread the whole session
+(profiled: mic revoked → 11%). Capture migrated to `record` package → 30%.
+
+| Test | Result |
+|---|---|
+| B CPU (session+mic live) | ☑ 104% → **30% core** |
+| C Text turn + TTS | ☑ 23 s story spoken; AudioTrack starts at first_audio ms |
+| E identify (camera off) | ☑ one-shot frame in **1.4 s** (was 8 s timeout); honest "Nothing recognized" on black frame; sheet resolves cleanly |
+| F record_video, glasses off | ☑ capture_failed not_connected in **152 ms** → spoken reason, no hang |
+| G screen-off mid-reply | ☑ 15.4 s reply completed with display off |
+| H 2.5-min silence | ☑ same session, zero reconnects over loopback |
+| Wi-Fi vs loopback | Sessions churn on home Wi-Fi (env), rock-solid via `adb reverse` loopback — confirms env, not app |
+
+⚠ Device left pointing at **127.0.0.1:8000** (USB tunnel). Off USB, set Host
+back to the PC's LAN IP — and note ConfigStore.lastLocalHost now remembers
+127.0.0.1, so the Local (Dev) chip restores that until a LAN host is saved.
