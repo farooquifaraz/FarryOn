@@ -48,7 +48,60 @@ class MediaChannel(private val app: Context) : MethodChannel.MethodCallHandler {
                 // Off the platform thread: the MediaStore write is blocking I/O.
                 Thread { saveJpeg(bytes, name, result) }.start()
             }
+            "saveVideoToGallery" -> {
+                val path = call.argument<String>("path")
+                val name = call.argument<String>("name")
+                    ?: "Farry_${System.currentTimeMillis()}.mp4"
+                if (path.isNullOrEmpty()) {
+                    result.error("no_path", "video path is required", null)
+                    return
+                }
+                // A recording is tens/hundreds of MB — stream-copy it off the
+                // platform thread, then delete the temp file.
+                Thread { saveVideo(path, name, result) }.start()
+            }
             else -> result.notImplemented()
+        }
+    }
+
+    private fun saveVideo(path: String, name: String, result: MethodChannel.Result) {
+        try {
+            val src = java.io.File(path)
+            if (!src.exists() || src.length() == 0L) {
+                main.post { result.error("no_file", "recording file missing/empty", null) }
+                return
+            }
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "Movies/Farry")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+            }
+            val uri = app.contentResolver.insert(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values,
+            )
+            if (uri == null) {
+                main.post { result.error("insert_failed", "MediaStore insert returned null", null) }
+                return
+            }
+            app.contentResolver.openOutputStream(uri)?.use { out ->
+                src.inputStream().use { it.copyTo(out) }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                app.contentResolver.update(
+                    uri,
+                    ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
+                    null, null,
+                )
+            }
+            src.delete() // the temp copy has served its purpose
+            Log.i(TAG, "saved $name to gallery (${src.length()} bytes)")
+            main.post { result.success(uri.toString()) }
+        } catch (e: Exception) {
+            Log.i(TAG, "video save failed: $e")
+            main.post { result.error("save_failed", e.message, null) }
         }
     }
 

@@ -4,8 +4,8 @@ import 'dart:io' show File;
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart'; // compute() — off-main-isolate work
 import 'package:flutter/services.dart';
-import 'package:flutter_sound/flutter_sound.dart';
 import 'package:image/image.dart' as img;
+import 'package:record/record.dart';
 
 import '../core/logger.dart';
 import '../protocol/messages.dart';
@@ -101,14 +101,12 @@ Uint8List? _downscaleJpegInIsolate(_JpegJob job) {
 
 /// Phone implementation of [CaptureSource] using the device camera and mic.
 ///
-/// **Audio stack — `flutter_sound`.** It is the most direct fit for this
-/// contract: its recorder can stream raw **PCM16** straight to a Dart `Sink`
-/// (`startRecorder(toStream:, codec: pcm16, sampleRate: 16000, numChannels: 1)`)
-/// without any file/round-trip, and the matching player streams PCM16 back for
-/// playback (used by `PcmPlayer`). That gives us the exact 16 kHz-in /
-/// 24 kHz-out, low-latency, single-dependency pipeline the protocol needs.
-/// (`mic_stream` + a separate player was the alternative, but it would mean two
-/// audio dependencies and manual Int16 framing.)
+/// **Audio stack — `record` in, `flutter_sound` out.** Capture streams raw
+/// **PCM16** at 16 kHz from `record` (background-thread capture — see the
+/// note on [_recorder] for why flutter_sound's recorder had to go), and
+/// playback streams PCM16 at 24 kHz through flutter_sound's player
+/// (`PcmPlayer`). Together that is the exact 16 kHz-in / 24 kHz-out,
+/// low-latency pipeline the protocol needs.
 ///
 /// **Video.** `camera` does not expose JPEG stills cheaply via its image
 /// stream (that path yields YUV/BGRA planes). We instead throttle
@@ -130,11 +128,18 @@ class PhoneCaptureSource implements CaptureSource {
   final int jpegQuality;
 
   // --- Audio ---
-  final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
+  //
+  // `record`, NOT flutter_sound. flutter_sound's Android recorder pumped its
+  // capture through a main-thread native loop that burned a full CPU core for
+  // as long as the mic ran — profiled on-device 2026-08-27: main thread at
+  // ~105% with the mic on, ~11% with it revoked, Dart itself ~2% busy. That
+  // one loop was the app's ANRs, the choppy TTS, and the heat. `record`
+  // captures on a background thread and hands Dart sane-sized PCM chunks.
+  // flutter_sound remains the PLAYBACK engine (see playback/pcm_player.dart);
+  // only capture moved.
+  final AudioRecorder _recorder = AudioRecorder();
   final _audioController = StreamController<Uint8List>.broadcast();
-  StreamController<Uint8List>? _recorderSink; // raw PCM from flutter_sound
   StreamSubscription<Uint8List>? _recorderSub;
-  bool _recorderOpen = false;
   bool _audioRunning = false;
 
   // --- Video ---
@@ -179,47 +184,43 @@ class PhoneCaptureSource implements CaptureSource {
     // [startVideo] opens it, and that is reached from [grabFrame] when the
     // scan button or `identify_image` actually needs a picture. Nothing that
     // wants the camera goes without it; nothing that doesn't want it pays.
-    await _openRecorder();
   }
 
   // ---- Audio -------------------------------------------------------------
 
-  Future<void> _openRecorder() async {
-    if (_recorderOpen) return;
-    await _recorder.openRecorder();
-    _recorderOpen = true;
-    _log.debug('recorder opened');
-  }
-
   @override
   Future<void> startAudio() async {
     if (_audioRunning) return;
-    await _openRecorder();
 
-    // flutter_sound streams raw PCM into a sink we own; forward each chunk to
-    // the public broadcast stream. Chunks land ~every codec buffer; at 16 kHz
-    // mono these are comfortably inside the 20–100 ms guidance.
-    final sink = StreamController<Uint8List>();
-    _recorderSink = sink;
-    _recorderSub = sink.stream.listen((chunk) {
+    // `record` streams raw PCM16 chunks from a background capture thread —
+    // no main-thread involvement (the whole point of the migration; see the
+    // field note on [_recorder]).
+    final stream = await _recorder.startStream(const RecordConfig(
+      encoder: AudioEncoder.pcm16bits,
+      sampleRate: AudioFormat.micSampleRate, // 16 kHz
+      numChannels: AudioFormat.channels,
+      // Hardware echo cancellation stays — without it the assistant's own
+      // speaker audio fed back into the turn detector (phantom turns,
+      // device-confirmed 2026-08-05). Noise suppression is OFF and auto-gain
+      // ON since 2026-08-27: with suppression on, Samsung's voice pipeline
+      // crushed real speech — audio streamed at full rate for minutes while
+      // Gemini's VAD never opened a single turn, and what did transcribe
+      // came out garbled ("तू अपनी गाड़ी जा" for none of those words).
+      // Auto-gain restores the levels the mic gate's bar was tuned against.
+      echoCancel: true,
+      noiseSuppress: false,
+      autoGain: true,
+      androidConfig: AndroidRecordConfig(
+        audioSource: AndroidAudioSource.voiceCommunication,
+        // The session's audio focus/mode is managed by VoiceAudioMode and the
+        // glasses bridge — the recorder must not fight them for it.
+        audioManagerMode: AudioManagerMode.modeNormal,
+        manageBluetooth: false,
+      ),
+    ));
+    _recorderSub = stream.listen((chunk) {
       if (chunk.isNotEmpty) _audioController.add(chunk);
     });
-
-    await _recorder.startRecorder(
-      toStream: sink.sink,
-      codec: Codec.pcm16,
-      numChannels: AudioFormat.channels,
-      sampleRate: AudioFormat.micSampleRate, // 16 kHz
-      // Hardware echo cancellation + noise suppression, per platform:
-      // - Android: `enableVoiceProcessing` is a NO-OP — the lever is the
-      //   VOICE_COMMUNICATION audio source (below). Without it the default
-      //   MIC source fed the assistant's own speaker audio back into the
-      //   turn detector, and the AI answered itself/room noise (phantom
-      //   turns, device-confirmed 2026-08-05).
-      // - iOS: `enableVoiceProcessing` engages VoiceProcessingIO.
-      audioSource: AudioSource.voice_communication,
-      enableVoiceProcessing: true,
-    );
     _audioRunning = true;
     _log.info('audio capture started @ ${AudioFormat.micSampleRate}Hz');
   }
@@ -229,14 +230,12 @@ class PhoneCaptureSource implements CaptureSource {
     if (!_audioRunning) return;
     _audioRunning = false;
     try {
-      await _recorder.stopRecorder();
+      await _recorder.stop();
     } catch (e) {
       _log.warn('stopRecorder error: $e');
     }
     await _recorderSub?.cancel();
-    await _recorderSink?.close();
     _recorderSub = null;
-    _recorderSink = null;
     _log.info('audio capture stopped');
   }
 
@@ -277,8 +276,71 @@ class PhoneCaptureSource implements CaptureSource {
   }
 
   /// Exposes the controller so the UI can render a live preview. Null until
-  /// [initialize] (or [startVideo]) has run.
-  CameraController? get cameraController => _camera;
+  /// [initialize] (or [startVideo]) has run. While a phone video recording
+  /// runs, this is the RECORDER's controller — the user must see exactly
+  /// what is being recorded (user-asked 2026-08-27).
+  CameraController? get cameraController => _videoRecorder ?? _camera;
+
+  // ---- Video RECORDING (phone-camera fallback for record_video) ----------
+  //
+  // The streaming controller is created with `enableAudio: false` (the live
+  // mic belongs to the assistant), so a recording swaps in a dedicated
+  // audio-enabled controller for its duration. The caller must stop the
+  // assistant's own mic capture FIRST — two owners of the microphone is how
+  // a video ends up silent.
+
+  CameraController? _videoRecorder;
+
+  /// Whether a phone video recording is currently running.
+  bool get isRecordingVideo => _videoRecorder != null;
+
+  /// Start recording video+audio with the phone camera. Throws on failure so
+  /// the caller can report the precise reason instead of pretending.
+  Future<void> startVideoRecording() async {
+    if (_videoRecorder != null) throw StateError('already recording');
+    // The streaming pipeline and the recorder cannot share the camera.
+    await stopVideo();
+    await releaseCamera();
+    final cameras = await availableCameras();
+    final selected = cameras.firstWhere(
+      (c) => c.lensDirection == _facing,
+      orElse: () => cameras.first,
+    );
+    final rec = CameraController(
+      selected,
+      ResolutionPreset.high,
+      enableAudio: true,
+    );
+    await rec.initialize();
+    try {
+      await rec.lockCaptureOrientation(DeviceOrientation.portraitUp);
+    } catch (e) {
+      _log.warn('recording lockCaptureOrientation failed: $e');
+    }
+    await rec.startVideoRecording();
+    _videoRecorder = rec;
+    _log.info('phone video recording started (${selected.name})');
+  }
+
+  /// Stop the phone recording and return the temp file path (null if none
+  /// was running or the stop failed). Always releases the recorder.
+  Future<String?> stopVideoRecording() async {
+    final rec = _videoRecorder;
+    if (rec == null) return null;
+    _videoRecorder = null;
+    try {
+      final file = await rec.stopVideoRecording();
+      _log.info('phone video recording stopped → ${file.path}');
+      return file.path;
+    } catch (e) {
+      _log.warn('stopVideoRecording failed: $e');
+      return null;
+    } finally {
+      try {
+        await rec.dispose();
+      } catch (_) {}
+    }
+  }
 
   @override
   Future<void> startVideo() async {
@@ -456,10 +518,7 @@ class PhoneCaptureSource implements CaptureSource {
   Future<void> dispose() async {
     await stopVideo();
     await stopAudio();
-    if (_recorderOpen) {
-      await _recorder.closeRecorder();
-      _recorderOpen = false;
-    }
+    await _recorder.dispose();
     await _camera?.dispose();
     _camera = null;
     await _audioController.close();

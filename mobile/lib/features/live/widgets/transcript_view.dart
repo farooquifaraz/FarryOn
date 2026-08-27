@@ -3,6 +3,12 @@ import 'package:flutter/material.dart';
 import '../../../core/theme.dart';
 import '../../../state/live_state.dart';
 
+/// `HH:mm:ss` for the bubble stamps.
+String _hhmmss(DateTime t) =>
+    '${t.hour.toString().padLeft(2, '0')}:'
+    '${t.minute.toString().padLeft(2, '0')}:'
+    '${t.second.toString().padLeft(2, '0')}';
+
 /// Scrolling list of user + assistant transcript lines.
 ///
 /// User lines align right, assistant lines left; non-final fragments are shown
@@ -59,9 +65,63 @@ class _TranscriptViewState extends State<TranscriptView> {
       controller: _scrollController,
       padding: const EdgeInsets.all(12),
       itemCount: widget.entries.length,
-      itemBuilder: (context, i) => _Bubble(entry: widget.entries[i]),
+      itemBuilder: (context, i) {
+        final entry = widget.entries[i];
+        // Date separator whenever the calendar day changes between lines —
+        // the familiar chat-app convention, so a conversation that crossed
+        // midnight (or a restored history) still reads unambiguously.
+        final showDate = i == 0 || !_sameDay(widget.entries[i - 1].time, entry.time);
+        final bubble = _Bubble(entry: entry);
+        if (!showDate) return bubble;
+        return Column(
+          children: [_DateChip(date: entry.time), bubble],
+        );
+      },
     );
   }
+
+  static bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+}
+
+/// Centered "Today" / "12 Aug 2026" pill shown when the day changes.
+class _DateChip extends StatelessWidget {
+  const _DateChip({required this.date});
+
+  final DateTime date;
+
+  static const _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  String _label() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(date.year, date.month, date.day);
+    if (day == today) return 'Today';
+    if (day == today.subtract(const Duration(days: 1))) return 'Yesterday';
+    return '${date.day} ${_months[date.month - 1]} ${date.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            _label(),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: Aurora.textMuted,
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+        ),
+      );
 }
 
 /// The app's own voice: full width, amber, no speaker name and no avatar.
@@ -137,13 +197,33 @@ class _Bubble extends StatelessWidget {
             isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            isUser ? 'You' : 'Farry',
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: isUser ? Aurora.mint : Aurora.tealInk,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.2,
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                isUser ? 'You' : 'Farry',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: isUser ? Aurora.mint : Aurora.tealInk,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                ),
+              ),
+              const SizedBox(width: 6),
+              // Seconds included ON PURPOSE: a user line's time is the moment
+              // Farry began hearing it and the reply's time is the moment she
+              // began answering, so adjacent stamps read as her actual
+              // latency — minutes alone would hide it (user-asked 2026-08-27).
+              Text(
+                _hhmmss(entry.time),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: Aurora.textMuted,
+                  fontSize: 10,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 3),
           Text(

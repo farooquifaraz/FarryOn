@@ -1,7 +1,9 @@
 import 'dart:async';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:flutter/services.dart'
+    show Clipboard, ClipboardData, ServicesBinding;
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -9,6 +11,7 @@ import '../capture/capture_source.dart';
 import '../capture/device_registry.dart';
 import '../capture/glasses_capture_source.dart';
 import '../capture/mic_gate.dart';
+import '../capture/phone_capture_source.dart';
 import '../core/cache_patch.dart';
 import '../core/chat_history.dart';
 import '../core/config.dart';
@@ -67,6 +70,29 @@ class LiveController {
         platform = platform ?? defaultPlatform {
     _client = clientFactory(_config, _activeDeviceInfo);
     _bindClient();
+    // Wi-Fi flap recovery: the moment the OS reports a usable network again,
+    // poke the client so a pending backoff wait ends NOW. Without this a
+    // flap costs the backoff delay on top of the outage itself — seconds of
+    // "Listening…" with nobody listening (log-proven 2026-08-26).
+    //
+    // Skipped when no Flutter binding exists (every LiveController unit
+    // test): the plugin's EventChannel throws from INSIDE its stream's
+    // onListen, which escapes to the uncaught-zone handler where no
+    // try/catch around .listen can reach it. The watch is an optimization —
+    // its absence must never take the controller down. Errors after a
+    // successful subscribe (plugin missing on some platform) land in
+    // onError and are just logged.
+    if (_bindingReady()) {
+      _connectivitySub = Connectivity().onConnectivityChanged.listen(
+        (results) {
+          if (results.any((r) => r != ConnectivityResult.none)) {
+            _client.nudge();
+          }
+        },
+        onError: (Object e) =>
+            _log.debug('connectivity watch unavailable: $e'),
+      );
+    }
     // Push the glasses storage-retention policy to native up front. This only
     // sets a field on the (singleton) native SDK — it does NOT need the glasses
     // to be connected — so doing it here guarantees the policy is in place
@@ -102,6 +128,20 @@ class LiveController {
 
   AppConfig _config;
   late final WebSocketLiveClient _client;
+
+  /// OS connectivity events → [WebSocketLiveClient.nudge] (see constructor).
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+
+  /// Whether a Flutter binding exists — false in plain unit tests, where
+  /// platform channels (and so the connectivity watch) cannot work.
+  static bool _bindingReady() {
+    try {
+      ServicesBinding.instance;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 
   // Capture stream plumbing for the *currently active* source.
   StreamSubscription<Uint8List>? _audioSub;
@@ -145,10 +185,31 @@ class LiveController {
   final VoiceAudioMode _voiceAudioMode = VoiceAudioMode();
 
   late final MicGate _micGate = MicGate()
-    ..onOpen = (rms, threshold) => _log.info(
-        'mic gate opened (level ${rms.round()} > bar ${threshold.round()})');
+    ..onOpen = (rms, threshold) {
+      // The moment speech energy crossed the bar IS when Farry began hearing
+      // this utterance. The transcript arrives from the model only after the
+      // user stops speaking (input transcription lands as a lump), so a
+      // bubble stamped at transcript-arrival read as "Farry heard me late"
+      // when the audio had been streaming live all along (user-reported
+      // 2026-08-27). Remember the true start; the user bubble consumes it.
+      _utteranceStartAt ??= DateTime.now();
+      _log.info(
+          'mic gate opened (level ${rms.round()} > bar ${threshold.round()})');
+    };
+
+  /// When the current utterance's speech energy first opened the mic gate —
+  /// the honest "Farry started hearing" moment for the next user bubble.
+  DateTime? _utteranceStartAt;
 
   bool _ttsActive = false;
+
+  // Turn-latency instrumentation (client side, mirrors the backend's
+  // turn.timing log): when Farry first HEARD this utterance, and when the
+  // user's words last grew — so 'AI started speaking' can log the silence
+  // the user actually sat through, as measured on the phone itself.
+  DateTime? _turnHeardAt;
+  DateTime? _turnLastUserWordsAt;
+
   int _ttsBytes = 0; // OUTPUT_AUDIO bytes fed since the turn's audio started
   DateTime? _ttsStart;
   Timer? _ttsClear;
@@ -476,6 +537,138 @@ class LiveController {
   /// BEFORE its audio does, so without this "nothing is playing" would read as
   /// "nothing to wait for" and the confirmation would be swallowed.
   static const _recordingReplyGrace = Duration(milliseconds: 1500);
+
+  /// Where a `record_video` request lands: glasses when they're connected,
+  /// otherwise the PHONE camera. The glasses were mandatory here once, and a
+  /// bare "glasses aren't connected" refusal on a phone with a perfectly good
+  /// camera was the wrong answer (user-called-out 2026-08-27).
+  Future<void> startRecording({bool afterSpokenReply = false}) {
+    if (_state.glassesConnected && _glassesBridge != null) {
+      return startGlassesRecording(afterSpokenReply: afterSpokenReply);
+    }
+    return _startPhoneRecording(afterSpokenReply: afterSpokenReply);
+  }
+
+  /// Stop whichever recording is running (glasses or phone).
+  Future<void> stopRecording() {
+    final src = _videoSource;
+    if (src is PhoneCaptureSource && src.isRecordingVideo) {
+      return _stopPhoneRecording();
+    }
+    return stopGlassesRecording();
+  }
+
+  /// Record with the phone camera for the configured duration. Mirrors the
+  /// glasses flow's silence dance, with one addition: the assistant's OWN mic
+  /// capture is stopped first — the camera's recorder needs the microphone,
+  /// and two owners is how a video ends up silent.
+  Future<void> _startPhoneRecording({bool afterSpokenReply = false}) async {
+    final src = _videoSource;
+    if (src is! PhoneCaptureSource) {
+      _reportRecordingFailure('not_connected', spoken: afterSpokenReply);
+      return;
+    }
+    if (_state.recording != null || _startingRecording) return;
+    _startingRecording = true;
+    _emit(_state.copyWith(recordingBusy: true));
+    try {
+      _micWasOpenBeforeRecording = _state.micOpen;
+      _recordingAskedByVoice = afterSpokenReply;
+      if (afterSpokenReply) {
+        await _waitForSilence(_recordingReplyTimeout,
+            grace: _recordingReplyGrace);
+      } else if (_state.liveState == LiveState.speaking || _ttsActive) {
+        await interrupt();
+      }
+      if (_state.micOpen) await stopListening(); // frees the microphone
+      await _waitForSilence(_recordingSilenceTimeout);
+      _cameraWasOnBeforeRecording = _state.cameraOn;
+      await src.startVideoRecording();
+      final seconds = _config.videoRecordSeconds;
+      _emit(_state.copyWith(
+        recording: GlassesRecording(
+          requestId: 'phone',
+          seconds: seconds,
+          startedAt: DateTime.now(),
+        ),
+        // Show the recorder's live preview: the user must SEE what the phone
+        // is recording (cameraController now points at the recorder).
+        cameraOn: true,
+      ));
+      _recordingTicker?.cancel();
+      _recordingTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+        _emit(_state.copyWith());
+        final rec = _state.recording;
+        // The firmware auto-stops a glasses recording; the phone's stops HERE.
+        if (rec != null && rec.elapsed.inSeconds >= rec.seconds) {
+          unawaited(_stopPhoneRecording());
+        }
+      });
+      unawaited(Notifications.showActivity(
+        'Recording video',
+        '0:00 / ${GlassesRecording.format(Duration(seconds: seconds))}',
+        progress: 0,
+      ));
+    } catch (e) {
+      _log.warn('phone recording failed to start: $e');
+      _emit(_state.copyWith(lastError: "Couldn't start the recording."));
+      _reportRecordingFailure('camera_off', spoken: afterSpokenReply);
+      _restoreAfterRecording();
+    } finally {
+      _startingRecording = false;
+      _emit(_state.copyWith(recordingBusy: false));
+    }
+  }
+
+  /// Whether the streaming camera was on before a phone recording, so the
+  /// preview can be handed back exactly as the user had it.
+  bool _cameraWasOnBeforeRecording = false;
+
+  /// Stop the phone recording, move the file into the gallery, tell the user.
+  Future<void> _stopPhoneRecording() async {
+    final src = _videoSource;
+    if (src is! PhoneCaptureSource) return;
+    final finished = _state.recording;
+    _recordingTicker?.cancel();
+    _recordingTicker = null;
+    final path = await src.stopVideoRecording();
+    if (_state.recordingBusy) _emit(_state.copyWith(recordingBusy: false));
+    if (_state.recording != null) _emit(_state.copyWith(clearRecording: true));
+    // The recorder (and its preview) is gone; hand the camera state back the
+    // way the user had it — streaming preview restored only if it was on.
+    _emit(_state.copyWith(cameraOn: false));
+    if (_cameraWasOnBeforeRecording) {
+      _cameraWasOnBeforeRecording = false;
+      unawaited(_startVideo());
+    }
+    String noticeText;
+    if (path != null) {
+      final uri = await MediaSaver.saveVideoFromPath(path);
+      final length = finished == null
+          ? ''
+          : ' (${GlassesRecording.format(finished.clampedElapsed)})';
+      noticeText = uri != null
+          ? 'Recording finished$length — saved to your gallery (Movies/Farry).'
+          : 'Recording finished$length — but saving it to the gallery failed.';
+    } else {
+      noticeText = 'The recording could not be saved.';
+    }
+    unawaited(Notifications.showActivity('Recording finished', noticeText,
+        done: true));
+    _emit(_state.copyWith(
+      transcripts: [
+        ..._state.transcripts,
+        TranscriptEntry(role: 'notice', text: noticeText, isFinal: true),
+      ],
+    ));
+    _restoreAfterRecording();
+    if (_state.connection == ConnectionStatus.connected) {
+      _client.send(const TextMessage(
+        '(System note: the video recording just finished and was saved to '
+        'the gallery. Tell me so in ONE short sentence, then stop.)',
+      ));
+    }
+  }
 
   /// Start recording on the glasses for the configured duration.
   ///
@@ -1125,14 +1318,39 @@ class LiveController {
     return outcome;
   }
 
+  /// Refreshes the backend's location while a session is live, so "where am
+  /// I?" stays answerable (and current) even hours in.
+  Timer? _locationTimer;
+
   /// Resolve the current location and send it to the backend (best-effort).
   Future<void> _pushLocation() async {
     try {
       final fix = await LocationService.current();
-      if (fix != null) _client.send(LocationUpdateMessage(fix.toJson()));
+      if (fix == null) return;
+      // A fix that resolves BEFORE the socket finishes its handshake would be
+      // silently dropped by send() — which left whole sessions with no
+      // location at all when GPS answered from its warm cache faster than the
+      // connect (seen on device 2026-08-27: Farry "can't see" the location).
+      // The ready-handler re-pushes, so skipping here loses nothing.
+      if (_state.connection != ConnectionStatus.connected) {
+        _log.info('location fix ready before socket — deferred to ready');
+        return;
+      }
+      _client.send(LocationUpdateMessage(fix.toJson()));
     } catch (e) {
       _log.warn('push location failed: $e');
     }
+  }
+
+  /// Push now and keep the fix fresh every 5 minutes while connected.
+  /// Called from the ready handler, so reconnects re-arm it too.
+  void _startLocationUpdates() {
+    _locationTimer?.cancel();
+    unawaited(_pushLocation());
+    _locationTimer = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) => unawaited(_pushLocation()),
+    );
   }
 
   /// Tear down capture, playback, and the socket (keeps objects reusable).
@@ -1140,6 +1358,8 @@ class LiveController {
     // Final save (autosaves already ran during the session), then let the
     // NEXT session open its own history entry.
     _historySaveTimer?.cancel();
+    _locationTimer?.cancel();
+    _locationTimer = null;
     unawaited(ChatHistoryStore.saveSession(_state.transcripts)
         .then((_) => ChatHistoryStore.beginSession()));
     // Hand the phone back its normal audio path (ringtone/media volume, normal
@@ -1197,6 +1417,9 @@ class LiveController {
   void _beginTts() {
     _ttsClear?.cancel();
     _ttsActive = true;
+    // Any gate-open captured up to here belonged to the turn being answered
+    // (or to leaked speaker audio) — never to the NEXT user bubble.
+    _utteranceStartAt = null;
     _ttsBytes = 0;
     _ttsStart = DateTime.now();
     // Safety: never stay muted forever if audio_end is somehow lost.
@@ -1240,11 +1463,25 @@ class LiveController {
           _client.send(const AudioStartMessage());
         }
         _notifyDeviceUpdate();
+        // The socket is open NOW, so this push cannot be dropped — and each
+        // reconnect lands here too, so the fresh backend session (which starts
+        // with no cached location) is re-fed without waiting for the timer.
+        _startLocationUpdates();
       case TranscriptMessage():
         _applyTranscript(msg);
       case AudioStartEvent():
         // Assistant begins speaking — mute the mic until playback drains.
-        _log.info('event: AI started speaking');
+        // The felt-latency number: how long the user waited between their
+        // last heard words and the reply starting, measured on the phone
+        // (so it includes the network legs the backend cannot see).
+        final waited = _turnLastUserWordsAt == null
+            ? null
+            : DateTime.now().difference(_turnLastUserWordsAt!).inMilliseconds;
+        _log.info(
+            'event: AI started speaking'
+            '${waited == null ? '' : ' (${waited}ms after user finished)'}');
+        _turnHeardAt = null;
+        _turnLastUserWordsAt = null;
         _beginTts();
         _emit(_state.copyWith(liveState: LiveState.speaking));
       case AudioEndEvent():
@@ -1288,7 +1525,33 @@ class LiveController {
       case OpenMessagingMessage():
         unawaited(_handleOpenMessaging(msg));
       case UnknownServerMessage():
-        _log.debug('unknown server message: ${msg.type}');
+        if (msg.type == 'session_expired') {
+          // The server ended the session ON PURPOSE (idle timeout or the
+          // max-session cap) and is about to close the socket. Without this
+          // branch the close looked like a network drop, so the app silently
+          // reconnected — and the idle clock started again with nobody
+          // talking, churning sessions (and streaming billable mic audio)
+          // for as long as the app stayed open. End cleanly instead and say
+          // why. The conversation itself is NOT lost: the backend keeps a
+          // resume handle per user, so the next session picks up the context.
+          final reason = (msg.raw['reason'] as String?) ?? 'idle';
+          _log.info('session ended by server (reason: $reason)');
+          _emit(_state.copyWith(transcripts: [
+            ..._state.transcripts,
+            TranscriptEntry(
+              role: 'notice',
+              text: reason == 'idle'
+                  ? 'Session paused — kuch der se koi baat nahi hui. '
+                      'Start dabate hi wahin se continue hoga.'
+                  : 'Session ki time limit poori ho gayi. '
+                      'Start dabate hi wahin se continue hoga.',
+              isFinal: true,
+            ),
+          ]));
+          unawaited(disconnect());
+        } else {
+          _log.debug('unknown server message: ${msg.type}');
+        }
     }
   }
 
@@ -1305,6 +1568,20 @@ class LiveController {
     // only be the assistant's own voice leaking back in. Drop it so it never
     // pollutes the chat or gets treated as a real turn.
     if (msg.role == 'user' && _ttsActive) return;
+
+    // Turn clock: a user transcript delta is proof Farry is hearing the user
+    // RIGHT NOW. First delta of an utterance logs "hearing you" (so silence
+    // in the log means the words never reached the model — mic gate, mute,
+    // or transport); every delta refreshes the felt-latency anchor read when
+    // the reply's audio starts.
+    if (msg.role == 'user' && !msg.isFinal) {
+      final now = DateTime.now();
+      if (_turnHeardAt == null) {
+        _turnHeardAt = now;
+        _log.info('turn: hearing you…');
+      }
+      _turnLastUserWordsAt = now;
+    }
 
     // Remember the assistant's last final line (for echo detection) and log it.
     if (msg.role != 'user' && msg.isFinal) {
@@ -1349,10 +1626,23 @@ class LiveController {
         isFinal: msg.isFinal,
       );
     } else {
+      // A NEW user line is backdated to when the mic gate first heard the
+      // voice — if that anchor is fresh (a stale one is leftover noise from
+      // long before and would make the bubble look absurdly early).
+      DateTime? spokeAt;
+      if (msg.role == 'user') {
+        final started = _utteranceStartAt;
+        _utteranceStartAt = null; // consumed either way
+        if (started != null &&
+            DateTime.now().difference(started) < const Duration(seconds: 20)) {
+          spokeAt = started;
+        }
+      }
       list.add(TranscriptEntry(
         role: msg.role,
         text: msg.text,
         isFinal: msg.isFinal,
+        time: spokeAt,
       ));
     }
     if (list.length > _maxTranscripts) {
@@ -1477,11 +1767,26 @@ class LiveController {
         // the first frame, and the listener ships frames onward from there, so
         // the model gets its picture a beat later instead of never.
         unawaited(captureGlassesPhoto());
-        if (_videoSource is! GlassesCaptureSource) unawaited(grabFrame());
+        if (_videoSource is! GlassesCaptureSource) {
+          // If the camera cannot produce a frame (app backgrounded — Android
+          // takes the camera away — or it's held elsewhere), say so NOW: the
+          // backend tool is sitting in an 8 s frame wait and, without this,
+          // times out and answers blind. grabFrame resolves within ~2 s
+          // either way, so the precise failure beats the timeout by 6 s.
+          unawaited(grabFrame().then((frame) {
+            if (frame == null) {
+              _log.warn('identify: no phone frame — reporting camera_off');
+              _client.send(const CaptureFailedMessage(reason: 'camera_off'));
+            }
+          }).catchError((Object e) {
+            _log.warn('identify: grabFrame failed ($e) — reporting camera_off');
+            _client.send(const CaptureFailedMessage(reason: 'camera_off'));
+          }));
+        }
       case 'record_video':
-        unawaited(startGlassesRecording(afterSpokenReply: true));
+        unawaited(startRecording(afterSpokenReply: true));
       case 'stop_recording':
-        unawaited(stopGlassesRecording());
+        unawaited(stopRecording());
       case 'rotate_camera':
         unawaited(setCameraPortrait(!_state.cameraPortrait));
       case 'enable_bluetooth':
@@ -1827,10 +2132,18 @@ class LiveController {
   }
 
   /// Digits-only number with a country code. Mirrors the backend's
-  /// normalize_phone; falls back to UAE (971) when no code is present.
+  /// normalize_phone; falls back to UAE (971) only when NO code is present.
+  ///
+  /// A contact saved as "+91 98765…" already carries its country code — the
+  /// old version stacked 971 on top of it and every WhatsApp to a non-UAE
+  /// contact went to a number that doesn't exist (user-reported 2026-08-27).
+  /// "+" and the "00" dial prefix are how a number declares its own code.
   String _normalizePhone(String phone, {String defaultCc = '971'}) {
-    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    final raw = phone.trim();
+    final digits = raw.replaceAll(RegExp(r'\D'), '');
     if (digits.isEmpty) return '';
+    if (raw.startsWith('+')) return digits;
+    if (digits.startsWith('00')) return digits.substring(2);
     if (digits.startsWith(defaultCc)) return digits;
     return defaultCc + digits.replaceFirst(RegExp(r'^0+'), '');
   }
@@ -2256,7 +2569,9 @@ class LiveController {
   // ---- Disposal ----------------------------------------------------------
 
   Future<void> dispose() async {
+    await _connectivitySub?.cancel();
     _historySaveTimer?.cancel();
+    _locationTimer?.cancel();
     await ChatHistoryStore.saveSession(_state.transcripts);
     _ttsClear?.cancel();
     _userLogTimer?.cancel();

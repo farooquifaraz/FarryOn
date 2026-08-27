@@ -1,9 +1,12 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../capture/device_registry.dart';
 import '../../core/config.dart';
+import '../../core/config_store.dart';
 import '../../core/theme.dart';
 import '../../core/ui.dart';
 import '../../data/email_probe.dart';
@@ -26,7 +29,9 @@ import 'subscription_screen.dart';
 /// account did not exist, and the sign-in that had just worked stopped working.
 const String kCloudHost = 'farryon.izylrn.com';
 const int kCloudPort = 443;
-const String _kLocalHost = '192.168.1.107';
+// First-run fallback ONLY — after the first non-cloud save, the "Local (Dev)"
+// chip restores the user's own last-saved host (ConfigStore.lastLocalHost).
+const String _kLocalHost = '192.168.100.76';
 const int _kLocalPort = 8000;
 
 bool _isCloud(AppConfig c) =>
@@ -1036,16 +1041,25 @@ class _ServerPageState extends ConsumerState<_ServerPage> {
       });
 
   void _useLocal() => setState(() {
-        _hostCtl.text = _kLocalHost;
-        _portCtl.text = '$_kLocalPort';
+        // Restore the last dev box the user actually saved (see ConfigStore.
+        // saveLastLocal). The hard-coded default only matters before any
+        // local save has ever happened — after that the chip follows the user.
+        _hostCtl.text = ConfigStore.lastLocalHost() ?? _kLocalHost;
+        _portCtl.text = '${ConfigStore.lastLocalPort() ?? _kLocalPort}';
         _secure = false;
       });
 
   void _save() {
     final cfg = ref.read(configProvider);
+    final host = _hostCtl.text.trim();
     final port = int.tryParse(_portCtl.text.trim()) ?? cfg.port;
+    // A non-cloud save IS the user telling us where their dev box lives —
+    // remember it so the "Local (Dev)" chip brings it back on any network.
+    if (!_cloud && host.isNotEmpty) {
+      unawaited(ConfigStore.saveLastLocal(host, port));
+    }
     ref.read(configProvider.notifier).state = cfg.copyWith(
-      host: _hostCtl.text.trim(),
+      host: host,
       port: port,
       secure: _secure,
     );

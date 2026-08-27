@@ -109,8 +109,17 @@ class WebSocketLiveClient {
   final ChannelFactory _channelFactory;
 
   // Heartbeat / reconnect tuning (from PROTOCOL.md §7).
-  static const Duration _pingInterval = Duration(seconds: 15);
-  static const Duration _pongTimeout = Duration(seconds: 10);
+  // 5 s pings serve two masters. Detection: three consecutive unanswered
+  // pings (~15 s) mark the link dead — same time-to-detect as the old
+  // 15 s ping + 10 s watchdog. Keep-alive: Samsung's Wi-Fi power-save idles
+  // the radio inside a 15 s silence and the FIRST packet afterwards can
+  // stall for seconds — the old single-pong 10 s watchdog then killed a
+  // perfectly healthy session (log-proven 2026-08-26: sessions died ~30 s
+  // after every reply, "reason: normal", while long idle stretches
+  // survived). Frequent tiny pings keep the radio out of deep power-save
+  // and one late pong is no longer a death sentence.
+  static const Duration _pingInterval = Duration(seconds: 5);
+  static const int _maxPongMisses = 3;
   static const Duration _baseBackoff = Duration(milliseconds: 500);
   static const Duration _maxBackoff = Duration(seconds: 8);
   // If the socket opens but the server never sends `ready`, recover instead of
@@ -137,7 +146,12 @@ class WebSocketLiveClient {
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _socketSub;
   Timer? _pingTimer;
-  Timer? _pongTimer;
+
+  /// Whether the last ping is still unanswered, and how many in a row have
+  /// gone unanswered. Replaces the old one-shot pong watchdog — see the note
+  /// on [_pingInterval].
+  bool _awaitingPong = false;
+  int _pongMisses = 0;
   Timer? _reconnectTimer;
   Timer? _readyTimer;
 
@@ -431,28 +445,52 @@ class WebSocketLiveClient {
 
   void _startHeartbeat() {
     _pingTimer?.cancel();
-    _pongTimer?.cancel();
+    _awaitingPong = false;
+    _pongMisses = 0;
     _pingTimer = Timer.periodic(_pingInterval, (_) => _sendPing());
     _sendPing(); // prime immediately so a dead link is caught fast
   }
 
   void _sendPing() {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    send(PingMessage(now));
-    // Arm (or re-arm) the pong watchdog: no pong in 10 s ⇒ drop + reconnect.
-    _pongTimer?.cancel();
-    _pongTimer = Timer(_pongTimeout, () {
-      _log.warn('no pong within ${_pongTimeout.inSeconds}s → reconnecting');
-      _handleDrop();
-    });
+    // The ping cadence IS the watchdog: an unanswered ping counts as a miss
+    // when the next one fires, and only a full streak kills the link. One
+    // slow pong (Wi-Fi radio waking from power-save) no longer tears down a
+    // healthy session — the old 10 s one-shot timer did exactly that.
+    if (_awaitingPong) {
+      _pongMisses++;
+      if (_pongMisses >= _maxPongMisses) {
+        _log.warn(
+            '$_pongMisses pings unanswered '
+            '(~${(_pongMisses * _pingInterval.inSeconds)}s) → reconnecting');
+        _handleDrop();
+        return;
+      }
+      _log.info('pong late ($_pongMisses/$_maxPongMisses misses)');
+    }
+    _awaitingPong = true;
+    send(PingMessage(DateTime.now().millisecondsSinceEpoch));
   }
 
   void _onPong() {
-    _pongTimer?.cancel();
-    _pongTimer = null;
+    _awaitingPong = false;
+    _pongMisses = 0;
   }
 
   // ---- Reconnect with exponential backoff + jitter -----------------------
+
+  /// The OS says the network just changed (Wi-Fi back, switched networks):
+  /// if we're sitting out a backoff delay, reconnect NOW instead. Saves the
+  /// user the rest of the backoff — and, worse, the next pong-miss cycle —
+  /// after every Wi-Fi flap. Only acts in `reconnecting` (backoff-timer
+  /// pending, no socket): nudging an in-flight connect would double-connect.
+  void nudge() {
+    if (_disposed || !_started) return;
+    if (_currentStatus != ConnectionStatus.reconnecting) return;
+    _log.info('network changed → reconnecting immediately');
+    _backoffAttempt = 0;
+    _reconnectTimer?.cancel();
+    _connect();
+  }
 
   void _scheduleReconnect() {
     if (_disposed || !_started) return;
@@ -477,11 +515,11 @@ class WebSocketLiveClient {
 
   Future<void> _teardownSocket({int? closeCode}) async {
     _pingTimer?.cancel();
-    _pongTimer?.cancel();
     _readyTimer?.cancel();
     _pingTimer = null;
-    _pongTimer = null;
     _readyTimer = null;
+    _awaitingPong = false;
+    _pongMisses = 0;
 
     final sub = _socketSub;
     final channel = _channel;

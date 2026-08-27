@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -54,6 +55,16 @@ class SessionMicService : Service() {
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
+
+    // The partial wake-lock keeps the CPU alive but NOT the Wi-Fi radio:
+    // Samsung's power-save drops an idle radio into PS-poll mode between the
+    // user's utterances, stalling the WebSocket's TCP long enough that pongs
+    // miss their 10 s watchdog — the app then tears the session down and
+    // reconnects every few dozen seconds (log-proven 2026-08-26: three
+    // "reason: normal" reconnects inside one minute). LOW_LATENCY (Q+) is
+    // exactly the mode built for realtime audio; FULL_HIGH_PERF is the
+    // closest older equivalent.
+    private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -117,6 +128,7 @@ class SessionMicService : Service() {
             return START_NOT_STICKY
         }
         acquireWakeLock()
+        acquireWifiLock()
         return START_STICKY
     }
 
@@ -132,6 +144,27 @@ class SessionMicService : Service() {
         }
     }
 
+    private fun acquireWifiLock() {
+        if (wifiLock?.isHeld == true) return
+        try {
+            val wm = applicationContext
+                .getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            } else {
+                @Suppress("DEPRECATION")
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            }
+            wifiLock = wm.createWifiLock(mode, "farry:session").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (e: Exception) {
+            // Best-effort, like the wake-lock: without it the session still
+            // works, just with the reconnect churn this exists to prevent.
+        }
+    }
+
     override fun onDestroy() {
         try {
             if (wakeLock?.isHeld == true) wakeLock?.release()
@@ -139,6 +172,12 @@ class SessionMicService : Service() {
             // Already released — ignore.
         }
         wakeLock = null
+        try {
+            if (wifiLock?.isHeld == true) wifiLock?.release()
+        } catch (e: Exception) {
+            // Already released — ignore.
+        }
+        wifiLock = null
         super.onDestroy()
     }
 }

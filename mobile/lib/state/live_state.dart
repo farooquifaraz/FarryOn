@@ -5,11 +5,12 @@ import '../protocol/protocol.dart';
 
 /// One line of conversation transcript shown in the UI.
 class TranscriptEntry {
-  const TranscriptEntry({
+  TranscriptEntry({
     required this.role,
     required this.text,
     required this.isFinal,
-  });
+    DateTime? time,
+  }) : time = time ?? DateTime.now();
 
   /// `"user"`, `"assistant"`, or `"notice"`.
   ///
@@ -21,6 +22,13 @@ class TranscriptEntry {
   final String text;
   final bool isFinal;
 
+  /// When this line FIRST appeared: for a user line, the moment Farry began
+  /// hearing it; for an assistant line, the moment the reply began. The gap
+  /// between consecutive bubbles is therefore the felt latency — which is why
+  /// the chat shows these times (user-asked 2026-08-27). Streaming updates
+  /// keep the original time (see [copyWith]).
+  final DateTime time;
+
   bool get isUser => role == 'user';
   bool get isNotice => role == 'notice';
 
@@ -28,6 +36,7 @@ class TranscriptEntry {
         role: role,
         text: text ?? this.text,
         isFinal: isFinal ?? this.isFinal,
+        time: time,
       );
 }
 

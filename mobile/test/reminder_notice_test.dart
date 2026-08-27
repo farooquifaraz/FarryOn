@@ -75,7 +75,7 @@ void main() {
       // She said the reminder *was* set. Putting the contradiction in her voice
       // reads as her changing her mind, not as the phone reporting something
       // she cannot see.
-      await pump(tester, const [
+      await pump(tester, [
         TranscriptEntry(role: 'assistant', text: "OK. I've set a reminder.", isFinal: true),
         TranscriptEntry(role: 'notice', text: "This reminder won't fire.", isFinal: true),
       ]);
@@ -87,7 +87,7 @@ void main() {
     });
 
     testWidgets('ordinary lines are untouched', (tester) async {
-      await pump(tester, const [
+      await pump(tester, [
         TranscriptEntry(role: 'user', text: 'Remind me to drink water', isFinal: true),
         TranscriptEntry(role: 'assistant', text: 'Done.', isFinal: true),
       ]);
@@ -100,15 +100,15 @@ void main() {
 
   group('the entry model', () {
     test('a notice is neither the user nor an ordinary line', () {
-      const notice = TranscriptEntry(role: 'notice', text: 'x', isFinal: true);
+      final notice = TranscriptEntry(role: 'notice', text: 'x', isFinal: true);
 
       expect(notice.isNotice, isTrue);
       expect(notice.isUser, isFalse);
     });
 
     test('assistant and user lines are not notices', () {
-      const user = TranscriptEntry(role: 'user', text: 'x', isFinal: true);
-      const farry = TranscriptEntry(role: 'assistant', text: 'x', isFinal: true);
+      final user = TranscriptEntry(role: 'user', text: 'x', isFinal: true);
+      final farry = TranscriptEntry(role: 'assistant', text: 'x', isFinal: true);
 
       expect(user.isNotice, isFalse);
       expect(farry.isNotice, isFalse);

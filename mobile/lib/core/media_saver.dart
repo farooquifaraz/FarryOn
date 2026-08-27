@@ -12,6 +12,24 @@ class MediaSaver {
   static const MethodChannel _channel = MethodChannel('com.farryon/media');
   static final _log = Logger('MediaSaver');
 
+  /// Move the video file at [path] into the gallery (MediaStore →
+  /// `Movies/Farry`). Returns the saved content URI, or null on failure.
+  /// The temp file is deleted by the native side once copied.
+  static Future<String?> saveVideoFromPath(String path, {String? name}) async {
+    if (path.isEmpty) return null;
+    try {
+      final uri = await _channel.invokeMethod<String>('saveVideoToGallery', {
+        'path': path,
+        'name': name ?? 'Farry_${DateTime.now().millisecondsSinceEpoch}.mp4',
+      });
+      _log.info('saved recording to gallery ($path)');
+      return uri;
+    } catch (e) {
+      _log.warn('gallery video save failed: $e');
+      return null;
+    }
+  }
+
   /// Persist [jpeg] to the gallery. Returns the saved content URI, or null on
   /// failure. [name] defaults to a timestamped `Farry_<ms>.jpg`.
   static Future<String?> saveImage(Uint8List jpeg, {String? name}) async {

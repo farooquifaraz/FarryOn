@@ -66,6 +66,8 @@ dependencies:
   share_plus: ^10.0.0
   path_provider: ^2.1.3
   flutter_tts: ^4.2.5
+  connectivity_plus: ^7.3.1
+  record: ^6.0.0
 
 dev_dependencies:
   flutter_test:
@@ -81,6 +83,8 @@ flutter:
   assets:
     # The brand mark, shown on the auth screens.
     - assets/logo/embossed-mark-1024.png
+    # The winged-orb emblem, shown at the centre of the live-screen orb.
+    - assets/icon/farryon_icon.png
 
 # App icon — the FARRYON winged-orb emblem. Source lives at the path below;
 # `dart run flutter_launcher_icons` writes the mipmaps + adaptive icon.

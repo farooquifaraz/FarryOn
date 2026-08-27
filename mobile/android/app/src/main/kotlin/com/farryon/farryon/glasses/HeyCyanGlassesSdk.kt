@@ -15,6 +15,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.MediaStore
@@ -191,9 +192,23 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     override val sdkVersion = "1.0.2"
 
     private val main = Handler(Looper.getMainLooper())
+
+    /**
+     * Vendor SDK link operations run HERE, never on main. connectDirectly /
+     * unBindDevice / setNeedConnect are synchronous binder-heavy calls inside
+     * the .aar; with the glasses off or out of range they stall for tens of
+     * seconds, and on main that froze the whole app — logcat 2026-08-27:
+     * "Choreographer: Skipped 2699 frames" (~45 s) during the cold-start
+     * auto-reconnect. That one freeze also explained "no TTS audio": every
+     * platform-channel call (flutter_sound start/feed) queues behind main.
+     */
+    private val bleThread = HandlerThread("glasses-ble").apply { start() }
+    private val ble = Handler(bleThread.looper)
+
     private var listener: GlassesSdkListener? = null
 
     /** MAC handed to the latest connect(); used for the connected event. */
+    @Volatile
     private var pendingMac: String? = null
     private var receiverRegistered = false
 
@@ -203,6 +218,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      * 2026-07-05), so transitions are deduped for the Lab console while the
      * raw callbacks stay visible in logcat.
      */
+    @Volatile
     private var lastConnectionState: String? = null
 
     /**
@@ -211,6 +227,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      * unBindDevice (34 ms after, measured 2026-07-05) and would otherwise
      * resurrect a phantom "connected" in the Lab.
      */
+    @Volatile
     private var userDisconnected = false
 
     /** Lab toggle state, applied to the SDK on every fresh link (guide §3). */
@@ -267,6 +284,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     private var lastWifiSpeedKbps = 0.0
 
     /** Pending "still connecting?" check — cleared on connect/disconnect. */
+    @Volatile
     private var connectWatchdog: Runnable? = null
 
     /** A connect attempt is in flight exactly while its watchdog is armed.
@@ -349,6 +367,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     /** Attempts used for the in-flight connect (1 = first try). One silent
      *  retry recovers a slow/failed connect (e.g. a degraded BLE stack after
      *  heavy connect/disconnect cycling) without the user doing anything. */
+    @Volatile
     private var connectAttempt = 0
 
     /**
@@ -358,12 +377,17 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      * is also safe on a healthy stack (unbind of nothing is a no-op).
      */
     private fun cleanSlateConnect(mac: String) {
-        try {
-            BleOperateManager.getInstance().unBindDevice()
-        } catch (e: Exception) {
-            Log.i(TAG, "pre-connect unbind: $e")
+        // Every vendor call below runs on the BLE thread: with the glasses
+        // off/out of range these stall for tens of seconds, and on main that
+        // froze the app (and its audio) — see the note on [bleThread].
+        ble.post {
+            try {
+                BleOperateManager.getInstance().unBindDevice()
+            } catch (e: Exception) {
+                Log.i(TAG, "pre-connect unbind: $e")
+            }
         }
-        main.postDelayed({
+        ble.postDelayed({
             // Abandon if the user disconnected / switched device / lost
             // Bluetooth meanwhile.
             if (userDisconnected || pendingMac != mac) return@postDelayed
@@ -453,7 +477,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                                     "${BT_ON_RECONNECT_DELAY_MS} ms"
                             )
                         )
-                        main.postDelayed({
+                        // Off-main (see [bleThread]) — connectDirectly with the
+                        // glasses out of range stalls for tens of seconds.
+                        ble.postDelayed({
                             if (userDisconnected || pendingMac != mac) {
                                 return@postDelayed
                             }
@@ -467,7 +493,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                                 Log.i(TAG, "setReConnectMac(bt-on): $e")
                             }
                             BleOperateManager.getInstance().connectDirectly(mac)
-                            armConnectWatchdog()
+                            main.post { armConnectWatchdog() }
                         }, BT_ON_RECONNECT_DELAY_MS)
                     }
                 }
@@ -817,10 +843,12 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         if (op.isConnected && pendingMac != null && pendingMac != mac) {
             // Switching devices (seen on hardware: user connected to a TV,
             // then tapped the glasses): tear the old link down first or
-            // connectDirectly silently goes nowhere.
+            // connectDirectly silently goes nowhere. Off-main — see [bleThread].
             Log.i(TAG, "switching device: unbinding $pendingMac first")
-            op.setNeedConnect(false)
-            op.unBindDevice()
+            ble.post {
+                op.setNeedConnect(false)
+                op.unBindDevice()
+            }
         }
         // Reset the dedupe so this attempt emits a fresh "connected"
         // transition even if the previous link never reported disconnected.
@@ -830,11 +858,13 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         // HeyCyan parity: hand the vendor SDK its auto-reconnect target. Without
         // this, setNeedConnect(true) alone has no MAC to reattach to after a
         // cold start (the official app sets it on every connect).
-        try {
-            BleOperateManager.getInstance().setReConnectMac(mac)
-            Log.i(TAG, "setReConnectMac → $mac")
-        } catch (e: Throwable) {
-            Log.i(TAG, "setReConnectMac: $e") // method absent/changed → app still works
+        ble.post {
+            try {
+                BleOperateManager.getInstance().setReConnectMac(mac)
+                Log.i(TAG, "setReConnectMac → $mac")
+            } catch (e: Throwable) {
+                Log.i(TAG, "setReConnectMac: $e") // method absent/changed → app still works
+            }
         }
         connectAttempt = 1
         // Clean slate (unbind → pause → connect): recovers a wedged pending
@@ -852,22 +882,26 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         // (the sample's disconnect button and the PDF's mapping) is the real
         // teardown.
         userDisconnected = true
-        BleOperateManager.getInstance().setNeedConnect(false)
-        // Empty target = the vendor SDK's own background reconnect stands down
-        // (HeyCyan skips reconnect when the address is empty) — a user's
-        // Disconnect/Unpair must stay disconnected.
-        try {
-            BleOperateManager.getInstance().setReConnectMac("")
-        } catch (e: Throwable) {
-            Log.i(TAG, "clear setReConnectMac: $e")
-        }
-        BleOperateManager.getInstance().unBindDevice()
         pendingMac = null
+        // Vendor teardown off-main — see [bleThread]; ordering within the BLE
+        // thread is preserved (setNeedConnect → clear target → unbind).
+        ble.post {
+            BleOperateManager.getInstance().setNeedConnect(false)
+            // Empty target = the vendor SDK's own background reconnect stands
+            // down (HeyCyan skips reconnect when the address is empty) — a
+            // user's Disconnect/Unpair must stay disconnected.
+            try {
+                BleOperateManager.getInstance().setReConnectMac("")
+            } catch (e: Throwable) {
+                Log.i(TAG, "clear setReConnectMac: $e")
+            }
+            BleOperateManager.getInstance().unBindDevice()
+        }
     }
 
     override fun setAutoReconnect(enabled: Boolean) {
         autoReconnectEnabled = enabled
-        BleOperateManager.getInstance().setNeedConnect(enabled)
+        ble.post { BleOperateManager.getInstance().setNeedConnect(enabled) }
         emit("deviceEvent", mapOf("hex" to "autoReconnect=$enabled"))
     }
 

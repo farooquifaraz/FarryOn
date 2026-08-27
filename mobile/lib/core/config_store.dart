@@ -154,6 +154,31 @@ class ConfigStore {
   static String? _nonBlank(String? v) =>
       (v == null || v.trim().isEmpty) ? null : v;
 
+  // ---- Last-used local server ---------------------------------------------
+  //
+  // The Settings "Local (Dev)" chip used to fill a hard-coded IP — correct for
+  // exactly one Wi-Fi network, silently wrong on every other. Instead we
+  // remember the last non-cloud server the user actually saved, so the chip
+  // restores THEIR dev box, whatever network they're on today. The hard-coded
+  // value survives only as the first-run fallback before any local save.
+  static const String _lastLocalHostKey = 'cfg.server.lastLocalHost';
+  static const String _lastLocalPortKey = 'cfg.server.lastLocalPort';
+
+  /// The last non-cloud host the user saved, or null before any local save.
+  static String? lastLocalHost() =>
+      _nonBlank(_prefs?.getString(_lastLocalHostKey));
+
+  /// The port that went with [lastLocalHost].
+  static int? lastLocalPort() => _prefs?.getInt(_lastLocalPortKey);
+
+  /// Record a non-cloud server the user just saved (see the Server sheet).
+  static Future<void> saveLastLocal(String host, int port) async {
+    final p = _prefs;
+    if (p == null || host.trim().isEmpty) return;
+    await p.setString(_lastLocalHostKey, host.trim());
+    await p.setInt(_lastLocalPortKey, port);
+  }
+
   /// Whether the first-run permission introduction has already been shown.
   static bool permissionIntroSeen() =>
       _prefs?.getBool(_permissionIntroKey) ?? false;
