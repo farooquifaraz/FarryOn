@@ -519,7 +519,14 @@ class Session:
             )
 
         def _keep(handle: str, _uid: int = uid) -> None:
+            first = _uid not in _RESUME_HANDLES
             _RESUME_HANDLES[_uid] = (handle, time.monotonic())
+            if first:
+                # Once per user per process: proves updates are FLOWING (their
+                # absence at 17:51 on 2026-08-27 was undiagnosable without it).
+                logger.info(
+                    "session.resume_handle_stored", session_id=self.session_id
+                )
 
         gw.on_resume_handle = _keep
 
