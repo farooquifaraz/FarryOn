@@ -348,6 +348,11 @@ class Settings(BaseSettings):
     context_compression_enabled: bool = Field(default=True)
     context_trigger_tokens: int = Field(default=16000)
     context_target_tokens: int = Field(default=8000)
+    # Affective dialog (v1alpha-only): the voice adapts its tone/emotion to the
+    # user's — the "real ChatGPT/Gemini app" feel Faraz asked for (2026-08-27).
+    # When on, the Gemini connect ladder tries v1alpha first (the only channel
+    # that accepts the field); turning this off restores the v1beta-first order.
+    affective_dialog_enabled: bool = Field(default=True)
     # Bound runaway sessions. On reaching a limit the server sends a JSON
     # `session_expired` event and closes; the app reconnects fresh (cheap,
     # empty context). 0 disables a cap. Defaults are generous so normal use

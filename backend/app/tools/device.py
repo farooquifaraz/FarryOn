@@ -220,12 +220,15 @@ class RecordVideoTool(Tool):
 
     name = "record_video"
     description = (
-        "Start recording VIDEO on the user's smart glasses. Call this when "
-        "they ask to record a video / start recording / video banao / video "
-        "record karo. Only for video — a request for a photo, or a question "
-        "about what they are looking at, is capture_photo instead. Nothing is "
-        "recorded unless this is called. What to tell the user comes back in "
-        "the result."
+        "Start recording VIDEO — on the user's smart glasses when they are "
+        "connected, otherwise with the phone's camera. Call ONLY when the "
+        "user has CLEARLY and UNAMBIGUOUSLY asked to record a video ('video "
+        "banao', 'video record karo', 'start recording') AND you have "
+        "confirmed and they said yes — recording captures their surroundings, "
+        "so a garbled or half-heard phrase must NEVER start one. Only for "
+        "video — a request for a photo, or a question about what they are "
+        "looking at, is capture_photo instead. Nothing is recorded unless "
+        "this is called. What to tell the user comes back in the result."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -248,6 +251,8 @@ class RecordVideoTool(Tool):
         "disconnected": "the glasses disconnected",
         "capture_timeout": "the glasses didn't respond",
         "already_recording": "the glasses were already recording",
+        # Phone-camera fallback path (no glasses connected).
+        "camera_off": "the phone camera couldn't be opened",
     }
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
@@ -279,10 +284,11 @@ class RecordVideoTool(Tool):
         return {
             "started": True,
             "_instruction": (
-                "The recording is now running on the glasses. Say so in ONE "
-                "short sentence — it stops on its own, and they can tap stop "
-                "on screen — then stop talking. Your microphone is closed "
-                "while it records, so do not ask a follow-up question."
+                "The recording is now running (on the glasses when connected, "
+                "otherwise the phone camera). Say so in ONE short sentence — "
+                "it stops on its own, and they can tap stop on screen — then "
+                "stop talking. Your microphone is closed while it records, so "
+                "do not ask a follow-up question."
             ),
         }
 

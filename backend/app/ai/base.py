@@ -119,6 +119,19 @@ class AIGateway(abc.ABC):
     async def send_video(self, jpeg: bytes, ts_ms: int | None = None) -> None:
         """Send a single input video frame (JPEG)."""
 
+    async def attach_image(self, jpeg: bytes) -> None:
+        """Inject a still image INTO the current conversation context.
+
+        ``send_video`` feeds the provider's REALTIME stream — which the model
+        samples while listening, and may not incorporate while it is suspended
+        mid-turn awaiting a tool response. A frame delivered for a vision tool
+        landed there and the model then answered "I can't see anything" over a
+        perfectly good picture (device-proven 2026-08-27, twice). This path
+        adds the image as conversation content instead, which the model
+        reliably reads on its very next continuation. Default: no-op (a
+        provider without the hook keeps its old behavior).
+        """
+
     @abc.abstractmethod
     async def send_text(self, text: str) -> None:
         """Send typed user input as a turn."""

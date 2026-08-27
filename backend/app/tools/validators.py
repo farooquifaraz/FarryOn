@@ -70,9 +70,19 @@ def normalize_phone(phone: object, default_cc: str) -> str:
     existing callers/tests are unaffected — :func:`valid_phone` adds the new
     length sanity check on top of this.
     """
-    digits = re.sub(r"\D", "", phone if isinstance(phone, str) else "")
+    raw = phone if isinstance(phone, str) else ""
+    digits = re.sub(r"\D", "", raw)
     if not digits:
         return ""
+    # A number that ARRIVED with its country code must keep it. Without this,
+    # any non-UAE contact ("+91 98765…") got the default code stacked on top
+    # ("97191…") and every WhatsApp went to a number that doesn't exist
+    # (user-reported 2026-08-27). "+" and the "00" dial prefix are the two
+    # ways a number declares its own code.
+    if raw.strip().startswith("+"):
+        return digits
+    if digits.startswith("00"):
+        return digits[2:]
     if digits.startswith(default_cc):
         return digits
     return default_cc + digits.lstrip("0")

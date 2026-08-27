@@ -28,12 +28,20 @@ logger = get_logger(__name__)
 
 
 def normalize_phone(phone: str, default_cc: str) -> str:
-    """Digits-only E.164-ish number with a country code (no '+')."""
-    digits = re.sub(r"\D", "", phone or "")
+    """Digits-only E.164-ish number with a country code (no '+').
+
+    Kept behaviour-identical to ``validators.normalize_phone`` — including the
+    2026-08-27 rule: a number that arrived with "+" or the "00" prefix already
+    carries its own country code and must NOT get the default stacked on top.
+    """
+    raw = phone or ""
+    digits = re.sub(r"\D", "", raw)
     if not digits:
         return ""
-    # If it already starts with a country code keep it; else prepend default and
-    # drop a leading national 0.
+    if raw.strip().startswith("+"):
+        return digits
+    if digits.startswith("00"):
+        return digits[2:]
     if digits.startswith(default_cc):
         return digits
     return default_cc + digits.lstrip("0")

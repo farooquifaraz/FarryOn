@@ -39,6 +39,16 @@ CAPTURE_FAILURE_MESSAGES: dict[str, str] = {
         "The photo command didn't reach the glasses. Ask the user to check "
         "the glasses connection and try again."
     ),
+    # Phone path: the app tried to open the camera for this very question and
+    # couldn't — it is in the background (Android takes the camera away) or
+    # the camera is held by another app. Reported by the client so the tool
+    # answers in ~2 s with the real cause instead of sitting out the full
+    # frame budget and answering blind.
+    "camera_off": (
+        "The phone camera couldn't be opened just now — the app may be in "
+        "the background. Ask the user to bring the app to the front (or "
+        "switch to the glasses camera) and ask again."
+    ),
 }
 
 #: Fallback for unknown/missing reason codes (older app builds, plain timeout).

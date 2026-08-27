@@ -83,6 +83,15 @@ _VOICE_FLUSH_EVERY_S = 15.0
 #: as it ran. Postgres would have felt that a great deal more than SQLite did.
 _USAGE_RETRY_AFTER_S = 30.0
 
+#: Last Gemini session-resumption handle per authed user, with the monotonic
+#: time it was issued. A NEW session within the TTL re-attaches the previous
+#: conversation's context — so an idle-expired session or a network drop no
+#: longer wipes Farry's memory (Faraz's "after long time... no response, and
+#: everything forgotten" report, 2026-08-27). In-memory on purpose: handles are
+#: short-lived provider state, not durable user data.
+_RESUME_HANDLES: dict[int, tuple[str, float]] = {}
+_RESUME_TTL_S = 30 * 60.0
+
 
 class Session:
     """Owns the lifecycle and concurrency for a single live connection."""
@@ -141,6 +150,20 @@ class Session:
         # sent vs how many actually reached the model (the gate drops the rest).
         self._frames_in_video: int = 0
         self._frames_sent_video: int = 0
+        # Turn timing (agent mode). Monotonic anchors for the per-turn
+        # "turn.timing" log line and the farryon_turn_* histograms — the
+        # instrumentation that answers "when did Farry hear me, and how long
+        # was I waiting?". `_t_user_last` is the newest user-transcript delta,
+        # the closest observable stand-in for "the user stopped speaking".
+        self._turn_index: int = 0
+        #: When the last INPUT_AUDIO frame arrived — drives the audio.resumed
+        #: gap log (input-side latency evidence).
+        self._last_audio_frame_at: float = 0.0
+        self._t_user_first: float = 0.0
+        self._t_user_last: float = 0.0
+        self._t_reply_started: float = 0.0
+        self._t_first_audio_sent: float = 0.0
+        self._turn_tools: int = 0
         # Cost caps: session start + last real user activity (audio/text), used
         # by the watchdog to end runaway or forgotten-open sessions.
         self._session_started: float = time.monotonic()
@@ -238,6 +261,7 @@ class Session:
                 self._gateway = self._gateway_factory(
                     self._resolve_provider(), prompt
                 )
+                self._wire_session_resume()
 
             try:
                 await self._gateway.connect()
@@ -281,6 +305,7 @@ class Session:
                         self._gateway = self._gateway_factory(
                             default_provider, prompt
                         )
+                        self._wire_session_resume()
                         await self._gateway.connect()
                     except Exception as exc2:  # noqa: BLE001
                         await self._send_error(
@@ -301,6 +326,28 @@ class Session:
                     )
                     reason = "connect_failed"
                     return
+            # Resume insurance: the resumed context's TAIL is the previous
+            # conversation's last exchange — often "end the session" / a
+            # confirmed action. Without this note the model can re-act on that
+            # stale instruction the moment fresh audio arrives (suspected on
+            # device 2026-08-27: end_session fired 20s into a resumed session
+            # with no turn heard). Silent: turn_complete=False never speaks.
+            if getattr(self, "_resumed_from_handle", False):
+                note_fn = getattr(self._gateway, "send_silent_note", None)
+                if note_fn is not None:
+                    await note_fn(
+                        "(System note: this is a NEW connection that resumed "
+                        "the previous conversation's context for continuity. "
+                        "Every request before this note is ALREADY handled — "
+                        "do NOT re-execute any earlier instruction (ending "
+                        "the session, recording, sending, or any other tool "
+                        "call) unless the user asks again AFTER this note. "
+                        "Wait for the user to speak. Do not respond to this "
+                        "note.)"
+                    )
+                    logger.info(
+                        "session.resume_note_sent", session_id=self.session_id
+                    )
             if not await self._persist_session_start():
                 # Suspended, deleted, or force-logged-out since the token was
                 # minted. Say so and close rather than send `ready`: the app
@@ -446,6 +493,35 @@ class Session:
                     requested=requested,
                 )
         return None
+
+    def _wire_session_resume(self) -> None:
+        """Hand a resumption-capable gateway this user's last handle.
+
+        Duck-typed: only a gateway exposing ``resume_handle`` (Gemini) takes
+        part — mock/OpenAI/grok are untouched. Keyed by the AUTHED user id so a
+        handle can never leak one user's conversation into another's session;
+        anonymous sessions get no continuity. Within the TTL, the new Gemini
+        connection re-attaches the previous conversation's context, so a
+        reconnect or an idle-expiry restart continues where the user left off.
+        """
+        uid = self._authed_user_id
+        gw = self._gateway
+        if uid is None or not hasattr(gw, "resume_handle"):
+            return
+        entry = _RESUME_HANDLES.get(uid)
+        if entry is not None and time.monotonic() - entry[1] < _RESUME_TTL_S:
+            gw.resume_handle = entry[0]
+            self._resumed_from_handle = True
+            logger.info(
+                "session.resume_handle_applied",
+                session_id=self.session_id,
+                age_s=int(time.monotonic() - entry[1]),
+            )
+
+        def _keep(handle: str, _uid: int = uid) -> None:
+            _RESUME_HANDLES[_uid] = (handle, time.monotonic())
+
+        gw.on_resume_handle = _keep
 
     # -- Handshake ------------------------------------------------------------
 
@@ -602,6 +678,22 @@ class Session:
         if tag == FrameTag.INPUT_AUDIO:
             metrics.FRAMES_IN.labels(kind="audio").inc()
             metrics.AUDIO_BYTES_IN.inc(len(payload))
+            now_audio = time.monotonic()
+            # Input-lag evidence: mic audio streams every 20-100 ms, so a gap
+            # followed by a burst means the CLIENT held the audio back (mic
+            # gate learning the room, echo-guard tail, capture stall) — the
+            # user's "Farry heard me late". One log line per resume makes the
+            # exact hold visible instead of argued about.
+            if (
+                self._last_audio_frame_at > 0.0
+                and now_audio - self._last_audio_frame_at > 1.5
+            ):
+                logger.info(
+                    "audio.resumed",
+                    session_id=self.session_id,
+                    gap_ms=int((now_audio - self._last_audio_frame_at) * 1000),
+                )
+            self._last_audio_frame_at = now_audio
             self._last_activity = time.monotonic()  # real user turn (idle reset)
             # Translate audio is billed to its OWN meter, never to
             # `voice_seconds`: that is the assistant's allowance, and half an
@@ -674,6 +766,14 @@ class Session:
         if mtype == "text":
             text = (message.get("text") or "").strip()
             if text:
+                # A typed turn never produces user-transcript deltas, so
+                # anchor the turn clock here — response_ms then measures
+                # "send tapped → first reply audio", same meaning as voice.
+                if self._mode == "agent":
+                    now = time.monotonic()
+                    if self._t_user_first == 0.0:
+                        self._t_user_first = now
+                    self._t_user_last = now
                 await self._send_state("thinking")
                 # A typed turn has no audio VAD, so give the model the current
                 # camera view for "what is this?"-style questions even when
@@ -835,6 +935,18 @@ class Session:
             bytes=len(jpeg),
         )
         await self._gateway.send_video(jpeg, ts_ms=ts_ms)
+        # A frame a vision tool (or a typed turn) is waiting on must ALSO go in
+        # as conversation content: the realtime stream alone is not reliably
+        # incorporated while the model sits suspended mid-turn — it answered
+        # "I can't see anything" over a delivered picture (device-proven
+        # 2026-08-27). Streaming-gate frames stay realtime-only; doubling every
+        # continuous frame into the transcript would balloon the context.
+        if reason in ("awaited", "typed_turn", "on_turn"):
+            # getattr: a gateway without the hook (a provider that predates
+            # it, or a test double) keeps its old realtime-only behavior.
+            attach = getattr(self._gateway, "attach_image", None)
+            if attach is not None:
+                await attach(jpeg)
 
     async def _attach_frame_if_fresh(self) -> None:
         """Forward the latest cached camera frame once, if it is recent.
@@ -860,8 +972,60 @@ class Session:
     async def _handle_interrupt(self) -> None:
         """Barge-in: cancel TTS/generation and reset state to listening."""
         logger.info("interrupt", session_id=self.session_id)
+        if self._mode == "agent":
+            self._log_turn_timing(outcome="interrupted")
         await self._gateway.interrupt()
         await self._send_state("listening")
+
+    def _log_turn_timing(self, *, outcome: str) -> None:
+        """One summary line + metrics for the turn that just ended.
+
+        Emits ``turn.timing`` with the three spans an investigation needs:
+        ``listen_ms`` (how long the user was heard), ``response_ms`` (last
+        user words → first reply-audio byte — the silence the user feels),
+        and ``speak_ms`` (how long the reply ran). A turn with no observable
+        anchors — e.g. a TURN_COMPLETE caused by an internal context note —
+        is skipped so the averages aren't polluted with zeros.
+        """
+        now = time.monotonic()
+        if self._t_user_last == 0.0 and self._t_reply_started == 0.0:
+            return
+        listen_ms = (
+            int((self._t_user_last - self._t_user_first) * 1000)
+            if self._t_user_first > 0.0
+            else None
+        )
+        response_ms = (
+            int((self._t_first_audio_sent - self._t_user_last) * 1000)
+            if self._t_first_audio_sent > 0.0 and self._t_user_last > 0.0
+            else None
+        )
+        speak_ms = (
+            int((now - self._t_reply_started) * 1000)
+            if self._t_reply_started > 0.0
+            else None
+        )
+        metrics.TURNS.labels(outcome=outcome).inc()
+        if listen_ms is not None:
+            metrics.TURN_LISTEN.observe(listen_ms / 1000)
+        if speak_ms is not None:
+            metrics.TURN_SPEAK.observe(speak_ms / 1000)
+        logger.info(
+            "turn.timing",
+            session_id=self.session_id,
+            turn=self._turn_index,
+            outcome=outcome,
+            listen_ms=listen_ms,
+            response_ms=response_ms,
+            speak_ms=speak_ms,
+            tools=self._turn_tools,
+        )
+        self._turn_index += 1
+        self._t_user_first = 0.0
+        self._t_user_last = 0.0
+        self._t_reply_started = 0.0
+        self._t_first_audio_sent = 0.0
+        self._turn_tools = 0
 
     # -- Event pump (gateway -> client) --------------------------------------
 
@@ -874,6 +1038,20 @@ class Session:
         """Map one :class:`GatewayEvent` to a ``PROTOCOL.md`` server message."""
         if event.type == EventType.TRANSCRIPT:
             assert isinstance(event, TranscriptEvent)
+            if (
+                self._mode == "agent"
+                and event.role == "user"
+                and not event.final
+            ):
+                now = time.monotonic()
+                if self._t_user_first == 0.0:
+                    self._t_user_first = now
+                    logger.info(
+                        "turn.hearing",
+                        session_id=self.session_id,
+                        turn=self._turn_index,
+                    )
+                self._t_user_last = now
             await self._send_json(
                 {
                     "type": "transcript",
@@ -901,19 +1079,36 @@ class Session:
                 )
         elif event.type == EventType.AUDIO_START:
             assert isinstance(event, AudioStartEvent)
+            if self._mode == "agent" and self._t_reply_started == 0.0:
+                self._t_reply_started = time.monotonic()
             await self._send_state("speaking")
             await self._send_json({"type": "audio_start"})
         elif event.type == EventType.AUDIO_CHUNK:
             assert isinstance(event, AudioChunkEvent)
+            if self._mode == "agent" and self._t_first_audio_sent == 0.0:
+                now = time.monotonic()
+                self._t_first_audio_sent = now
+                if self._t_user_last > 0.0:
+                    response_s = now - self._t_user_last
+                    metrics.TURN_RESPONSE.observe(response_s)
+                    logger.info(
+                        "turn.first_audio",
+                        session_id=self.session_id,
+                        turn=self._turn_index,
+                        response_ms=int(response_s * 1000),
+                    )
             await self._send_audio_frame(event.pcm)
         elif event.type == EventType.AUDIO_END:
             assert isinstance(event, AudioEndEvent)
             await self._send_json({"type": "audio_end"})
         elif event.type == EventType.TOOL_CALL:
             assert isinstance(event, ToolCallEvent)
+            self._turn_tools += 1
             await self._spawn_tool_call(event)
         elif event.type == EventType.TURN_COMPLETE:
             assert isinstance(event, TurnCompleteEvent)
+            if self._mode == "agent":
+                self._log_turn_timing(outcome="complete")
             await self._send_state("listening")
         elif event.type == EventType.ERROR:
             assert isinstance(event, ErrorEvent)
@@ -942,7 +1137,13 @@ class Session:
         await self._send_bytes(frame)
 
     async def _send_state(self, value: str) -> None:
-        """Emit a ``state`` server message."""
+        """Emit a ``state`` server message (and log the transition).
+
+        The log line is the timeline glue: with turn.hearing / turn.first_audio
+        / turn.timing it lets a log reader reconstruct exactly when the session
+        was listening, thinking, and speaking — no client needed.
+        """
+        logger.info("state", session_id=self.session_id, value=value)
         await self._send_json({"type": "state", "value": value})
 
     async def _send_error(

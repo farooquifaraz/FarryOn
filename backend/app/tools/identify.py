@@ -141,17 +141,52 @@ class IdentifyImageTool(Tool):
         # So the detector is now reserved for what only it can do: an explicit
         # landmark or product lookup, which is where the Maps and shopping
         # links come from.
+        # 2026-08-27 rework: "answer from your own context" was an off-by-one
+        # in production. The frame reaches the live model mid-turn (while it
+        # sits suspended awaiting this tool's response) and only becomes part
+        # of its context on the NEXT turn — so every answer described the
+        # PREVIOUS capture, one photo behind (device-proven: three identifies
+        # in a row each narrated the frame before). The answer now comes from
+        # the vision model looking at THE EXACT BYTES the wait above just
+        # delivered — deterministic, never stale. The extra hop costs ~1.5-3 s
+        # and is what makes the answer about the right picture.
         if question or kind == "auto":
-            return {
-                "ok": True,
-                "mode": "direct",
-                "_instruction": (
-                    "The camera image is already in your context — the frame "
-                    "you asked for has just been delivered. Answer the user's "
-                    "question from it yourself, now, in one or two sentences. "
-                    "Do not call this tool again for the same question."
-                ),
-            }
+            if not question:
+                question = (
+                    "What is this? Describe briefly and specifically what "
+                    "the image shows."
+                )
+            image_data = base64.b64encode(frame).decode("utf-8")
+            try:
+                result = await run_detection(
+                    "auto",
+                    settings=get_settings(),
+                    image_data=image_data,
+                    question=question,
+                )
+            except Exception as exc:  # noqa: BLE001 - never a raw stack
+                logger.error("identify_image.answer_error", error=repr(exc))
+                return {
+                    "ok": False,
+                    "error": (
+                        "I couldn't look just now — try once more in a "
+                        "moment."
+                    ),
+                }
+            if result.get("ok"):
+                answer = (result.get("result") or {}).get("answer") or ""
+                return {
+                    "ok": True,
+                    "mode": "answer",
+                    "answer": answer,
+                    "_instruction": (
+                        "This answer was produced by looking at the photo "
+                        "captured JUST NOW for this very question. Relay it "
+                        "to the user naturally in one or two sentences — do "
+                        "not contradict it or claim you cannot see."
+                    ),
+                }
+            return result
 
         image_data = base64.b64encode(frame).decode("utf-8")
         # CHANGED (UX Spec §3.3): wrap the vision call so a Vision API outage,

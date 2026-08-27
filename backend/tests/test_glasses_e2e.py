@@ -79,18 +79,21 @@ async def test_slow_glasses_photo_is_accepted_by_identify(monkeypatch) -> None:
     seconds, and the tool must still be there when the photo lands instead of
     having given up. That is unchanged.
 
-    What changed is what happens next. `auto` used to be handed to the
-    detector; it is now answered by the live model, which already has the
-    photo — the same frame delivery that wakes this wait is what puts it in
-    the model's context. So the detector must NOT be called, and the proof the
-    wait worked is that the tool returns ok rather than a capture failure.
+    What changed is what happens next (2026-08-27, the stale-image fix):
+    `auto` is answered by the DETECTOR again, computed on the exact bytes of
+    the frame that woke this wait — because the live model incorporates a
+    mid-turn image only into the NEXT turn, so "the model can see it" was an
+    off-by-one that described the previous photo. The proof the wait worked is
+    that the detector receives the late frame and the tool returns its answer.
     """
     called = False
+    got_frame: bytes | None = None
 
-    async def fake_run(*args, **kwargs):  # pragma: no cover - must not run
-        nonlocal called
+    async def fake_run(*args, **kwargs):
+        nonlocal called, got_frame
         called = True
-        return {"ok": True, "mode": "product"}
+        got_frame = kwargs.get("image_data")
+        return {"ok": True, "mode": "answer", "answer": "a glasses photo"}
 
     monkeypatch.setattr(identify_mod, "run_detection", fake_run)
 
@@ -107,7 +110,12 @@ async def test_slow_glasses_photo_is_accepted_by_identify(monkeypatch) -> None:
 
     result = await task
     assert result.ok is True, "the late photo was accepted, not timed out"
-    assert called is False, "auto is answered by the model that can see it"
+    assert called is True, "auto answers on the fresh frame via the detector"
+    import base64
+
+    assert got_frame == base64.b64encode(b"\xff\xd8glasses-photo").decode(
+        "utf-8"
+    ), "the detector must see the EXACT late frame, not an older one"
 
 
 async def test_capture_failure_reason_is_surfaced(monkeypatch) -> None:

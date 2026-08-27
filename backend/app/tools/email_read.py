@@ -32,6 +32,19 @@ logger = get_logger(__name__)
 
 _DEFAULT_HOST = "imap.gmail.com"
 
+#: Socket timeout for every IMAP operation. Without one, imaplib waits
+#: FOREVER: a black-holed server (typo'd custom host, firewall, the user's
+#: flaky Wi-Fi) parked the worker thread permanently — the tool's own timeout
+#: answered the user, but the thread never came back, and each retry parked
+#: another one.
+_IMAP_TIMEOUT_S = 15
+
+#: List-view messages are fetched as the FIRST 64 KB of the raw message
+#: (``BODY.PEEK[]<0.65536>``) instead of the full RFC822. Headers + enough
+#: body for a snippet always fit; a newsletter with a 10 MB attachment no
+#: longer costs 10 MB × N messages per "what's in my inbox".
+_LIST_FETCH_BYTES = 65536
+
 
 def _imap_creds(account: dict[str, Any]) -> tuple[str, str, str, str]:
     """``(host, address, password, label)`` for one mailbox dict."""
@@ -176,7 +189,7 @@ def _fetch_emails(
 ) -> list[dict[str, Any]]:
     """Blocking IMAP read of the matching messages (run in a thread)."""
     is_gmail = "gmail" in host or "google" in host
-    imap = imaplib.IMAP4_SSL(host)
+    imap = imaplib.IMAP4_SSL(host, timeout=_IMAP_TIMEOUT_S)
     try:
         imap.login(address, password)
         imap.select("INBOX", readonly=True)
@@ -208,9 +221,16 @@ def _fetch_emails(
             return []
 
         ids = ids[-limit:]
+        # Full body only when asked (read_email); the list view reads a
+        # bounded prefix — see _LIST_FETCH_BYTES. BODY.PEEK never sets \Seen
+        # (belt and braces on top of readonly=True).
+        fetch_spec = (
+            "(BODY.PEEK[])" if full_body
+            else f"(BODY.PEEK[]<0.{_LIST_FETCH_BYTES}>)"
+        )
         out: list[dict[str, Any]] = []
         for mid in reversed(ids):  # newest first
-            typ, msg_data = imap.fetch(mid, "(RFC822)")
+            typ, msg_data = imap.fetch(mid, fetch_spec)
             if typ != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
                 continue
             msg = emaillib.message_from_bytes(msg_data[0][1])
@@ -240,6 +260,38 @@ def _fetch_emails(
             imap.logout()
         except Exception:  # noqa: BLE001
             pass
+
+
+async def _fetch_with_retry(
+    host: str,
+    address: str,
+    password: str,
+    limit: int,
+    query: str | None,
+    category: str | None,
+    range_: str | None,
+    full_body: bool = False,
+) -> list[dict[str, Any]]:
+    """One automatic retry on NETWORK failure (never on auth).
+
+    The user's phone-to-server leg is already retried by the app; this covers
+    the server-to-mailbox leg, where a single dropped TLS handshake otherwise
+    turns into "couldn't read email" for a mailbox that is perfectly fine.
+    Auth errors are excluded — retrying a wrong password just doubles the
+    delay before the honest answer.
+    """
+    try:
+        return await asyncio.to_thread(
+            _fetch_emails, host, address, password, limit, query,
+            category, range_, full_body,
+        )
+    except (OSError, TimeoutError) as exc:
+        logger.info("read_emails.retrying", host=host, error=str(exc))
+        await asyncio.sleep(0.5)
+        return await asyncio.to_thread(
+            _fetch_emails, host, address, password, limit, query,
+            category, range_, full_body,
+        )
 
 
 class ReadEmailsTool(Tool):
@@ -307,11 +359,12 @@ class ReadEmailsTool(Tool):
                     ),
                 }
             merged: list[dict[str, Any]] = []
+            failed: list[str] = []
             for acct in accts:
                 host, address, password, label = _imap_creds(acct)
                 try:
-                    items = await asyncio.to_thread(
-                        _fetch_emails, host, address, password, limit, query,
+                    items = await _fetch_with_retry(
+                        host, address, password, limit, query,
                         category, range_,
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -319,16 +372,35 @@ class ReadEmailsTool(Tool):
                         "read_emails.account_failed", account=label,
                         error=str(exc),
                     )
+                    failed.append(label)
                     continue
                 for it in items:
                     it["account"] = label
                 merged.extend(items)
+            # Every mailbox failing is an OUTAGE, not an empty inbox — saying
+            # "no new mail" here would be a lie the user acts on.
+            if not merged and failed and len(failed) == len(accts):
+                return {
+                    "ok": False,
+                    "message": (
+                        "Couldn't reach any mailbox right now "
+                        f"({', '.join(failed)}). Tell the user checking email "
+                        "failed — do NOT say the inbox is empty."
+                    ),
+                }
             merged.sort(key=lambda e: e.get("date") or "", reverse=True)
             merged = merged[:limit]
-            return {
+            result: dict[str, Any] = {
                 "ok": True, "count": len(merged), "category": category,
                 "range": range_ or "today", "account": "all", "emails": merged,
             }
+            if failed:
+                result["unreachable_accounts"] = failed
+                result["_instruction"] = (
+                    f"NOTE: the {', '.join(failed)} mailbox could not be "
+                    "read — mention that alongside the results."
+                )
+            return result
 
         # Single mailbox: the named one, else the primary.
         account, err = resolve_account(ctx, account_arg or None)
@@ -336,9 +408,8 @@ class ReadEmailsTool(Tool):
             return {"ok": False, "message": err}
         host, address, password, label = _imap_creds(account)
         try:
-            emails = await asyncio.to_thread(
-                _fetch_emails, host, address, password, limit, query,
-                category, range_,
+            emails = await _fetch_with_retry(
+                host, address, password, limit, query, category, range_,
             )
         except imaplib.IMAP4.error as exc:
             logger.warning("read_emails.auth_failed", error=str(exc))
@@ -400,9 +471,8 @@ class ReadEmailTool(Tool):
         query = (kwargs.get("query") or None)
         range_ = (kwargs.get("range") or "week")
         try:
-            emails = await asyncio.to_thread(
-                _fetch_emails, host, address, password, 1, query, None,
-                range_, True,
+            emails = await _fetch_with_retry(
+                host, address, password, 1, query, None, range_, True,
             )
         except imaplib.IMAP4.error as exc:
             logger.warning("read_email.auth_failed", error=str(exc))

@@ -49,6 +49,31 @@ AUDIO_BYTES_OUT = Counter(
     "Outbound audio payload bytes (PCM16).",
 )
 
+# -- Turn timing (agent sessions) ---------------------------------------------
+# One "turn" = the user says something, Farry answers. These four series are
+# the performance story of the product: how long Farry listened, how long the
+# user then sat in silence (the number they FEEL), and how long the reply took
+# to speak. The per-turn detail lands in the "turn.timing" log line; these
+# aggregate it so a regression shows on /metrics without grepping logs.
+TURNS = Counter(
+    "farryon_turns_total",
+    "Assistant turns ended, labelled by outcome (complete | interrupted).",
+    ["outcome"],
+)
+TURN_RESPONSE = Histogram(
+    "farryon_turn_response_seconds",
+    "Seconds from the user's last heard words to the first reply-audio byte "
+    "sent to the client — the silence the user actually sits through.",
+)
+TURN_LISTEN = Histogram(
+    "farryon_turn_listen_seconds",
+    "Seconds one user utterance was heard (first to last transcript delta).",
+)
+TURN_SPEAK = Histogram(
+    "farryon_turn_speak_seconds",
+    "Seconds one reply took, first reply event to end of turn.",
+)
+
 # -- Tools --------------------------------------------------------------------
 TOOL_CALLS = Counter(
     "farryon_tool_calls_total",

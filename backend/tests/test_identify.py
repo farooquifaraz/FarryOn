@@ -72,25 +72,24 @@ async def test_fresh_frame_dispatches_to_detection(db_session, monkeypatch) -> N
     assert seen["image_data"] == base64.b64encode(b"hello").decode("utf-8")
 
 
-async def test_a_read_question_no_longer_goes_to_a_second_model(
+async def test_a_read_question_is_answered_from_the_fresh_frame(
     db_session, monkeypatch
 ) -> None:
-    """Reading the view is answered by the model already looking at it.
+    """A question about the view is answered by vision on the JUST-captured
+    bytes.
 
-    This used to hand the question to `run_detection` and wait. Both ends are
-    Gemini 2.5 Flash — the live session runs the native-audio variant, the
-    detector runs the plain one — so the second call was the same model family
-    being asked the same thing about the same picture, one network round trip
-    later. It cost 4.4 s of silence on every question and bought nothing.
-
-    Identification still goes the long way; see the test below.
+    This briefly went the other way ("the live model already sees it") and
+    shipped an off-by-one: a frame delivered mid-turn only joins the live
+    model's context on the NEXT turn, so every answer described the previous
+    photo (device-proven 2026-08-27). The vision call is the fix — it looks
+    at exactly the bytes the wait just delivered.
     """
-    called = False
+    seen: dict = {}
 
     async def fake_run(mode, *, settings, image_data=None, image_url=None,
-                       question=None):  # pragma: no cover - must not run
-        nonlocal called
-        called = True
+                       question=None):
+        seen["question"] = question
+        seen["image_data"] = image_data
         return {"ok": True, "mode": "answer", "result": {"answer": "8:20"}}
 
     monkeypatch.setattr(identify_mod, "run_detection", fake_run)
@@ -99,8 +98,11 @@ async def test_a_read_question_no_longer_goes_to_a_second_model(
         ctx, question="what time does the clock show?"
     )
     assert res["ok"] is True
-    assert called is False
-    assert "already in your context" in res["_instruction"]
+    assert seen["question"] == "what time does the clock show?"
+    assert seen["image_data"]  # the fresh frame, base64'd
+    assert res["mode"] == "answer"
+    assert res["answer"] == "8:20"
+    assert "captured JUST NOW" in res["_instruction"]
 
 
 async def test_landmark_offers_to_send_location(db_session, monkeypatch) -> None:
@@ -143,54 +145,43 @@ async def test_product_has_no_send_location_instruction(db_session, monkeypatch)
 
 
 async def test_invalid_kind_coerces_to_auto(db_session, monkeypatch) -> None:
-    """A nonsense kind is still treated as auto — which is now the fast path.
+    """A nonsense kind is treated as auto — which asks vision to describe the
+    fresh frame with the default what-is-this question."""
+    seen: dict = {}
 
-    The coercion has not changed; what auto MEANS has. It used to reach the
-    detector as mode="auto"; it is now answered by the model already looking
-    at the picture, so the proof of coercion is that the detector is not
-    called at all.
-    """
-    called = False
-
-    async def fake_run(*args, **kwargs):  # pragma: no cover - must not run
-        nonlocal called
-        called = True
-        return {"ok": True, "mode": "landmark"}
+    async def fake_run(mode, *, settings, image_data=None, image_url=None,
+                       question=None):
+        seen["question"] = question
+        return {"ok": True, "mode": "answer", "result": {"answer": "a desk"}}
 
     monkeypatch.setattr(identify_mod, "run_detection", fake_run)
     ctx = _fresh_frame_ctx(db_session, b"x")
     res = await IdentifyImageTool().run(ctx, kind="garbage")
-    assert called is False
-    assert "already in your context" in res["_instruction"]
+    assert res["ok"] is True
+    assert "What is this" in seen["question"]
+    assert res["answer"] == "a desk"
 
 
-async def test_a_question_is_answered_by_the_model_that_already_sees_it(
+async def test_a_question_reaches_vision_with_the_exact_bytes(
     db_session, monkeypatch
 ) -> None:
-    """A question about the view must not wait on a second vision model.
+    """The vision call must receive the frame this very wait delivered —
+    that is the whole defence against answering about a stale photo."""
+    seen: dict = {}
 
-    The frame reaches the live model on its way into this tool — that is what
-    the wait is for — so it is already looking at the picture. Sending the
-    same picture to a separate vision model and waiting for that answer added
-    4.4 seconds to every "what is this?" (measured 2026-08-19: the frame was
-    in hand at 1.6 s and the tool returned at 6.0 s). Six seconds of silence
-    reads as a camera that never fired, which is exactly what was reported.
-    """
-    called = False
+    async def fake_run(mode, *, settings, image_data=None, image_url=None,
+                       question=None):
+        seen["image_data"] = image_data
+        return {"ok": True, "mode": "answer", "result": {"answer": "Faraz"}}
 
-    async def _must_not_run(*args, **kwargs):  # pragma: no cover - the point
-        nonlocal called
-        called = True
-        return {"ok": True, "mode": "landmark"}
-
-    monkeypatch.setattr(identify_mod, "run_detection", _must_not_run)
+    monkeypatch.setattr(identify_mod, "run_detection", fake_run)
 
     ctx = _fresh_frame_ctx(db_session, b"jpegbytes")
     result = await IdentifyImageTool().run(ctx, question="who is sitting here?")
 
     assert result["ok"] is True
-    assert called is False, "no second vision call for a question about the view"
-    assert "already in your context" in result["_instruction"]
+    assert seen["image_data"] == base64.b64encode(b"jpegbytes").decode("utf-8")
+    assert result["answer"] == "Faraz"
 
 
 async def test_identification_still_goes_the_long_way(db_session, monkeypatch) -> None:
@@ -213,44 +204,43 @@ async def test_identification_still_goes_the_long_way(db_session, monkeypatch) -
     assert called is True, "identification still needs the detector"
     assert result["mode"] == "product"
 
-async def test_auto_is_answered_by_the_live_model_too(db_session, monkeypatch) -> None:
-    """"Who is this?" is the commonest thing anyone asks a camera, and it is
-    exactly what `auto` is worst at: it runs landmark detection, falls back to
-    product, finds nothing in either, and takes twelve seconds to do it. The
-    live model then answers from the picture it had all along.
+async def test_auto_goes_to_vision_with_a_describe_question(
+    db_session, monkeypatch
+) -> None:
+    """Plain "what is this?" (kind=auto) is a vision describe over the fresh
+    frame. The important assertion is the QUESTION routing — auto must go
+    down the answer path, not the slow landmark→product cascade."""
+    seen: dict = {}
 
-    Measured on a vivo V2246, 2026-08-19: frame in hand at 5.3 s, the tool
-    returning at 17.3 s, the first word spoken at 18.8 s.
-    """
-    called = False
+    async def fake_run(mode, *, settings, image_data=None, image_url=None,
+                       question=None):
+        seen["question"] = question
+        return {"ok": True, "mode": "answer", "result": {"answer": "a chair"}}
 
-    async def _must_not_run(*args, **kwargs):  # pragma: no cover - the point
-        nonlocal called
-        called = True
-        return {"ok": True, "mode": "landmark"}
-
-    monkeypatch.setattr(identify_mod, "run_detection", _must_not_run)
+    monkeypatch.setattr(identify_mod, "run_detection", fake_run)
 
     ctx = _fresh_frame_ctx(db_session, b"jpegbytes")
     result = await IdentifyImageTool().run(ctx, kind="auto")
 
     assert result["ok"] is True
-    assert called is False, "auto has nothing the live model cannot do faster"
+    assert seen["question"], "auto must carry a describe question"
+    assert result["answer"] == "a chair"
 
 
 async def test_no_kind_at_all_is_treated_as_auto(db_session, monkeypatch) -> None:
     # The model often calls this with no arguments whatsoever.
-    called = False
+    seen: dict = {}
 
-    async def _must_not_run(*args, **kwargs):  # pragma: no cover - the point
-        nonlocal called
-        called = True
-        return {"ok": True, "mode": "landmark"}
+    async def fake_run(mode, *, settings, image_data=None, image_url=None,
+                       question=None):
+        seen["question"] = question
+        return {"ok": True, "mode": "answer", "result": {"answer": "a lamp"}}
 
-    monkeypatch.setattr(identify_mod, "run_detection", _must_not_run)
+    monkeypatch.setattr(identify_mod, "run_detection", fake_run)
 
     ctx = _fresh_frame_ctx(db_session, b"jpegbytes")
     result = await IdentifyImageTool().run(ctx)
 
     assert result["ok"] is True
-    assert called is False
+    assert seen["question"]
+    assert result["answer"] == "a lamp"

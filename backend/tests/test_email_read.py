@@ -25,7 +25,8 @@ async def test_read_emails_returns_messages(db_session, monkeypatch) -> None:
     """With config, the tool returns the fetched messages + filters passed."""
     captured: dict = {}
 
-    def fake_fetch(host, address, password, limit, query, category, range_):
+    def fake_fetch(host, address, password, limit, query, category, range_,
+                   full_body=False):
         captured.update(
             host=host, address=address, password=password, limit=limit,
             query=query, category=category, range_=range_,
@@ -68,7 +69,8 @@ async def test_read_emails_limit_is_clamped(db_session, monkeypatch) -> None:
     """An absurd limit is clamped to the max."""
     seen: dict = {}
 
-    def fake_fetch(host, address, password, limit, query, category, range_):
+    def fake_fetch(host, address, password, limit, query, category, range_,
+                   full_body=False):
         seen["limit"] = limit
         return []
 
@@ -94,3 +96,99 @@ async def test_read_emails_auth_error_is_graceful(db_session, monkeypatch) -> No
     result = await ReadEmailsTool().run(ctx)
     assert result["ok"] is False
     assert "password" in result["message"].lower()
+
+
+async def test_read_emails_retries_once_on_network_error(
+    db_session, monkeypatch
+) -> None:
+    """One dropped connection is retried; the user never hears about it."""
+    calls = {"n": 0}
+
+    def flaky_fetch(host, address, password, limit, query, category, range_,
+                    full_body=False):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("connection reset by peer")
+        return [
+            {"from": "A <a@x.com>", "subject": "Hi", "date": None,
+             "snippet": "yo"},
+        ]
+
+    monkeypatch.setattr(email_read, "_fetch_emails", flaky_fetch)
+    ctx = ToolContext(
+        session=db_session,
+        email={"address": "me@gmail.com", "appPassword": "pw"},
+    )
+    result = await ReadEmailsTool().run(ctx)
+    assert result["ok"] is True
+    assert result["count"] == 1
+    assert calls["n"] == 2
+
+
+async def test_read_emails_auth_error_is_not_retried(
+    db_session, monkeypatch
+) -> None:
+    """A wrong password fails ONCE — retrying it just doubles the delay."""
+    calls = {"n": 0}
+
+    def bad_auth(*_a, **_k):
+        calls["n"] += 1
+        raise imaplib.IMAP4.error("AUTHENTICATIONFAILED")
+
+    monkeypatch.setattr(email_read, "_fetch_emails", bad_auth)
+    ctx = ToolContext(
+        session=db_session,
+        email={"address": "me@gmail.com", "appPassword": "wrong"},
+    )
+    result = await ReadEmailsTool().run(ctx)
+    assert result["ok"] is False
+    assert calls["n"] == 1
+
+
+async def test_read_emails_all_mailboxes_down_is_an_outage_not_empty(
+    db_session, monkeypatch
+) -> None:
+    """Every account failing must NOT read as an empty inbox."""
+    def down(*_a, **_k):
+        raise TimeoutError("imap timed out")
+
+    monkeypatch.setattr(email_read, "_fetch_emails", down)
+    ctx = ToolContext(
+        session=db_session,
+        emails=[
+            {"label": "Personal", "address": "me@gmail.com",
+             "appPassword": "pw", "primary": True},
+            {"label": "Work", "address": "w@work.com", "appPassword": "pw2"},
+        ],
+    )
+    result = await ReadEmailsTool().run(ctx, account="all")
+    assert result["ok"] is False
+    assert "empty" in result["message"].lower()
+
+
+async def test_read_emails_one_mailbox_down_is_flagged(
+    db_session, monkeypatch
+) -> None:
+    """A partial outage returns the good mailbox AND names the bad one."""
+    def half_down(host, address, password, limit, query, category, range_,
+                  full_body=False):
+        if "work" in address:
+            raise TimeoutError("imap timed out")
+        return [
+            {"from": "A <a@x.com>", "subject": "Hi", "date": None,
+             "snippet": "yo"},
+        ]
+
+    monkeypatch.setattr(email_read, "_fetch_emails", half_down)
+    ctx = ToolContext(
+        session=db_session,
+        emails=[
+            {"label": "Personal", "address": "me@gmail.com",
+             "appPassword": "pw", "primary": True},
+            {"label": "Work", "address": "w@work.com", "appPassword": "pw2"},
+        ],
+    )
+    result = await ReadEmailsTool().run(ctx, account="all")
+    assert result["ok"] is True
+    assert result["count"] == 1
+    assert result["unreachable_accounts"] == ["Work"]

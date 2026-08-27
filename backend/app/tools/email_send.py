@@ -130,8 +130,12 @@ class SendEmailTool(Tool):
                 "ok": False,
                 "message": "That doesn't look like a complete email address.",
             }
-        subject = (kwargs.get("subject") or "(no subject)").strip()
-        body = kwargs.get("body") or ""
+        subject = (kwargs.get("subject") or "(no subject)").strip()[:500]
+        body = (kwargs.get("body") or "")
+        # A model-composed body has no natural ceiling; a runaway one must not
+        # become a megabyte email sent in the user's name.
+        if len(body) > 50_000:
+            body = body[:50_000]
 
         # CHANGED (UX Spec §3.4): idempotency. Email is a REAL outward send, so a
         # retried turn (model re-issuing the send, or a reconnect replay) could
@@ -162,6 +166,24 @@ class SendEmailTool(Tool):
                 "message": (
                     "Couldn't sign in to send. Check the address and app "
                     "password in Settings."
+                ),
+            }
+        except smtplib.SMTPRecipientsRefused as exc:
+            logger.warning("send_email.recipient_refused", error=str(exc))
+            return {
+                "ok": False,
+                "message": (
+                    f"The mail server refused the address {to} — it may not "
+                    "exist. Read the address back to the user and confirm it."
+                ),
+            }
+        except (OSError, TimeoutError) as exc:
+            logger.warning("send_email.network_failed", error=str(exc))
+            return {
+                "ok": False,
+                "message": (
+                    "Couldn't reach the mail server just now (network). The "
+                    "email was NOT sent — offer to try again."
                 ),
             }
         except Exception as exc:  # noqa: BLE001

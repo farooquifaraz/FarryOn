@@ -92,6 +92,12 @@ class GeminiGateway(AIGateway):
             model=model or settings.gemini_model,
         )
         self._api_key = settings.gemini_api_key
+        # Session resumption (ChatGPT-like continuity): the owner (ws.session)
+        # may set ``resume_handle`` BEFORE connect() to re-attach the previous
+        # Gemini Live context, and ``on_resume_handle`` to be told each fresh
+        # handle the server issues so it can persist it for the NEXT session.
+        self.resume_handle: str | None = None
+        self.on_resume_handle: Any = None
         self._queue: asyncio.Queue[GatewayEvent | None] = asyncio.Queue()
         self._session: Any = None
         self._session_cm: Any = None
@@ -111,7 +117,7 @@ class GeminiGateway(AIGateway):
         # enough to compare tuning changes against.
         self._last_user_tx_at = 0.0
 
-    def _build_config(self) -> Any:
+    def _build_config(self, api_version: str = "v1beta") -> Any:
         """Construct the ``LiveConnectConfig`` with tools + system prompt."""
         from google.genai import types  # type: ignore[import-not-found]
 
@@ -166,6 +172,27 @@ class GeminiGateway(AIGateway):
         # it also lifts the native-audio 15-minute session limit. Guarded like
         # the other optional fields so an older SDK still connects.
         s = get_settings()
+        # Continuity across reconnects (ChatGPT-like): ask Gemini for session-
+        # resumption handles. With a previous handle set, the NEW connection
+        # re-attaches the old conversation's context — so a dropped Wi-Fi link,
+        # an idle-expired session, or a phone that came back after minutes does
+        # NOT reset Farry's memory of the chat. Guarded: an SDK without the
+        # field still connects (fresh context, as before).
+        try:
+            config_kwargs["session_resumption"] = types.SessionResumptionConfig(
+                handle=self.resume_handle
+            )
+        except Exception:  # noqa: BLE001 - field optional across SDK versions
+            pass
+        # Natural, emotionally-aware speech (the "real ChatGPT/Gemini app"
+        # feel): affective dialog makes the voice adapt tone to the user's.
+        # v1alpha-only — the field is rejected on v1beta, so it is added only
+        # when connecting on the alpha channel.
+        if s.affective_dialog_enabled and api_version == "v1alpha":
+            try:
+                config_kwargs["enable_affective_dialog"] = True
+            except Exception:  # noqa: BLE001
+                pass
         if s.context_compression_enabled:
             try:
                 config_kwargs["context_window_compression"] = (
@@ -218,7 +245,7 @@ class GeminiGateway(AIGateway):
                     http_options=types.HttpOptions(api_version=api_version),
                 )
                 cm = client.aio.live.connect(
-                    model=model, config=self._build_config()
+                    model=model, config=self._build_config(api_version)
                 )
                 session = await cm.__aenter__()
             except Exception as exc:  # noqa: BLE001 - try the next candidate
@@ -239,12 +266,33 @@ class GeminiGateway(AIGateway):
             return True
 
         # 1) The configured model, on both Live channels (v1beta is the
-        #    Developer API default; v1alpha covers preview models).
-        for version in ("v1beta", "v1alpha"):
+        #    Developer API default; v1alpha covers preview models). With
+        #    affective dialog on, v1alpha goes FIRST — it is the only channel
+        #    that accepts the field, and trying v1beta first would mean every
+        #    session either loses the feature or pays a failed attempt.
+        versions = (
+            ("v1alpha", "v1beta")
+            if get_settings().affective_dialog_enabled
+            else ("v1beta", "v1alpha")
+        )
+        for version in versions:
             tried.add((version, self.model))
             if await _open(version, self.model):
                 self._recv_task = asyncio.create_task(self._receive_loop())
                 return
+
+        # 1b) A stale resumption handle fails the connect on EVERY channel; a
+        #     lost conversation context is recoverable, a dead session is not —
+        #     so drop the handle and try once more fresh before self-healing.
+        if self.resume_handle is not None:
+            logger.warning(
+                "gemini.resume_handle_rejected", retrying="fresh_context"
+            )
+            self.resume_handle = None
+            for version in versions:
+                if await _open(version, self.model):
+                    self._recv_task = asyncio.create_task(self._receive_loop())
+                    return
 
         # 2) Self-heal: the set of Live (bidiGenerateContent) models varies by
         #    key/project, so discover what THIS key actually exposes and try
@@ -260,7 +308,7 @@ class GeminiGateway(AIGateway):
             logger.warning("gemini.model_discovery_failed", error=repr(exc))
 
         for model in discovered:
-            for version in ("v1beta", "v1alpha"):
+            for version in versions:
                 if (version, model) in tried:
                     continue
                 tried.add((version, model))
@@ -322,6 +370,32 @@ class GeminiGateway(AIGateway):
         usage = getattr(message, "usage_metadata", None)
         if usage is not None:
             self._record_usage(usage)
+
+        # Each resumption update carries the handle that re-attaches THIS
+        # conversation on a future connect. Keep the latest and hand it to the
+        # owner so the next session (reconnect, idle-expiry restart) resumes
+        # with full context instead of amnesia.
+        resume = getattr(message, "session_resumption_update", None)
+        if resume is not None:
+            new_handle = getattr(resume, "new_handle", None)
+            if getattr(resume, "resumable", False) and new_handle:
+                self.resume_handle = new_handle
+                cb = self.on_resume_handle
+                if cb is not None:
+                    try:
+                        cb(new_handle)
+                    except Exception:  # noqa: BLE001 - persistence is advisory
+                        pass
+
+        # The server announces its own shutdown ahead of time (connection
+        # lifetime limit). Log it so a mid-conversation drop is attributable —
+        # the close that follows flows through the normal reconnect+resume path.
+        go_away = getattr(message, "go_away", None)
+        if go_away is not None:
+            logger.warning(
+                "gemini.go_away",
+                time_left=str(getattr(go_away, "time_left", "") or ""),
+            )
 
         server_content = getattr(message, "server_content", None)
         if server_content is not None:
@@ -511,6 +585,50 @@ class GeminiGateway(AIGateway):
         await self._session.send_realtime_input(
             video=types.Blob(data=jpeg, mime_type=_VIDEO_MIME)
         )
+
+    async def attach_image(self, jpeg: bytes) -> None:
+        """Put a still image into the conversation itself (see base class).
+
+        ``turn_complete=False`` — this is context, not a new user turn: the
+        model must not start a fresh reply over it, only see it when the
+        current turn continues (the same mechanism as the language-correction
+        note, which is device-proven to land).
+        """
+        if self._session is None:
+            return
+        from google.genai import types  # type: ignore[import-not-found]
+
+        await self._session.send_client_content(
+            turns=types.Content(
+                role="user",
+                parts=[
+                    types.Part(
+                        inline_data=types.Blob(
+                            data=jpeg, mime_type=_VIDEO_MIME
+                        )
+                    )
+                ],
+            ),
+            turn_complete=False,
+        )
+        logger.info("gemini.image_attached", bytes=len(jpeg))
+
+    async def send_silent_note(self, text: str) -> None:
+        """Inject context WITHOUT triggering a reply (``turn_complete=False``).
+
+        Same mechanism as the language-correction note (device-proven to
+        land). Used by the session owner right after a resumed connect, so the
+        model does not re-act on the tail of the previous conversation.
+        """
+        if self._session is None:
+            return
+        try:
+            await self._session.send_client_content(
+                turns={"role": "user", "parts": [{"text": text}]},
+                turn_complete=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - advisory only, never fatal
+            logger.warning("gemini.silent_note_failed", error=repr(exc))
 
     async def send_activity_start(self) -> None:
         """Open a manual activity window — the user started speaking."""
