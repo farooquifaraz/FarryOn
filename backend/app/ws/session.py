@@ -779,11 +779,12 @@ class Session:
     async def _dispatch_control(self, message: dict[str, Any]) -> None:
         """Handle a client control message by ``type`` (``PROTOCOL.md`` §3)."""
         mtype = message.get("type")
-        # Heartbeat pings arrive every 5 s from any OPEN app — counting them as
-        # activity meant the idle cap never fired (the second half of the
-        # never-idles bug; see the INPUT_AUDIO note). Substantive control
-        # messages (typed text, config, device events) still count.
-        if mtype != "ping":
+        # Automatic messages must not count as activity, or the idle cap never
+        # fires (the second half of the never-idles bug; see the INPUT_AUDIO
+        # note). Pings arrive every 5 s and location_update every 5 min from
+        # any OPEN app — neither means a human is there. Substantive control
+        # messages (typed text, audio_start, config, device events) count.
+        if mtype not in ("ping", "location_update"):
             self._last_activity = time.monotonic()
         if mtype == "text":
             text = (message.get("text") or "").strip()
