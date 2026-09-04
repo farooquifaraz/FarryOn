@@ -143,18 +143,28 @@ class AppConfig {
   /// or for reading along while listening to the original voice.
   final bool translateCaptionsOnly;
 
-  /// Build the initial config from `--dart-define` values, falling back to
-  /// localhost defaults suitable for an emulator talking to a host backend.
+  /// Build the initial config from `--dart-define` values, falling back to the
+  /// LIVE backend.
+  ///
+  /// The default used to be `localhost:8000`, which is right for exactly one
+  /// person — a developer running the server on the same machine — and wrong
+  /// for every real user: a fresh install downloaded from the website dialled
+  /// a server that does not exist on their phone, and the first thing they saw
+  /// was "Can't reach the server" (device-seen 2026-09-04, on the first
+  /// install of the properly-signed build). The cloud host is the only
+  /// sensible default for a build strangers install; developers point it
+  /// somewhere else the same way they always have — a `--dart-define` at build
+  /// time, or the server sheet at runtime, which persists.
   ///
   /// Note: on the Android emulator, `10.0.2.2` maps to the host machine's
-  /// `localhost`; that makes a good default override during development.
+  /// `localhost`; that makes a good override during development.
   factory AppConfig.fromEnvironment() {
     const host = String.fromEnvironment(
       'FARRYON_HOST',
-      defaultValue: 'localhost',
+      defaultValue: 'farryon.izylrn.com',
     );
-    const port = int.fromEnvironment('FARRYON_PORT', defaultValue: 8000);
-    const secure = bool.fromEnvironment('FARRYON_SECURE', defaultValue: false);
+    const port = int.fromEnvironment('FARRYON_PORT', defaultValue: 443);
+    const secure = bool.fromEnvironment('FARRYON_SECURE', defaultValue: true);
     const token = String.fromEnvironment('FARRYON_TOKEN', defaultValue: '');
     const provider =
         String.fromEnvironment('FARRYON_PROVIDER', defaultValue: 'gemini');
