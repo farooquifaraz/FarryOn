@@ -62,6 +62,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       setState(() => _error = 'Enter your email and password.');
       return;
     }
+    // FarryOn has no usernames — accounts ARE email addresses. Without this
+    // check the backend rejects "barira" as a malformed field and the screen
+    // showed the generic "incorrect email or password", which reads as "your
+    // account is wrong" instead of "that isn't an email" (asked about
+    // 2026-09-05).
+    if (!email.contains('@') || !email.contains('.')) {
+      setState(() => _error =
+          'Sign in with your full email address — FarryOn has no usernames.');
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;

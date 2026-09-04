@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -255,5 +256,65 @@ def test_cannot_auto_merge_into_unverified_existing_account() -> None:
                     display_name="Attacker Or Coincidence",
                 )
             assert exc_info.value.code == "EMAIL_NOT_VERIFIED"
+
+    asyncio.run(_run())
+
+
+def test_identity_of_a_deleted_account_can_sign_in_again() -> None:
+    """A soft-deleted account must not poison its Google identity forever.
+
+    The link row outlived the user it pointed at, so every later sign-in
+    resolved to the dead row and 404-ed with no way out - Barira could not use
+    Google sign-in at all (2026-09-05). The stale link is now dropped and the
+    normal rules apply: link to the live verified account with that email.
+    """
+
+    async def _run() -> None:
+        sessionmaker = db_base.get_sessionmaker()
+        async with sessionmaker() as db:
+            gone = await link_or_create_user(
+                db,
+                provider="google",
+                provider_user_id="g-stale",
+                email="stale@example.com",
+                email_verified=True,
+                display_name="Gone Person",
+            )
+            gone.deleted_at = datetime.now(timezone.utc)
+            # The replacement: same address, password account, email proven.
+            db.add(
+                User(
+                    external_id="user:replacement",
+                    email="stale@example.com",
+                    password_hash="not-a-real-hash",
+                    status="active",
+                    email_verified_at=datetime.now(timezone.utc),
+                )
+            )
+            await db.commit()
+            gone_id = gone.id
+
+        async with sessionmaker() as db:
+            user = await link_or_create_user(
+                db,
+                provider="google",
+                provider_user_id="g-stale",
+                email="stale@example.com",
+                email_verified=True,
+                display_name="Gone Person",
+            )
+            await db.commit()
+            assert user.id != gone_id, "must not resurrect the deleted account"
+            assert user.deleted_at is None
+
+            links = (
+                await db.execute(
+                    select(OAuthAccount).where(
+                        OAuthAccount.provider_user_id == "g-stale"
+                    )
+                )
+            ).scalars().all()
+            assert len(links) == 1, "the stale link is replaced, not duplicated"
+            assert links[0].user_id == user.id
 
     asyncio.run(_run())

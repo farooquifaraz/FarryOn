@@ -55,12 +55,31 @@ async def link_or_create_user(
     if link is not None:
         user = await db.get(User, link.user_id)
         if user is None or user.deleted_at is not None:
-            raise AppError("NOT_FOUND", "This account no longer exists.", status_code=404)
-        if user.status in ("suspended", "deactivated"):
-            raise AppError(
-                "USER_SUSPENDED", "This account is no longer active.", status_code=403
+            # The account this identity pointed at is gone. The LINK must go
+            # with it: leaving it behind permanently poisons the Google
+            # identity — every future sign-in resolves to the dead row and
+            # dies on this branch, with no way for the user to recover and
+            # nothing on screen explaining why (device-seen 2026-09-05, a
+            # deleted account left its owner unable to use Google sign-in at
+            # all). Drop the stale link and fall through: the same rules that
+            # govern a first-time sign-in then apply — link to a live account
+            # with this verified email, or provision a fresh one.
+            logger.info(
+                "sso.stale_link_dropped",
+                provider=provider,
+                deleted_user_id=link.user_id,
             )
-        return user
+            await db.delete(link)
+            await db.flush()
+            link = None
+        else:
+            if user.status in ("suspended", "deactivated"):
+                raise AppError(
+                    "USER_SUSPENDED",
+                    "This account is no longer active.",
+                    status_code=403,
+                )
+            return user
 
     # 2. First time seeing this provider identity — link to an existing
     #    FarryOn account ONLY if that account's own email is independently
