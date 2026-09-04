@@ -108,6 +108,117 @@ async def download_info() -> JSONResponse:
     return JSONResponse(out)
 
 
+# ---- auth email landing pages ---------------------------------------------
+# The verification / reset emails need somewhere CLICKABLE to land. The admin
+# SPA has no such routes, so these two self-contained pages live with the
+# marketing site: their inline JS POSTs the token to the JSON API on the same
+# origin (allowed by _SITE_CSP's connect-src 'self') and shows the outcome.
+# NOTE: both paths must be listed in admin/Caddyfile's @backend matcher, or
+# the gateway hands them to the SPA instead of this router.
+
+_AUTH_PAGE_STYLE = """
+  body{margin:0;background:#08171c;color:#e8f4f2;font-family:Arial,Helvetica,
+       sans-serif;display:flex;min-height:100vh;align-items:center;
+       justify-content:center}
+  .card{background:#0e242b;border:1px solid #1d3a42;border-radius:14px;
+        padding:36px 32px;max-width:420px;width:90%;text-align:center}
+  h1{color:#7fe3c8;font-size:22px;margin:0 0 14px}
+  p{color:#cfe6e0;line-height:1.6}
+  input{width:100%;box-sizing:border-box;padding:12px;margin:8px 0;
+        border-radius:8px;border:1px solid #2a4a52;background:#122b33;
+        color:#e8f4f2;font-size:15px}
+  button{background:#18b98a;color:#04211a;border:0;border-radius:8px;
+         padding:12px 26px;font-weight:bold;font-size:15px;cursor:pointer;
+         margin-top:10px}
+  .err{color:#ff9c9c}.okc{color:#7fe3c8}
+"""
+
+
+@router.get("/verify-email", response_class=HTMLResponse, include_in_schema=False)
+async def verify_email_page() -> HTMLResponse:
+    """Landing page for the email-verification link: POSTs the token, shows ✓."""
+    html = f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FarryOn — verify email</title><style>{_AUTH_PAGE_STYLE}</style></head>
+<body><div class="card"><h1>Verifying your email…</h1><p id="msg">One moment.</p>
+<script>
+(async () => {{
+  const t = new URLSearchParams(location.search).get('token');
+  const msg = document.getElementById('msg');
+  if (!t) {{ msg.textContent = 'This link is missing its token.'; return; }}
+  try {{
+    const r = await fetch('/api/v1/auth/verify-email', {{
+      method: 'POST', headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{token: t}})
+    }});
+    if (r.ok) {{
+      document.querySelector('h1').textContent = 'Email verified \\u2713';
+      msg.className = 'okc';
+      msg.textContent = 'Your FarryOn account is active — you can go back to the app and sign in.';
+    }} else {{
+      const d = await r.json().catch(() => ({{}}));
+      document.querySelector('h1').textContent = 'Link not valid';
+      msg.className = 'err';
+      msg.textContent = (d.error && d.error.message) || d.detail ||
+        'This verification link is invalid or has expired. Request a new one from the app.';
+    }}
+  }} catch (e) {{
+    msg.className = 'err'; msg.textContent = 'Network error — try again.';
+  }}
+}})();
+</script></div></body></html>"""
+    return HTMLResponse(html, headers={"Content-Security-Policy": _SITE_CSP})
+
+
+@router.get(
+    "/reset-password", response_class=HTMLResponse, include_in_schema=False
+)
+async def reset_password_page() -> HTMLResponse:
+    """Landing page for reset/invite links: asks for the new password twice."""
+    html = f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FarryOn — set password</title><style>{_AUTH_PAGE_STYLE}</style></head>
+<body><div class="card"><h1 id="title">Choose a new password</h1>
+<p id="msg">At least 8 characters.</p>
+<form id="f">
+  <input type="password" id="p1" placeholder="New password" minlength="8" required>
+  <input type="password" id="p2" placeholder="Repeat password" minlength="8" required>
+  <button type="submit">Save password</button>
+</form>
+<script>
+const q = new URLSearchParams(location.search);
+if (q.get('invite')) document.getElementById('title').textContent =
+  'Activate your FarryOn account';
+document.getElementById('f').addEventListener('submit', async (ev) => {{
+  ev.preventDefault();
+  const msg = document.getElementById('msg');
+  const p1 = document.getElementById('p1').value;
+  const p2 = document.getElementById('p2').value;
+  if (p1 !== p2) {{ msg.className='err'; msg.textContent='Passwords do not match.'; return; }}
+  const t = q.get('token');
+  if (!t) {{ msg.className='err'; msg.textContent='This link is missing its token.'; return; }}
+  try {{
+    const r = await fetch('/api/v1/auth/reset-password', {{
+      method: 'POST', headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{token: t, new_password: p1}})
+    }});
+    if (r.ok) {{
+      document.getElementById('f').style.display = 'none';
+      document.getElementById('title').textContent = 'Password saved \\u2713';
+      msg.className = 'okc';
+      msg.textContent = 'You can now sign in to FarryOn with your new password.';
+    }} else {{
+      const d = await r.json().catch(() => ({{}}));
+      msg.className = 'err';
+      msg.textContent = (d.error && d.error.message) || d.detail ||
+        'This link is invalid or has expired. Request a new one from the app.';
+    }}
+  }} catch (e) {{ msg.className='err'; msg.textContent='Network error — try again.'; }}
+}});
+</script></div></body></html>"""
+    return HTMLResponse(html, headers={"Content-Security-Policy": _SITE_CSP})
+
+
 @router.get("/download", include_in_schema=False)
 @router.get("/download/{abi}", include_in_schema=False)
 async def download_apk(abi: str = "arm64") -> FileResponse:

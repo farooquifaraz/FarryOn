@@ -291,6 +291,22 @@ class Settings(BaseSettings):
         description="Base URL used to build the OAuth callback redirect_uri "
         "(must exactly match a redirect URI registered with the provider).",
     )
+
+    # -- Transactional auth email (verification / password reset / invites) ----
+    # Plain SMTP on purpose: the user already owns mailboxes on their domain
+    # (Hostinger), so no third-party mail provider account is required to make
+    # sign-up emails real. Leave `auth_smtp_host` EMPTY to fall back to the
+    # old log-only behaviour (dev/tests). Links in the mails are built from
+    # `sso_redirect_base_url`, which is already the public site origin in
+    # production.
+    auth_smtp_host: str = Field(default="")
+    auth_smtp_port: int = Field(default=465)  # implicit-TLS (SMTPS)
+    auth_smtp_user: str = Field(default="")
+    auth_smtp_password: str = Field(default="")
+    # Sender address; empty -> auth_smtp_user (most SMTP hosts require the
+    # authenticated mailbox as the From address anyway).
+    auth_email_from: str = Field(default="")
+    auth_email_from_name: str = Field(default="FarryOn")
     sso_frontend_success_url: str | None = Field(
         default=None,
         description="If set, the callback redirects here with "
