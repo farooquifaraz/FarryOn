@@ -1,9 +1,23 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// Release signing (see the signingConfigs block): resolved from, in order,
+// environment variables (CI) then android/key.properties (local dev). Both
+// stay out of git — the keystore is D:\FarryOn\secrets\farryon-release.jks
+// locally with a backup at /root/farryon-secrets on the VPS.
+val keyProps = Properties().apply {
+    val f = rootProject.file("key.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+fun signing(name: String): String? =
+    System.getenv(name) ?: (keyProps.getProperty(name) as String?)
 
 android {
     namespace = "com.farryon.farryon"
@@ -52,11 +66,30 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            // Absent config (a fresh clone, a CI fork) falls back to the debug
+            // key below so `flutter run --release` still works — but anything
+            // USERS install must be built with the real key: a debug-signed
+            // build has a different, unstable signature, so updates refuse to
+            // install over it and nothing proves the publisher.
+            val storePath = signing("FARRYON_KEYSTORE")
+            if (storePath != null) {
+                storeFile = file(storePath)
+                storePassword = signing("FARRYON_KEYSTORE_PASSWORD")
+                keyAlias = signing("FARRYON_KEY_ALIAS") ?: "farryon"
+                keyPassword = signing("FARRYON_KEY_PASSWORD")
+                    ?: signing("FARRYON_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            val release = signingConfigs.getByName("release")
+            signingConfig =
+                if (release.storeFile != null) release
+                else signingConfigs.getByName("debug")
             // R8 shrinking is ON to keep the APK small (the unshrunk DEX was
             // ~12 MB). flutter_local_notifications persists scheduled reminders
             // via Gson generic TypeTokens, so R8 MUST preserve generic

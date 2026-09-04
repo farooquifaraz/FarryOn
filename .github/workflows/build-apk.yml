@@ -100,14 +100,42 @@ jobs:
           fi
           ls -lh android/app/libs/
 
+      # ---- release signing ---------------------------------------------------
+      # The stable publisher identity: the keystore lives in the
+      # ANDROID_KEYSTORE_BASE64/-_PASSWORD secrets (backups: D:\FarryOn\secrets
+      # on the dev PC, /root/farryon-secrets on the VPS). Without it the build
+      # falls back to a debug key — installable, but users cannot UPDATE over a
+      # different signature, so never publish such a build.
+      - name: Release signing key
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::warning::ANDROID_KEYSTORE_* not set — building DEBUG-signed."
+            exit 0
+          fi
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/farryon-release.jks"
+          {
+            echo "FARRYON_KEYSTORE=$RUNNER_TEMP/farryon-release.jks"
+            echo "FARRYON_KEYSTORE_PASSWORD=$KS_PASS"
+            echo "FARRYON_KEY_ALIAS=farryon"
+          } >> "$GITHUB_ENV"
+
       - name: Resolve dependencies
         run: flutter pub get
 
       - name: Static analysis (non-blocking)
         run: flutter analyze || true
 
+      # GOOGLE_SERVER_CLIENT_ID is the PUBLIC web client id — without the
+      # dart-define the Google sign-in button silently vanishes from the app
+      # (bit the website builds until 2026-09-04).
       - name: Build release APKs (split per ABI)
-        run: flutter build apk --release --split-per-abi
+        run: >
+          flutter build apk --release --split-per-abi
+          --dart-define=GOOGLE_SERVER_CLIENT_ID=${{ vars.GOOGLE_SERVER_CLIENT_ID
+          || '408799948813-oi20fbubb8igugkokolpqf2h7b68omjk.apps.googleusercontent.com' }}
 
       - name: List built APK sizes
         run: ls -lh build/app/outputs/flutter-apk/

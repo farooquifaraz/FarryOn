@@ -95,3 +95,7 @@ api-keys*
 
 # Vendored AI Glasses SDK (kept locally, not tracked)
 AI Glasses SDK/
+
+# Release signing keystore + passwords - NEVER commit
+secrets/
+mobile/android/key.properties
