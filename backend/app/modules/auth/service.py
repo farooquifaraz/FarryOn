@@ -302,6 +302,26 @@ async def login(
             "USER_SUSPENDED", "This account is no longer active.", status_code=403
         )
 
+    # No session until the mailbox is proven (Faraz's rule, 2026-09-04): a
+    # password account signs in only AFTER clicking the verification link.
+    # SSO accounts are untouched — Google only issues tokens for mailboxes it
+    # has already verified, so those rows arrive with email_verified_at set.
+    # Best-effort resend so "I lost the mail" self-heals at the login prompt;
+    # the cooldown in _issue_email_verification keeps it from spamming.
+    # Config-gated (default ON) so the offline test-suite — whose flows
+    # register+login hundreds of times with no mailbox anywhere — can turn
+    # the gate off once in conftest instead of in forty tests.
+    if settings.require_verified_email and user.email_verified_at is None:
+        try:
+            await _issue_email_verification(db, settings, user)
+        except AppError:
+            pass  # RESEND_TOO_SOON — one is already on its way
+        raise AppError(
+            "EMAIL_NOT_VERIFIED",
+            "Verify your email first — we've sent the link to your inbox.",
+            status_code=403,
+        )
+
     if await twofa_service.is_enabled(db, user.id):
         pending = encode_token(
             settings=settings,

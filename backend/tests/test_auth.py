@@ -293,3 +293,56 @@ def test_verify_email_flow() -> None:
     finally:
         notifications.send_verification_email = original
 
+
+
+def test_unverified_login_is_refused_when_gate_is_on(monkeypatch) -> None:
+    """The 2026-09-04 rule: a password account signs in only AFTER the
+    verification link is clicked. The suite runs with the gate off (conftest);
+    this test turns it back on and proves both halves - refusal before,
+    tokens after."""
+    from app.config import get_settings
+
+    with _client() as client:
+        client.post(
+            "/api/v1/auth/register",
+            json={"email": "gate@example.com", "password": "correct-horse-1"},
+        )
+        monkeypatch.setattr(
+            get_settings(), "require_verified_email", True, raising=True
+        )
+        r = client.post(
+            "/api/v1/auth/login",
+            json={"email": "gate@example.com", "password": "correct-horse-1"},
+        )
+        assert r.status_code == 403, r.text
+        assert r.json()["error"]["code"] == "EMAIL_NOT_VERIFIED"
+
+        # Verifying flips the gate open. The DB stores only the token HASH,
+        # so mark the user verified directly - the same end state
+        # verify_email() produces after matching the hash.
+        import asyncio
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+
+        from app.db.base import get_sessionmaker
+        from app.db.models import User
+
+        async def _verify() -> None:
+            async with get_sessionmaker()() as db:
+                user = (
+                    await db.execute(
+                        select(User).where(User.email == "gate@example.com")
+                    )
+                ).scalar_one()
+                user.email_verified_at = datetime.now(timezone.utc)
+                await db.commit()
+
+        asyncio.get_event_loop().run_until_complete(_verify())
+
+        r = client.post(
+            "/api/v1/auth/login",
+            json={"email": "gate@example.com", "password": "correct-horse-1"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["access_token"]

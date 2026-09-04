@@ -170,6 +170,25 @@ class AuthApi {
     }
   }
 
+  /// `POST /api/v1/auth/forgot-password` — always resolves to a human
+  /// sentence for a banner. Enumeration-safe by design: the backend answers
+  /// identically whether or not the address exists, so this can too.
+  Future<String> forgotPassword(String email) async {
+    try {
+      final res = await _post('/api/v1/auth/forgot-password', {'email': email});
+      if (res.body['success'] == true) {
+        final data = res.body['data'];
+        final msg = data is Map ? data['message'] : null;
+        if (msg is String && msg.isNotEmpty) return msg;
+        return 'If that email exists, a reset link has been sent.';
+      }
+      return _envelopeError(
+          res.body, "Couldn't send the reset email. Try again.");
+    } catch (_) {
+      return "Couldn't reach the server. Check the connection and try again.";
+    }
+  }
+
   /// `POST /api/v1/auth/login`. May resolve to a 2FA challenge.
   Future<AuthResult> login({
     required String email,

@@ -129,6 +129,28 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     });
   }
 
+  Future<void> _forgotPassword() async {
+    final email = _emailCtl.text.trim();
+    if (email.isEmpty) {
+      setState(() {
+        _error = 'Type your email above first, then tap "Forgot password?".';
+        _notice = null;
+      });
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+      _notice = null;
+    });
+    final msg = await ref.read(authApiProvider).forgotPassword(email);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _notice = msg;
+    });
+  }
+
   Future<void> _openSignup() async {
     final notice = await SignupScreen.open(context);
     if (!mounted || notice == null) return;
@@ -241,6 +263,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     color: Aurora.authTextFaint,
                   ),
                   onPressed: () => setState(() => _showPw = !_showPw),
+                ),
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _anyBusy ? null : _forgotPassword,
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    minimumSize: const Size(0, 32),
+                  ),
+                  child: const Text(
+                    'Forgot password?',
+                    style: TextStyle(color: Aurora.authTextDim, fontSize: 12.5),
+                  ),
                 ),
               ),
             ],

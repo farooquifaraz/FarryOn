@@ -9,6 +9,8 @@ already exists as a plain user) when ``FIRST_SUPER_ADMIN_EMAIL`` and
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -157,6 +159,10 @@ async def seed_first_super_admin(
             password_hash=hash_password(password),
             display_name="Super Admin",
             status="active",
+            # Seeded by the OPERATOR, so the mailbox is theirs by definition —
+            # and login now refuses unverified accounts, which would otherwise
+            # lock the very first admin out of a fresh deploy.
+            email_verified_at=datetime.now(timezone.utc),
         )
         session.add(user)
         await session.flush()

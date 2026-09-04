@@ -44,6 +44,9 @@ _safe_unlink(_TMP_DB)
 os.environ.setdefault("AI_PROVIDER", "mock")
 os.environ.setdefault("WEB_SEARCH_PROVIDER", "mock")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
+# The suite's auth flows register+login with no mailbox anywhere; the
+# verified-email login gate has its own dedicated tests that re-enable it.
+os.environ.setdefault("REQUIRE_VERIFIED_EMAIL", "false")
 os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_TMP_DB}")
 # Force every provider key empty. We *set* (not pop) them so that an operator's
 # real keys in a local ``.env`` file cannot leak in — an os.environ value
