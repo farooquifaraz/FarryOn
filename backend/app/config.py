@@ -433,14 +433,16 @@ class Settings(BaseSettings):
             "lite": {"price_usd": 6.0,  "period": "month", "talk_minutes": 200,  "image_scans": 150,  "web_searches": 200},   # noqa: E501
             "plus": {"price_usd": 15.0, "period": "month", "talk_minutes": 500,  "image_scans": 500,  "web_searches": 800},   # noqa: E501
             "pro":  {"price_usd": 25.0, "period": "month", "talk_minutes": 1000, "image_scans": 1000, "web_searches": 1000},  # noqa: E501
-            # Yearly: the SAME monthly allowances, paid a year at a time. The
-            # discount is affordable because a year is one Stripe fee instead
-            # of twelve, and the money arrives before the cost does. Caps stay
+            # Yearly: the SAME monthly allowances, paid a year at a time, at
+            # ten months' money — two months free, the same deal on every tier
+            # so no one has to compare discounts to pick a plan. It is
+            # affordable because a year is one Stripe fee instead of twelve,
+            # and the money arrives before the cost does. Caps stay
             # MONTHLY on purpose — a year-sized bucket would let someone spend
             # twelve months of the most expensive thing we sell in a weekend.
-            "lite_yearly": {"price_usd": 65.0,  "period": "year", "talk_minutes": 200,  "image_scans": 150,  "web_searches": 200},   # noqa: E501
-            "plus_yearly": {"price_usd": 165.0, "period": "year", "talk_minutes": 500,  "image_scans": 500,  "web_searches": 800},   # noqa: E501
-            "pro_yearly":  {"price_usd": 275.0, "period": "year", "talk_minutes": 1000, "image_scans": 1000, "web_searches": 1000},  # noqa: E501
+            "lite_yearly": {"price_usd": 60.0,  "period": "year", "talk_minutes": 200,  "image_scans": 150,  "web_searches": 200},   # noqa: E501
+            "plus_yearly": {"price_usd": 150.0, "period": "year", "talk_minutes": 500,  "image_scans": 500,  "web_searches": 800},   # noqa: E501
+            "pro_yearly":  {"price_usd": 250.0, "period": "year", "talk_minutes": 1000, "image_scans": 1000, "web_searches": 1000},  # noqa: E501
         }
     )
     # Days used to spread a monthly voice budget into a daily cap. 30 is the

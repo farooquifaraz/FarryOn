@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from app.config import get_settings
+from app.web import pricing
 from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -75,9 +76,11 @@ def _build_path(abi: str) -> Path | None:
 async def landing() -> HTMLResponse:
     """The public marketing / download page."""
     try:
+        # Prices and allowances are filled in from Settings.plan_catalog, so the
+        # page can never quote a plan the API would refuse to sell.
+        page = pricing.render(_INDEX.read_text(encoding="utf-8"), get_settings())
         return HTMLResponse(
-            _INDEX.read_text(encoding="utf-8"),
-            headers={"Content-Security-Policy": _SITE_CSP},
+            page, headers={"Content-Security-Policy": _SITE_CSP}
         )
     except OSError as exc:  # pragma: no cover - only if the asset is missing
         logger.warning("site.index_missing", error=str(exc))

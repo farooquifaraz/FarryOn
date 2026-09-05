@@ -775,79 +775,14 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
     <div class="pricing-header reveal">
       <span class="sec-tag">Simple pricing</span>
       <h2 class="sec-heading g2">Start free. Upgrade anytime.</h2>
-      <p class="sec-sub">Pay only for the voice time you need. Begin with a free 60-minute trial — no card required. Cancel anytime.</p>
+      <p class="sec-sub">Pay only for the voice time you need. Begin with a free <!--TRIAL_MINUTES-->-minute trial — no card required. Cancel anytime.</p>
       <div class="toggle">
         <span class="t-label on" id="ml">Monthly</span>
         <div class="toggle-track" id="bt" onclick="toggleBilling()"><div class="toggle-thumb"></div></div>
-        <span class="t-label" id="al">Annual <span class="save-b">~1 month free</span></span>
+        <span class="t-label" id="al">Annual <span class="save-b"><!--ANNUAL_SAVING--></span></span>
       </div>
     </div>
-    <div class="plans" style="grid-template-columns:repeat(4,1fr)">
-      <div class="plan reveal">
-        <div class="plan-inner">
-          <div class="plan-name">Free</div>
-          <p class="plan-desc">A real taste of Farry — every feature unlocked.</p>
-          <div><div class="plan-amount"><sup>$</sup><span class="pv" data-m="0" data-a="0">0</span></div>
-          <div class="plan-period">one-time trial</div></div>
-          <hr class="plan-div">
-          <ul class="plan-feats">
-            <li>30 minutes of talk time (one-time)</li>
-            <li>All features unlocked</li>
-            <li>No credit card needed</li>
-          </ul>
-          <a href="/download/arm64" class="plan-btn outline">Start free</a>
-        </div>
-      </div>
-      <div class="plan reveal d1">
-        <div class="plan-inner">
-          <div class="plan-name">Lite</div>
-          <p class="plan-desc">For everyday helpers.</p>
-          <div><div class="plan-amount"><sup>$</sup><span class="pv" data-m="6" data-a="65">6</span></div>
-          <div class="plan-period"><span class="per" data-m="per month" data-a="per year">per month</span><span id="b1" style="display:none"> · works out at $5.42/mo</span></div></div>
-          <hr class="plan-div">
-          <ul class="plan-feats">
-            <li>200 talk minutes a month</li>
-            <li>150 image scans a month</li>
-            <li>Notes, reminders &amp; email</li>
-            <li>WhatsApp &amp; Telegram</li>
-          </ul>
-          <a href="/download/arm64" class="plan-btn outline">Choose Lite</a>
-        </div>
-      </div>
-      <div class="plan popular reveal d2">
-        <div class="plan-pop">Most popular</div>
-        <div class="plan-inner">
-          <div class="plan-name">Plus</div>
-          <p class="plan-desc">For daily power users.</p>
-          <div><div class="plan-amount"><sup>$</sup><span class="pv" data-m="15" data-a="165">15</span></div>
-          <div class="plan-period"><span class="per" data-m="per month" data-a="per year">per month</span><span id="b2" style="display:none"> · works out at $13.75/mo</span></div></div>
-          <hr class="plan-div">
-          <ul class="plan-feats">
-            <li>500 talk minutes a month</li>
-            <li>500 image scans a month</li>
-            <li>Everything in Lite</li>
-            <li>Priority responses</li>
-          </ul>
-          <a href="/download/arm64" class="plan-btn solid">Choose Plus</a>
-        </div>
-      </div>
-      <div class="plan reveal d3">
-        <div class="plan-inner">
-          <div class="plan-name">Pro</div>
-          <p class="plan-desc">For heavy, all-day use.</p>
-          <div><div class="plan-amount"><sup>$</sup><span class="pv" data-m="25" data-a="275">25</span></div>
-          <div class="plan-period"><span class="per" data-m="per month" data-a="per year">per month</span><span id="b3" style="display:none"> · works out at $22.92/mo</span></div></div>
-          <hr class="plan-div">
-          <ul class="plan-feats">
-            <li>1,000 talk minutes a month</li>
-            <li>1,000 image scans a month</li>
-            <li>Everything in Plus</li>
-            <li>Priority support</li>
-          </ul>
-          <a href="/download/arm64" class="plan-btn outline">Choose Pro</a>
-        </div>
-      </div>
-    </div>
+    <!--PLAN_CARDS-->
 
     <div class="reveal" style="margin-top:44px">
       <p style="text-align:center;font-size:.9rem;color:var(--tm);margin-bottom:18px">Want the hands-free experience? <b style="color:var(--t)">Add smart glasses</b> — a one-time purchase that works with any plan.</p>
@@ -1020,9 +955,9 @@ function toggleBilling(){
   document.getElementById('ml').classList.toggle('on',!ann);
   document.getElementById('al').classList.toggle('on',ann);
   document.querySelectorAll('.pv').forEach(el=>el.textContent=ann?el.dataset.a:el.dataset.m);
-  // The word has to follow the number: $65 under "per month" is a lie.
+  // The word has to follow the number: a yearly total under "per month" is a lie.
   document.querySelectorAll('.per').forEach(el=>el.textContent=ann?el.dataset.a:el.dataset.m);
-  [1,2,3].forEach(i=>{const el=document.getElementById('b'+i);if(el)el.style.display=ann?'inline':'none';});
+  document.querySelectorAll('.ann').forEach(el=>el.style.display=ann?'inline':'none');
 }
 
 /* ═══════════════════════════════════════════

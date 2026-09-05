@@ -106,11 +106,14 @@ async def test_yearly_plans_are_sold_alongside_monthly(db_session) -> None:
     plans = await _plans_by_name(db_session)
     settings = get_settings()
 
-    for monthly, yearly, cents in (
-        ("lite", "lite_yearly", 6500),
-        ("plus", "plus_yearly", 16500),
-        ("pro", "pro_yearly", 27500),
+    # The prices themselves live in one place (Settings.plan_catalog); this
+    # asserts the seed carries them over faithfully, not what they are.
+    for monthly, yearly in (
+        ("lite", "lite_yearly"),
+        ("plus", "plus_yearly"),
+        ("pro", "pro_yearly"),
     ):
+        cents = settings.plan_price_cents(yearly)
         assert plans[yearly].price_cents == cents
         assert plans[yearly].interval == "year"
         assert plans[monthly].interval == "month"
