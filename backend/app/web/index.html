@@ -802,8 +802,8 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
         <div class="plan-inner">
           <div class="plan-name">Lite</div>
           <p class="plan-desc">For everyday helpers.</p>
-          <div><div class="plan-amount"><sup>$</sup><span class="pv" data-m="6" data-a="5.42">6</span></div>
-          <div class="plan-period">per month<span id="b1" style="display:none">, billed $65/yr</span></div></div>
+          <div><div class="plan-amount"><sup>$</sup><span class="pv" data-m="6" data-a="65">6</span></div>
+          <div class="plan-period"><span class="per" data-m="per month" data-a="per year">per month</span><span id="b1" style="display:none"> · works out at $5.42/mo</span></div></div>
           <hr class="plan-div">
           <ul class="plan-feats">
             <li>200 talk minutes a month</li>
@@ -819,8 +819,8 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
         <div class="plan-inner">
           <div class="plan-name">Plus</div>
           <p class="plan-desc">For daily power users.</p>
-          <div><div class="plan-amount"><sup>$</sup><span class="pv" data-m="15" data-a="13.75">15</span></div>
-          <div class="plan-period">per month<span id="b2" style="display:none">, billed $165/yr</span></div></div>
+          <div><div class="plan-amount"><sup>$</sup><span class="pv" data-m="15" data-a="165">15</span></div>
+          <div class="plan-period"><span class="per" data-m="per month" data-a="per year">per month</span><span id="b2" style="display:none"> · works out at $13.75/mo</span></div></div>
           <hr class="plan-div">
           <ul class="plan-feats">
             <li>500 talk minutes a month</li>
@@ -835,8 +835,8 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
         <div class="plan-inner">
           <div class="plan-name">Pro</div>
           <p class="plan-desc">For heavy, all-day use.</p>
-          <div><div class="plan-amount"><sup>$</sup><span class="pv" data-m="25" data-a="22.92">25</span></div>
-          <div class="plan-period">per month<span id="b3" style="display:none">, billed $275/yr</span></div></div>
+          <div><div class="plan-amount"><sup>$</sup><span class="pv" data-m="25" data-a="275">25</span></div>
+          <div class="plan-period"><span class="per" data-m="per month" data-a="per year">per month</span><span id="b3" style="display:none"> · works out at $22.92/mo</span></div></div>
           <hr class="plan-div">
           <ul class="plan-feats">
             <li>1,000 talk minutes a month</li>
@@ -1020,6 +1020,8 @@ function toggleBilling(){
   document.getElementById('ml').classList.toggle('on',!ann);
   document.getElementById('al').classList.toggle('on',ann);
   document.querySelectorAll('.pv').forEach(el=>el.textContent=ann?el.dataset.a:el.dataset.m);
+  // The word has to follow the number: $65 under "per month" is a lie.
+  document.querySelectorAll('.per').forEach(el=>el.textContent=ann?el.dataset.a:el.dataset.m);
   [1,2,3].forEach(i=>{const el=document.getElementById('b'+i);if(el)el.style.display=ann?'inline':'none';});
 }
 
