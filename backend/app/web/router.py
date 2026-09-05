@@ -239,3 +239,151 @@ async def download_apk(abi: str = "arm64") -> FileResponse:
         media_type="application/vnd.android.package-archive",
         filename=filename,
     )
+
+
+# ---- legal pages ----------------------------------------------------------
+# Stripe requires a live site to publish terms, a refund policy and a privacy
+# notice before it will activate an account for real payments, and a person
+# about to pay is entitled to read them anyway. Kept here (not in the SPA)
+# for the same reason as the auth pages: they belong to the public site.
+# NOTE: both paths must also be in admin/Caddyfile's @backend matcher.
+
+_LEGAL_STYLE = """
+  body{margin:0;background:#08171c;color:#cfe6e0;font-family:Arial,Helvetica,
+       sans-serif;line-height:1.65}
+  .wrap{max-width:760px;margin:0 auto;padding:44px 22px 72px}
+  h1{color:#7fe3c8;font-size:26px;margin:0 0 6px}
+  h2{color:#7fe3c8;font-size:17px;margin:30px 0 8px}
+  .upd{color:#7fa39b;font-size:13px;margin:0 0 26px}
+  a{color:#18b98a}
+  li{margin:5px 0}
+  .foot{margin-top:40px;border-top:1px solid #1d3a42;padding-top:16px;
+        font-size:13px;color:#7fa39b}
+"""
+
+_CONTACT_EMAIL = "students@izylrn.com"
+
+
+def _legal_page(title: str, updated: str, body: str) -> HTMLResponse:
+    html = f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FarryOn — {title}</title><style>{_LEGAL_STYLE}</style></head>
+<body><div class="wrap"><h1>{title}</h1><p class="upd">Last updated {updated}</p>
+{body}
+<p class="foot">FarryOn · <a href="/">farryon.izylrn.com</a> ·
+Questions: <a href="mailto:{_CONTACT_EMAIL}">{_CONTACT_EMAIL}</a></p>
+</div></body></html>"""
+    return HTMLResponse(html, headers={"Content-Security-Policy": _SITE_CSP})
+
+
+@router.get("/terms", response_class=HTMLResponse, include_in_schema=False)
+async def terms_page() -> HTMLResponse:
+    return _legal_page(
+        "Terms &amp; Refund Policy",
+        "5 September 2026",
+        """
+<h2>What FarryOn is</h2>
+<p>FarryOn is a voice assistant for your phone and (optionally) smart glasses.
+It listens when you start a session, answers, and can act on your behalf —
+saving notes, setting reminders, reading and sending email, opening WhatsApp
+or Telegram messages for you to send, and describing what the camera sees.</p>
+
+<h2>Your account</h2>
+<ul>
+<li>You need an account, and the email address on it must be verified.</li>
+<li>Keep your password to yourself; you are responsible for what happens under
+your account.</li>
+<li>Don't use FarryOn to break the law, to harass anyone, or to record people
+who have not agreed to be recorded. Local recording laws are yours to follow.</li>
+<li>We may suspend an account that is being used this way.</li>
+</ul>
+
+<h2>Plans and billing</h2>
+<ul>
+<li>The free tier is a trial allowance, not an unlimited plan.</li>
+<li>Paid plans are monthly subscriptions, charged in advance through Stripe.
+We never see or store your card details.</li>
+<li>A subscription renews automatically each month until you cancel.</li>
+<li>Prices are in US dollars and may change; a change never applies to a month
+you have already paid for.</li>
+</ul>
+
+<h2>Cancellation and refunds</h2>
+<ul>
+<li>You can cancel at any time. Your plan stays active until the end of the
+period you have already paid for, and does not renew after that.</li>
+<li><strong>Unhappy in the first 14 days of your first paid month? Write to us
+and we will refund it in full.</strong></li>
+<li>If the service is substantially unavailable for a prolonged period during a
+month you paid for, ask us and we will refund that month.</li>
+<li>Beyond that, part-months are not refunded — cancelling simply stops the
+next charge.</li>
+</ul>
+
+<h2>What we don't promise</h2>
+<p>FarryOn uses AI models that can be wrong. Check anything that matters before
+acting on it. The service is provided as is, without warranty, and we are not
+liable for indirect losses. Nothing here limits rights you have by law.</p>
+
+<h2>Changes</h2>
+<p>If these terms change materially, we will say so on this page and, for
+paying users, by email before the change takes effect.</p>
+""",
+    )
+
+
+@router.get("/privacy", response_class=HTMLResponse, include_in_schema=False)
+async def privacy_page() -> HTMLResponse:
+    return _legal_page(
+        "Privacy Policy",
+        "5 September 2026",
+        """
+<h2>The short version</h2>
+<p>FarryOn holds what it needs to answer you and to run your account. It does
+not sell your data, and it does not listen when a session is not running.</p>
+
+<h2>What we hold</h2>
+<ul>
+<li><strong>Account:</strong> your email address, display name, and a hashed
+password (never the password itself).</li>
+<li><strong>Your content:</strong> notes, reminders, saved contacts and chat
+transcripts you create, so you can read them back.</li>
+<li><strong>Usage:</strong> how many voice minutes, image scans and searches
+you use, to enforce plan limits and to bill correctly.</li>
+<li><strong>Diagnostics:</strong> timing and error logs. These do not contain
+your conversations.</li>
+</ul>
+
+<h2>Voice, camera and location</h2>
+<ul>
+<li>The microphone is streamed only while a session is running, and only to the
+AI provider that answers you. It is not stored as audio on our servers.</li>
+<li>The camera is used when you ask about something in front of you. The photo
+is used to answer that question; photos taken on the glasses stay on the
+glasses until you sync them to your own phone.</li>
+<li>Location is used only when you ask for something that needs it, and it is
+not kept as a history.</li>
+</ul>
+
+<h2>Email, WhatsApp and Telegram</h2>
+<p>If you connect a mailbox, its app password is stored encrypted on your phone
+and used only to fetch or send the mail you ask for. WhatsApp and SMS are
+opened on your device with the message ready — you press send.</p>
+
+<h2>Who else sees it</h2>
+<ul>
+<li><strong>AI providers</strong> (Google Gemini, and OpenAI if you pick it)
+receive what is needed to answer your request.</li>
+<li><strong>Stripe</strong> handles payments and holds your card details; we
+receive only the subscription status.</li>
+<li>Nobody else. We do not sell or rent your data or use it for advertising.</li>
+</ul>
+
+<h2>Keeping and deleting</h2>
+<p>Your content stays until you delete it or close your account. Ask us and we
+will delete your account and its data. Diagnostic logs roll over on their own.</p>
+
+<h2>Children</h2>
+<p>FarryOn is not intended for children under 13.</p>
+""",
+    )

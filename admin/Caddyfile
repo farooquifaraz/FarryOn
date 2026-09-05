@@ -27,7 +27,7 @@
 	# through to the SPA handler below.
 	# /verify-email and /reset-password are the auth-email landing pages —
 	# backend-rendered (web/router.py), NOT part of the admin SPA.
-	@backend path /api /api/* /ws/* /healthz /readyz /detect / /download /download/* /farry-icon.png /favicon.ico /verify-email /reset-password
+	@backend path /api /api/* /ws/* /healthz /readyz /detect / /download /download/* /farry-icon.png /favicon.ico /verify-email /reset-password /terms /privacy
 	handle @backend {
 		reverse_proxy backend:8000
 	}
