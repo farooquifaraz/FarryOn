@@ -87,10 +87,17 @@ class SubscriptionOverview {
     required this.usage,
     required this.upgrades,
     required this.checkoutAvailable,
+    this.window = 'month',
   });
 
   final String plan;
   final int priceCents;
+
+  /// Which window the usage numbers cover: `month` on a paid plan, `lifetime`
+  /// on the free trial — whose allowance is one-time and never resets. The
+  /// screen says which, rather than letting someone assume a fresh month is
+  /// coming. Defaults to `month` so an older backend still reads sensibly.
+  final String window;
   final Map<String, UsageMeter> usage;
   final List<PlanOffer> upgrades;
 
@@ -101,6 +108,7 @@ class SubscriptionOverview {
   factory SubscriptionOverview.fromJson(Map<String, dynamic> j) =>
       SubscriptionOverview(
         plan: j['plan'] as String? ?? 'free',
+        window: j['window'] as String? ?? 'month',
         priceCents: (j['price_cents'] as num?)?.toInt() ?? 0,
         usage: {
           for (final e in (j['usage'] as Map<String, dynamic>? ?? {}).entries)

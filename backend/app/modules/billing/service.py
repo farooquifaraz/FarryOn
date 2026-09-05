@@ -133,6 +133,11 @@ async def subscription_overview(db: AsyncSession, *, user: User) -> dict:
     ]
     return {
         "plan": plan_name,
+        # Which window these numbers cover: "month" for a paid plan,
+        # "lifetime" for the trial. The screen has to say one or the other —
+        # calling a one-time trial allowance "this month" is a lie the user
+        # only discovers when it never resets.
+        "window": window,
         "price_cents": plan_row.price_cents if plan_row else 0,
         "currency": plan_row.currency if plan_row else "USD",
         "interval": plan_row.interval if plan_row else "month",

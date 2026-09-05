@@ -23,6 +23,7 @@ void main() {
       PlanOffer(name: 'pro', priceCents: 1999),
     ],
     bool checkoutAvailable = true,
+    String window = 'month',
   }) =>
       SubscriptionOverview(
         plan: plan,
@@ -30,6 +31,7 @@ void main() {
         usage: usage,
         upgrades: upgrades,
         checkoutAvailable: checkoutAvailable,
+        window: window,
       );
 
   Future<void> pump(
@@ -171,6 +173,50 @@ void main() {
       expect(o.plan, 'free');
       expect(o.usage, isEmpty);
       expect(o.checkoutAvailable, isFalse);
+    });
+  });
+
+  group('one talk budget, said once', () {
+    testWidgets('translation is not a second meter with its own cap',
+        (tester) async {
+      // The server sends translate_seconds with the SAME cap as voice — they
+      // share a budget. Rendered as a row it would read as a second
+      // allowance, which is the confusion this screen has to prevent.
+      await pump(
+        tester,
+        overview(usage: const {
+          'voice_seconds': UsageMeter(used: 600, cap: 30000),
+          'translate_seconds': UsageMeter(used: 300, cap: 30000),
+        }),
+      );
+
+      expect(find.text('translate_seconds'), findsNothing);
+      expect(find.textContaining('of 500 min used this month'), findsOneWidget);
+      expect(
+        find.textContaining('including 5 min of live translation'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('no translation line when none was used', (tester) async {
+      await pump(
+        tester,
+        overview(usage: const {
+          'voice_seconds': UsageMeter(used: 60, cap: 30000),
+          'translate_seconds': UsageMeter(used: 0, cap: 30000),
+        }),
+      );
+
+      expect(find.textContaining('including'), findsNothing);
+    });
+
+    testWidgets('a trial never promises a monthly reset', (tester) async {
+      await pump(tester, overview(window: 'lifetime'));
+
+      expect(find.text('YOUR FREE TRIAL'), findsOneWidget);
+      expect(find.textContaining('used in total'), findsWidgets);
+      expect(find.textContaining('does not reset each month'), findsOneWidget);
+      expect(find.textContaining("THIS MONTH"), findsNothing);
     });
   });
 }
