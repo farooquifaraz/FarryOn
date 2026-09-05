@@ -74,6 +74,49 @@ async def lifetime_voice_seconds(session: AsyncSession, *, user_key: str) -> int
     return int(result.scalar_one() or 0)
 
 
+async def usage_all_time(
+    session: AsyncSession, *, user_key: str, metric: str
+) -> int:
+    """Sum one usage counter across every day this user has ever had.
+
+    The trial plan's allowances are lifetime totals, so its meters compare
+    against this. (``lifetime_voice_seconds`` is the same thing for voice and
+    predates the generalisation; kept because callers still use it.)
+    """
+    column = getattr(DailyUsage, metric, None)
+    if column is None:
+        return 0
+    result = await session.execute(
+        select(func.coalesce(func.sum(column), 0)).where(
+            DailyUsage.user_key == user_key
+        )
+    )
+    return int(result.scalar_one() or 0)
+
+
+async def usage_this_month(
+    session: AsyncSession, *, user_key: str, month: str, metric: str
+) -> int:
+    """Sum one usage counter across every day in ``month`` (``YYYY-MM``).
+
+    Plans bill by the MONTH, not the day (2026-09-05): a daily cap punished
+    the person who needed an hour today and nothing all week, and it made the
+    limits impossible to describe honestly ("20 scans a day" is not a number
+    anyone budgets against). The per-day rows stay the write path — this just
+    adds up the ones whose key starts with the month.
+    """
+    column = getattr(DailyUsage, metric, None)
+    if column is None:
+        return 0
+    result = await session.execute(
+        select(func.coalesce(func.sum(column), 0)).where(
+            DailyUsage.user_key == user_key,
+            DailyUsage.day.like(f"{month}-%"),
+        )
+    )
+    return int(result.scalar_one() or 0)
+
+
 async def bump_daily_usage(
     session: AsyncSession, *, user_key: str, day: str, **counters: int
 ) -> DailyUsage:

@@ -44,7 +44,10 @@ class TestActivePlanName:
     async def test_no_user_gets_the_default(self, db_session, monkeypatch) -> None:
         monkeypatch.setattr(
             "app.config.get_settings",
-            lambda: SimpleNamespace(default_plan="free"),
+            lambda: SimpleNamespace(default_plan="free",
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
+        ),
         )
         assert await billing.active_plan_name(db_session, None) == "free"
 
@@ -53,7 +56,10 @@ class TestActivePlanName:
     ) -> None:
         monkeypatch.setattr(
             "app.config.get_settings",
-            lambda: SimpleNamespace(default_plan="free"),
+            lambda: SimpleNamespace(default_plan="free",
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
+        ),
         )
         user = await _user(db_session)
         assert await billing.active_plan_name(db_session, user.id) == "free"
@@ -65,7 +71,10 @@ class TestActivePlanName:
         # "pro". This was "free" for everyone before.
         monkeypatch.setattr(
             "app.config.get_settings",
-            lambda: SimpleNamespace(default_plan="free"),
+            lambda: SimpleNamespace(default_plan="free",
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
+        ),
         )
         user = await _user(db_session)
         await _subscribe(db_session, user, await _plan(db_session, "pro"))
@@ -74,7 +83,10 @@ class TestActivePlanName:
     async def test_trialing_counts_as_active(self, db_session, monkeypatch) -> None:
         monkeypatch.setattr(
             "app.config.get_settings",
-            lambda: SimpleNamespace(default_plan="free"),
+            lambda: SimpleNamespace(default_plan="free",
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
+        ),
         )
         user = await _user(db_session)
         await _subscribe(
@@ -90,7 +102,10 @@ class TestActivePlanName:
         # keep Pro's limits on a canceled subscription.
         monkeypatch.setattr(
             "app.config.get_settings",
-            lambda: SimpleNamespace(default_plan="free"),
+            lambda: SimpleNamespace(default_plan="free",
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
+        ),
         )
         user = await _user(db_session)
         await _subscribe(
@@ -105,7 +120,10 @@ class TestActivePlanName:
         # later one is the one whose caps should apply.
         monkeypatch.setattr(
             "app.config.get_settings",
-            lambda: SimpleNamespace(default_plan="free"),
+            lambda: SimpleNamespace(default_plan="free",
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
+        ),
         )
         user = await _user(db_session)
         await _subscribe(db_session, user, await _plan(db_session, "plus"))
@@ -123,6 +141,8 @@ class TestQuotaUsesTheUsersPlan:
             quota_enforcement_enabled=True,
             default_plan="free",
             plan_limits={"free": {"image_scans": 1}, "pro": {"image_scans": -1}},
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
         )
         monkeypatch.setattr(quota, "get_settings", lambda: settings)
         monkeypatch.setattr("app.config.get_settings", lambda: settings)
@@ -139,6 +159,8 @@ class TestQuotaUsesTheUsersPlan:
             quota_enforcement_enabled=True,
             default_plan="free",
             plan_limits={"free": {"image_scans": 1}, "pro": {"image_scans": -1}},
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
         )
         monkeypatch.setattr(quota, "get_settings", lambda: settings)
         monkeypatch.setattr("app.config.get_settings", lambda: settings)
@@ -159,6 +181,8 @@ class TestQuotaUsesTheUsersPlan:
             quota_enforcement_enabled=True,
             default_plan="free",
             plan_limits={"free": {"image_scans": -1}, "pro": {"image_scans": -1}},
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
         )
         monkeypatch.setattr(quota, "get_settings", lambda: settings)
 

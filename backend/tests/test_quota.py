@@ -15,7 +15,10 @@ pytestmark = pytest.mark.asyncio
 async def test_quota_disabled_is_a_noop(db_session, monkeypatch) -> None:
     monkeypatch.setattr(
         quota, "get_settings",
-        lambda: SimpleNamespace(quota_enforcement_enabled=False),
+        lambda: SimpleNamespace(quota_enforcement_enabled=False,
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
+        ),
     )
     ctx = ToolContext(session=db_session, session_id="s1")
     # Never blocks, never touches the DB.
@@ -29,6 +32,8 @@ async def test_quota_allows_up_to_cap_then_blocks(db_session, monkeypatch) -> No
             quota_enforcement_enabled=True,
             default_plan="free",
             plan_limits={"free": {"image_scans": 2}},
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
         ),
     )
     ctx = ToolContext(session=db_session, session_id="s2")
@@ -47,6 +52,8 @@ async def test_quota_unlimited_plan_never_blocks(db_session, monkeypatch) -> Non
             quota_enforcement_enabled=True,
             default_plan="pro",
             plan_limits={"pro": {"image_scans": -1}},
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
         ),
     )
     ctx = ToolContext(session=db_session, session_id="s3")
@@ -65,6 +72,8 @@ async def test_no_db_session_allows_rather_than_crashes(monkeypatch) -> None:
             quota_enforcement_enabled=True,
             default_plan="free",
             plan_limits={"free": {"web_searches": 1}},
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
         ),
     )
     ctx = ToolContext(session=None, session_id="no-db")
@@ -81,7 +90,9 @@ async def test_a_plan_config_does_not_know_is_not_unlimited(monkeypatch) -> None
         quota_enforcement_enabled=True,
         default_plan="free",
         plan_limits={"free": {"voice_seconds": 180, "image_scans": 2}},
-    )
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
+        )
     monkeypatch.setattr(quota, "get_settings", lambda: settings)
 
     assert quota.plan_cap("voice_seconds", "premium") == 180
@@ -97,7 +108,9 @@ async def test_an_unknown_plan_still_blocks_at_the_default_cap(
         quota_enforcement_enabled=True,
         default_plan="free",
         plan_limits={"free": {"image_scans": 1}},
-    )
+            # Paid plans spend their caps over a month (Settings.usage_window).
+            usage_window=lambda plan: "month",
+        )
     monkeypatch.setattr(quota, "get_settings", lambda: settings)
 
     ctx = ToolContext(session=db_session, session_id="s-unknown")

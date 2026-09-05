@@ -30,6 +30,10 @@ def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+def _this_month() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
 def plan_cap(metric: str, plan: str | None = None) -> int:
     """A plan's daily cap for ``metric``: ``-1`` unlimited, ``0`` off.
 
@@ -125,15 +129,26 @@ async def check_quota(
             "message": f"{label} isn't available on your current plan.",
         }
     key, day = _user_key(ctx), _today()
-    row = await repo.get_daily_usage(ctx.session, user_key=key, day=day)
-    used = getattr(row, metric, 0) if row else 0
+    # Caps are a MONTHLY budget (or a lifetime one on the trial), so the
+    # comparison sums the month's rows rather than reading only today's. The
+    # write path is unchanged — usage is still recorded per day.
+    if get_settings().usage_window(plan) == "lifetime":
+        used = await repo.usage_all_time(ctx.session, user_key=key, metric=metric)
+    else:
+        used = await repo.usage_this_month(
+            ctx.session, user_key=key, month=_this_month(), metric=metric
+        )
     if used + cost > cap:
         logger.info("quota.exceeded", user_key=key, metric=metric, used=used, cap=cap)
+        period = (
+            "trial" if get_settings().usage_window(plan) == "lifetime"
+            else "this month's"
+        )
         return {
             "ok": False, "status": "quota_exceeded",
             "message": (
-                f"You've reached today's {label} limit on the {plan} plan. "
-                "Upgrade to Pro for much more."
+                f"You've used your {period} {label} on the {plan} plan. "
+                "Upgrading gives you more."
             ),
         }
     await repo.bump_daily_usage(

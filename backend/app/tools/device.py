@@ -221,8 +221,8 @@ class RecordVideoTool(Tool):
     name = "record_video"
     description = (
         "Start recording VIDEO — on the user's smart glasses when they are "
-        "connected, otherwise with the phone's camera. Call ONLY when the "
-        "user has CLEARLY and UNAMBIGUOUSLY asked to record a video ('video "
+        "connected, otherwise with the phone's camera. Call this ONLY when "
+        "the user has CLEARLY and UNAMBIGUOUSLY asked to record a video ('video "
         "banao', 'video record karo', 'start recording') AND you have "
         "confirmed and they said yes — recording captures their surroundings, "
         "so a garbled or half-heard phrase must NEVER start one. Only for "

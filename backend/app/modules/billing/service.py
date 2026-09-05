@@ -86,8 +86,8 @@ async def active_plan_name(db: AsyncSession, user_id: int | None) -> str:
 
 
 async def subscription_overview(db: AsyncSession, *, user: User) -> dict:
-    """What the app's Subscription screen shows: my plan, today's usage, and
-    what I could upgrade to.
+    """What the app's Subscription screen shows: my plan, this month's usage,
+    and what I could upgrade to.
 
     One call rather than three because the screen paints from it directly —
     plan identity, each metered resource as ``{used, cap}`` (cap ``-1`` =
@@ -109,19 +109,22 @@ async def subscription_overview(db: AsyncSession, *, user: User) -> dict:
 
     from app.db import repo
 
-    usage_row = await repo.get_daily_usage(
-        db,
-        user_key=user_key_for(user.id, None),
-        day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-    )
     caps = settings.plan_limits.get(plan_name, {})
-    usage = {
-        metric: {
-            "used": int(getattr(usage_row, metric, 0) or 0) if usage_row else 0,
-            "cap": cap,
-        }
-        for metric, cap in caps.items()
-    }
+    key = user_key_for(user.id, None)
+    window = settings.usage_window(plan_name)
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    usage = {}
+    for metric, cap in caps.items():
+        # Same window the meters enforce, or the screen would show a number
+        # that has nothing to do with what stopped you: a monthly plan's caps
+        # are spent over the month, a trial's over its lifetime.
+        if window == "lifetime":
+            used = await repo.usage_all_time(db, user_key=key, metric=metric)
+        else:
+            used = await repo.usage_this_month(
+                db, user_key=key, month=month, metric=metric
+            )
+        usage[metric] = {"used": int(used), "cap": cap}
 
     sellable = [
         p

@@ -420,11 +420,19 @@ class Settings(BaseSettings):
     # abuse, not unit economics.
     plan_catalog: dict[str, dict[str, float | int | str]] = Field(
         default_factory=lambda: {
-            #        price  period     voice_min  scans  searches  translate/day
-            "free": {"price_usd": 0.0,  "period": "trial", "voice_minutes": 60,  "image_scans": 3,  "web_searches": 10,  "translate_minutes_per_day": 5},    # noqa: E501
-            "lite": {"price_usd": 5.0,  "period": "month", "voice_minutes": 150, "image_scans": 20, "web_searches": 50,  "translate_minutes_per_day": 15},   # noqa: E501
-            "plus": {"price_usd": 10.0, "period": "month", "voice_minutes": 360, "image_scans": 50, "web_searches": 100, "translate_minutes_per_day": 45},   # noqa: E501
-            "pro":  {"price_usd": 20.0, "period": "month", "voice_minutes": 900, "image_scans": -1, "web_searches": 200, "translate_minutes_per_day": 120},  # noqa: E501
+            # talk_minutes is ONE budget for BOTH assistant voice and live
+            # translation: they run through the same model and cost the same
+            # ($0.0093/min, measured against the real Google bill 2026-09-05),
+            # so two separate allowances only ever produced a hole — the old
+            # Plus plan sold 360 voice minutes and 1,350 translate minutes,
+            # and the translation nobody had priced was the larger cost.
+            # Everything here is a MONTHLY budget except the trial, whose
+            # numbers are one-time lifetime totals.
+            #         price  period    talk_min  scans  searches
+            "free": {"price_usd": 0.0,  "period": "trial", "talk_minutes": 30,   "image_scans": 10,   "web_searches": 15},    # noqa: E501
+            "lite": {"price_usd": 6.0,  "period": "month", "talk_minutes": 200,  "image_scans": 150,  "web_searches": 200},   # noqa: E501
+            "plus": {"price_usd": 15.0, "period": "month", "talk_minutes": 500,  "image_scans": 500,  "web_searches": 800},   # noqa: E501
+            "pro":  {"price_usd": 25.0, "period": "month", "talk_minutes": 1000, "image_scans": 1000, "web_searches": 1000},  # noqa: E501
         }
     )
     # Days used to spread a monthly voice budget into a daily cap. 30 is the
@@ -572,38 +580,30 @@ class Settings(BaseSettings):
         return int(round(float(self._plan(name).get("price_usd", 0)) * 100))
 
     def _derive_plan_limits(self) -> dict[str, dict[str, int]]:
-        """Daily quota caps derived from :attr:`plan_catalog`. Per plan:
+        """Quota caps derived from :attr:`plan_catalog`.
 
-        * ``month`` — daily voice cap = ``round(voice_minutes * 60 / days_per_month)``.
-        * ``trial`` — voice cap = the whole lifetime budget (``voice_minutes * 60``);
-          the meter compares it against the user's LIFETIME voice, not today's
-          (see ``session._load_voice_usage``), so 60 trial minutes are 60 minutes
-          ever, not per day.
-
-        ``image_scans`` / ``web_searches`` pass through as daily caps.
+        Caps are MONTHLY for a paid plan and LIFETIME for the trial — the
+        window each is compared against lives in :meth:`usage_window`, so the
+        meters never have to guess. ``voice_seconds`` is the shared talk
+        budget: the assistant and live translation both draw from it.
         """
         out: dict[str, dict[str, int]] = {}
         for name, p in self.plan_catalog.items():
-            minutes = int(p.get("voice_minutes", 0))
-            if str(p.get("period", "month")) == "trial":
-                voice_seconds = minutes * 60
-            else:
-                voice_seconds = round(minutes * 60 / max(1, self.days_per_month))
             out[name] = {
-                "voice_seconds": voice_seconds,
+                "voice_seconds": int(p.get("talk_minutes", 0)) * 60,
                 "image_scans": int(p.get("image_scans", 0)),
                 "web_searches": int(p.get("web_searches", 0)),
-                # Stated per DAY in the catalog rather than derived from a
-                # monthly budget like voice. Voice needs the trial/monthly
-                # split because the free plan's 60 minutes are a one-time
-                # allowance; giving translation a second lifetime meter would
-                # mean two ways to run out, two places to get it wrong, and a
-                # user who cannot tell which one stopped them.
-                "translate_seconds": int(
-                    p.get("translate_minutes_per_day", 0)
-                ) * 60,
+                # Kept as a key so nothing that reads it breaks, but it is the
+                # SAME pool as voice now — the translate meter bills into
+                # voice_seconds. A separate cap would be a second way to run
+                # out of one budget.
+                "translate_seconds": int(p.get("talk_minutes", 0)) * 60,
             }
         return out
+
+    def usage_window(self, plan: str | None) -> str:
+        """``"lifetime"`` for a trial plan, ``"month"`` for everything else."""
+        return "lifetime" if self.is_trial_plan(plan) else "month"
 
 
 @lru_cache

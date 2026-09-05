@@ -1,9 +1,14 @@
-"""Live translation is metered on its OWN budget, never the assistant's.
+"""Live translation draws on the SAME talk budget the assistant does.
 
-The point of a second meter is that one product cannot spend the other's
-allowance. Translating a half-hour meeting must not leave someone unable to
-speak to Farry, and a long conversation with Farry must not eat the translation
-they were about to need in a taxi.
+It used to have a budget of its own, and that was the mistake: translation
+runs through the same model at the same price, so a second allowance was a
+second helping of the most expensive thing we sell — the old Plus plan sold
+360 voice minutes and 1,350 translate minutes, and the translation nobody had
+priced was the larger cost (repriced 2026-09-05). One budget also gives the
+user one number to understand: minutes of talking, spent however they like.
+
+`translate_seconds` is still written alongside, as a record of WHAT the
+minutes went on for the admin view — never as a separate allowance.
 
 Driven directly against ``Session``'s metering, for the reasons spelled out at
 the top of ``test_voice_quota.py``: over a socket you would be testing the
@@ -61,14 +66,14 @@ def caps():
     original = (settings.default_plan, settings.quota_enforcement_enabled)
 
     def _set(
-        translate_seconds: int,
+        talk_seconds: int,
         *,
-        voice_seconds: int = 6000,
         enforcing: bool = True,
     ) -> None:
+        # One budget: both meters read `voice_seconds`.
         settings.plan_limits["test-plan"] = {
-            "voice_seconds": voice_seconds,
-            "translate_seconds": translate_seconds,
+            "voice_seconds": talk_seconds,
+            "translate_seconds": talk_seconds,
         }
         object.__setattr__(settings, "default_plan", "test-plan")
         object.__setattr__(settings, "quota_enforcement_enabled", enforcing)
@@ -95,41 +100,40 @@ async def _voice_usage(key: str) -> int:
     return row.voice_seconds if row else 0
 
 
-class TestTheTwoBudgetsAreSeparate:
-    async def test_translation_is_written_to_its_own_column(self, caps) -> None:
+class TestTheSharedBudget:
+    async def test_translation_spends_the_talk_budget(self, caps) -> None:
         caps(600)
         s = _session()
 
         assert await s._meter_translate(_MIC_BYTES_PER_SECOND * 4) is True
         await s._flush_translate_usage()
 
-        assert await _translate_usage("u11") == 4
-        assert await _voice_usage("u11") == 0, (
-            "translation must never be charged to the assistant's allowance"
+        assert await _voice_usage("u11") == 4, (
+            "translation must draw down the one talk budget"
+        )
+        assert await _translate_usage("u11") == 4, (
+            "and still be recorded as translation, for the admin view"
         )
 
-    async def test_a_spent_voice_budget_does_not_block_translation(
-        self, caps
-    ) -> None:
-        # Someone who has talked to Farry all day can still be translated for.
-        caps(600, voice_seconds=1)
+    async def test_a_spent_budget_stops_translation_too(self, caps) -> None:
+        # The whole point of one budget: talking to Farry all month leaves
+        # nothing to translate with, and the user is told, not surprised.
+        caps(10)
         s = _session()
-        s._voice_used_s = 9_999
-        s._voice_capped = True
+        s._translate_used_s = 9_999
 
-        assert await s._meter_translate(_MIC_BYTES_PER_SECOND * 5) is True
-        assert s._translate_capped is False
-
-    async def test_a_spent_translate_budget_does_not_block_the_assistant(
-        self, caps
-    ) -> None:
-        caps(1, voice_seconds=600)
-        s = _session()
-        await s._meter_translate(_MIC_BYTES_PER_SECOND * 30)
+        assert await s._meter_translate(_MIC_BYTES_PER_SECOND * 5) is False
         assert s._translate_capped is True
 
-        # The voice meter is untouched and still lets speech through.
-        assert await s._meter_voice(_MIC_BYTES_PER_SECOND * 2) is True
+    async def test_translation_then_speech_share_one_wallet(self, caps) -> None:
+        caps(20)
+        s = _session()
+        await s._meter_translate(_MIC_BYTES_PER_SECOND * 25)
+        assert s._translate_capped is True
+
+        # The assistant meter is a separate counter in memory, but it bills
+        # the same column — what one spends, the other no longer has.
+        assert await _voice_usage("u11") >= 25
 
 
 class TestTheCap:
@@ -157,7 +161,7 @@ class TestTheCap:
         caps(10)
         s = _session()
         await s._meter_translate(_MIC_BYTES_PER_SECOND * 11)
-        assert await _translate_usage("u11") == 11
+        assert await _voice_usage("u11") == 11
 
     async def test_a_negative_cap_means_unlimited(self, caps) -> None:
         caps(-1)

@@ -1312,7 +1312,7 @@ class Session:
         self._translate_pending_s += seconds
         metrics.TRANSLATE_AUDIO_SECONDS.inc(seconds)
 
-        cap = plan_cap("translate_seconds", self._plan_name)
+        cap = plan_cap("voice_seconds", self._plan_name)
         if not (get_settings().quota_enforcement_enabled and cap >= 0):
             if self._translate_pending_s >= _VOICE_FLUSH_EVERY_S:
                 await self._flush_translate_usage()
@@ -1370,6 +1370,13 @@ class Session:
                     db,
                     user_key=self._usage_key(),
                     day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                    # ONE budget for talking, whoever is being talked to
+                    # (2026-09-05): translation runs through the same model at
+                    # the same price, so it draws down the same seconds the
+                    # assistant does. `translate_seconds` is still written for
+                    # the admin view — it is a record of WHAT the minutes went
+                    # on, not a second allowance.
+                    voice_seconds=whole,
                     translate_seconds=whole,
                 )
                 await db.commit()
@@ -1383,6 +1390,23 @@ class Session:
         self._translate_used_s += whole
         self._translate_pending_s -= whole
 
+    async def _talk_used_seconds(self, db: AsyncSession) -> int:
+        """Talk seconds already spent in the plan's window.
+
+        One helper for both meters because there is one budget: a trial's
+        allowance is a lifetime total, a paid plan's is this calendar month.
+        Cold path — called once per session, never per audio frame.
+        """
+        key = self._usage_key()
+        if get_settings().usage_window(self._plan_name) == "lifetime":
+            return await repo.lifetime_voice_seconds(db, user_key=key)
+        return await repo.usage_this_month(
+            db,
+            user_key=key,
+            month=datetime.now(timezone.utc).strftime("%Y-%m"),
+            metric="voice_seconds",
+        )
+
     async def _load_translate_usage(self) -> None:
         """Read today's translation total once, at session start."""
         if not get_settings().quota_enforcement_enabled:
@@ -1394,13 +1418,14 @@ class Session:
                     user_key=self._usage_key(),
                     day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 )
-                self._translate_used_s = float(
-                    getattr(row, "translate_seconds", 0) if row else 0
-                )
                 from app.modules.billing import service as billing
 
                 self._plan_name = await billing.active_plan_name(
                     db, self._user_id
+                )
+                # The shared talk budget, over the plan's own window.
+                self._translate_used_s = float(
+                    await self._talk_used_seconds(db)
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning("quota.translate_load_failed", error=str(exc))
@@ -1416,12 +1441,8 @@ class Session:
             return
         try:
             async with get_sessionmaker()() as db:
-                row = await repo.get_daily_usage(
-                    db,
-                    user_key=self._usage_key(),
-                    day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                )
-                self._voice_used_s = float(row.voice_seconds if row else 0)
+                # Read the plan first: it decides whether the budget is this
+                # month's or a lifetime trial total.
                 # Resolve the caps-bearing plan here, in the same one-shot DB
                 # trip: the alternative is a query per audio frame. A signed-in
                 # user gets their subscription's plan; anonymous falls back to
@@ -1429,16 +1450,7 @@ class Session:
                 from app.modules.billing import service as billing
 
                 self._plan_name = await billing.active_plan_name(db, self._user_id)
-                # A "trial" plan's voice cap is a ONE-TIME lifetime budget, not a
-                # daily one, so meter it against the user's all-time voice rather
-                # than just today's row. Monthly plans stay on today's total,
-                # loaded above. (Cold path — once per session, not per frame.)
-                if get_settings().is_trial_plan(self._plan_name):
-                    self._voice_used_s = float(
-                        await repo.lifetime_voice_seconds(
-                            db, user_key=self._usage_key()
-                        )
-                    )
+                self._voice_used_s = float(await self._talk_used_seconds(db))
         except Exception as exc:  # noqa: BLE001
             logger.warning("quota.voice_load_failed", error=str(exc))
 

@@ -6,8 +6,8 @@ import '../../core/ui.dart';
 import '../../data/data_api.dart';
 import '../../state/providers.dart';
 
-/// Settings → Subscription: the plan you're on, today's usage against its
-/// caps, and the plans you could move to.
+/// Settings → Subscription: the plan you're on, this month's usage against
+/// its caps, and the plans you could move to.
 ///
 /// Fetches once on open (usage flushes server-side every ~15s of speech, so a
 /// live ticker would be false precision) and hands the result to
@@ -183,7 +183,10 @@ class _UsageRow extends StatelessWidget {
   final bool showDivider;
 
   static const _labels = {
-    'voice_seconds': 'Voice time',
+    // One budget covers talking to Farry AND live translation — they run
+    // through the same model at the same price, so calling it "voice" hid
+    // half of what spends it (repriced 2026-09-05).
+    'voice_seconds': 'Talk time (voice + translation)',
     'image_scans': 'Image scans',
     'web_searches': 'Web searches',
   };
@@ -207,9 +210,10 @@ class _UsageRow extends StatelessWidget {
       // UP so "1 second spent" never reads as "0 of 3 min" right before the
       // cap ends a session — the same honesty rule as the quota message.
       final usedMin = (meter.used / 60).ceil();
-      subtitle = '${meter.used == 0 ? 0 : usedMin} of ${meter.cap ~/ 60} min used';
+      subtitle =
+          '${meter.used == 0 ? 0 : usedMin} of ${meter.cap ~/ 60} min used this month';
     } else {
-      subtitle = '${meter.used} of ${meter.cap} used';
+      subtitle = '${meter.used} of ${meter.cap} used this month';
     }
 
     return SettingsRow(

@@ -29,6 +29,9 @@ def _settings(monkeypatch, **over):
         },
         "stripe_secret_key": None,
         "stripe_price_ids": {},
+        # Caps are spent over a window: a month for a paid plan, a lifetime
+        # for the trial. The overview reads the same one the meters enforce.
+        "usage_window": lambda plan: "month",
     }
     fields.update(over)
     settings = SimpleNamespace(**fields)
