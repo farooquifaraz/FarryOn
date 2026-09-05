@@ -120,10 +120,11 @@ class SubscriptionView extends StatelessWidget {
           SettingsRow(
             icon: Icons.workspace_premium_rounded,
             gradient: o.plan == 'free' ? Aurora.gradTeal : Aurora.gradAmber,
-            title: '${_title(o.plan)} plan',
+            title: '${o.planTitle.isEmpty ? _title(o.plan) : o.planTitle} plan',
             subtitle: o.priceCents == 0
                 ? 'Free'
-                : '\$${(o.priceCents / 100).toStringAsFixed(2)} / month',
+                : '\$${(o.priceCents / 100).toStringAsFixed(2)} / '
+                    '${o.plan.endsWith('_yearly') ? 'year' : 'month'}',
             trailing: const SizedBox.shrink(),
             showDivider: false,
           ),
@@ -171,11 +172,16 @@ class SubscriptionView extends StatelessWidget {
               SettingsRow(
                 icon: Icons.arrow_circle_up_rounded,
                 gradient: Aurora.gradGreen,
-                title: '${_title(p.name)} — '
-                    '\$${(p.priceCents / 100).toStringAsFixed(2)}/mo',
-                subtitle: o.checkoutAvailable
-                    ? 'Tap to upgrade'
-                    : 'Coming soon',
+                title: '${p.title.isEmpty ? _title(p.name) : p.title} — '
+                    '\$${(p.priceCents / 100).toStringAsFixed(2)}'
+                    '/${p.interval == 'year' ? 'yr' : 'mo'}',
+                subtitle: !o.checkoutAvailable
+                    ? 'Coming soon'
+                    : p.interval == 'year'
+                        // Say the saving where the choice is made, not in a
+                        // marketing page they may never have seen.
+                        ? 'Tap to upgrade · works out cheaper than monthly'
+                        : 'Tap to upgrade',
                 onTap:
                     o.checkoutAvailable ? () => onUpgrade(p.name) : null,
                 showDivider: i < o.upgrades.length - 1,

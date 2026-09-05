@@ -31,9 +31,14 @@ ACTIVE_STATUSES = ("active", "trialing")
 
 
 def _plan_out(plan: Plan) -> dict:
+    from app.config import get_settings
+
     return {
         "id": plan.id,
         "name": plan.name,
+        # `name` is a key that encodes the billing interval (plus_yearly);
+        # nobody outside the code should have to read it.
+        "title": get_settings().plan_title(plan.name),
         "price_cents": plan.price_cents,
         "currency": plan.currency,
         "interval": plan.interval,
@@ -133,6 +138,7 @@ async def subscription_overview(db: AsyncSession, *, user: User) -> dict:
     ]
     return {
         "plan": plan_name,
+        "plan_title": settings.plan_title(plan_name),
         # Which window these numbers cover: "month" for a paid plan,
         # "lifetime" for the trial. The screen has to say one or the other —
         # calling a one-time trial allowance "this month" is a lie the user
@@ -184,8 +190,8 @@ async def create_checkout(db: AsyncSession, *, user: User, plan_name: str) -> di
     if current != settings.default_plan:
         raise AppError(
             "ALREADY_SUBSCRIBED",
-            f"You're already on the {current} plan. To switch plans, cancel "
-            "the current one first.",
+            f"You're already on the {settings.plan_title(current)} plan. To "
+            "switch plans, cancel the current one first.",
             status_code=409,
         )
     price_id = settings.stripe_price_ids.get(plan_name)

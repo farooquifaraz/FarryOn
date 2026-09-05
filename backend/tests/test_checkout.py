@@ -27,6 +27,8 @@ def _configure(monkeypatch, **over):
         "default_plan": "free",
         "stripe_secret_key": "sk_test_x",
         "stripe_price_ids": {"plus": "price_plus", "pro": "price_pro"},
+        # plan_title turns the key (plus_yearly) into what a person reads.
+        "plan_title": lambda name: (name or "free").removesuffix("_yearly").capitalize(),
         "stripe_success_url": "https://app/success?session_id={CHECKOUT_SESSION_ID}",
         "stripe_cancel_url": "https://app/cancel",
     }

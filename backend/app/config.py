@@ -433,6 +433,14 @@ class Settings(BaseSettings):
             "lite": {"price_usd": 6.0,  "period": "month", "talk_minutes": 200,  "image_scans": 150,  "web_searches": 200},   # noqa: E501
             "plus": {"price_usd": 15.0, "period": "month", "talk_minutes": 500,  "image_scans": 500,  "web_searches": 800},   # noqa: E501
             "pro":  {"price_usd": 25.0, "period": "month", "talk_minutes": 1000, "image_scans": 1000, "web_searches": 1000},  # noqa: E501
+            # Yearly: the SAME monthly allowances, paid a year at a time. The
+            # discount is affordable because a year is one Stripe fee instead
+            # of twelve, and the money arrives before the cost does. Caps stay
+            # MONTHLY on purpose — a year-sized bucket would let someone spend
+            # twelve months of the most expensive thing we sell in a weekend.
+            "lite_yearly": {"price_usd": 65.0,  "period": "year", "talk_minutes": 200,  "image_scans": 150,  "web_searches": 200},   # noqa: E501
+            "plus_yearly": {"price_usd": 165.0, "period": "year", "talk_minutes": 500,  "image_scans": 500,  "web_searches": 800},   # noqa: E501
+            "pro_yearly":  {"price_usd": 275.0, "period": "year", "talk_minutes": 1000, "image_scans": 1000, "web_searches": 1000},  # noqa: E501
         }
     )
     # Days used to spread a monthly voice budget into a daily cap. 30 is the
@@ -600,6 +608,28 @@ class Settings(BaseSettings):
                 "translate_seconds": int(p.get("talk_minutes", 0)) * 60,
             }
         return out
+
+    def plan_interval(self, name: str | None) -> str:
+        """``"year"`` for an annual plan, ``"month"`` for the rest.
+
+        The trial has no billing interval at all; it answers "month" because
+        that is what every consumer of this (the plans table, Stripe, the
+        upgrade list) expects for a row nobody is charged for.
+        """
+        period = str(self._plan(name).get("period", "month"))
+        return "year" if period == "year" else "month"
+
+    def plan_title(self, name: str | None) -> str:
+        """What a person should see: ``plus_yearly`` -> ``Plus (yearly)``.
+
+        The internal name is a key — it carries the billing interval so the
+        caps, the Stripe price and the subscription row all follow from one
+        string. Nobody should have to read it.
+        """
+        raw = name or self.default_plan
+        base = raw.removesuffix("_yearly")
+        title = base[:1].upper() + base[1:]
+        return f"{title} (yearly)" if raw.endswith("_yearly") else title
 
     def usage_window(self, plan: str | None) -> str:
         """``"lifetime"`` for a trial plan, ``"month"`` for everything else."""

@@ -91,3 +91,43 @@ async def test_seeded_plan_names_match_the_quota_caps(db_session) -> None:
     for name in seed.sold_plans():
         assert name in limits, f"plan {name!r} is sold but has no quota caps"
         assert "voice_seconds" in limits[name]
+
+
+async def test_yearly_plans_are_sold_alongside_monthly(db_session) -> None:
+    """A year is a billing interval, not a different product.
+
+    The yearly rows carry the SAME monthly allowances — a year-sized bucket
+    would let someone spend twelve months of the most expensive thing we sell
+    in a weekend — and differ only in price and interval.
+    """
+    from app.config import get_settings
+
+    await seed.seed_plans(db_session)
+    plans = await _plans_by_name(db_session)
+    settings = get_settings()
+
+    for monthly, yearly, cents in (
+        ("lite", "lite_yearly", 6500),
+        ("plus", "plus_yearly", 16500),
+        ("pro", "pro_yearly", 27500),
+    ):
+        assert plans[yearly].price_cents == cents
+        assert plans[yearly].interval == "year"
+        assert plans[monthly].interval == "month"
+        # Same caps, so a month of a yearly plan buys exactly what a month of
+        # the monthly plan buys.
+        assert settings.plan_limits[yearly] == settings.plan_limits[monthly]
+        # And it is cheaper than paying month by month, or nobody would take it.
+        assert cents < plans[monthly].price_cents * 12
+
+
+async def test_a_yearly_plan_reads_as_a_name_not_a_key(db_session) -> None:
+    from app.config import get_settings
+
+    settings = get_settings()
+    assert settings.plan_title("plus_yearly") == "Plus (yearly)"
+    assert settings.plan_title("plus") == "Plus"
+    assert settings.plan_interval("pro_yearly") == "year"
+    assert settings.plan_interval("pro") == "month"
+    # A yearly plan is NOT a trial: its caps still reset every month.
+    assert settings.usage_window("pro_yearly") == "month"

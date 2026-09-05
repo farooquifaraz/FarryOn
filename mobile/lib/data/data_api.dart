@@ -69,13 +69,29 @@ class UsageMeter {
 
 /// A plan the user could move to, with its real price for the button label.
 class PlanOffer {
-  const PlanOffer({required this.name, required this.priceCents});
+  const PlanOffer({
+    required this.name,
+    required this.priceCents,
+    this.title = '',
+    this.interval = 'month',
+  });
+
+  /// The key checkout is started with (`plus`, `plus_yearly`).
   final String name;
   final int priceCents;
+
+  /// What to show a person. Falls back to the key so an older backend that
+  /// doesn't send it still renders something readable-ish.
+  final String title;
+
+  /// `month` or `year` — decides whether the price reads /mo or /yr.
+  final String interval;
 
   factory PlanOffer.fromJson(Map<String, dynamic> j) => PlanOffer(
         name: j['name'] as String? ?? '',
         priceCents: (j['price_cents'] as num?)?.toInt() ?? 0,
+        title: j['title'] as String? ?? '',
+        interval: j['interval'] as String? ?? 'month',
       );
 }
 
@@ -88,9 +104,13 @@ class SubscriptionOverview {
     required this.upgrades,
     required this.checkoutAvailable,
     this.window = 'month',
+    this.planTitle = '',
   });
 
   final String plan;
+
+  /// The plan's human name — "Plus (yearly)" where `plan` is `plus_yearly`.
+  final String planTitle;
   final int priceCents;
 
   /// Which window the usage numbers cover: `month` on a paid plan, `lifetime`
@@ -108,6 +128,7 @@ class SubscriptionOverview {
   factory SubscriptionOverview.fromJson(Map<String, dynamic> j) =>
       SubscriptionOverview(
         plan: j['plan'] as String? ?? 'free',
+        planTitle: j['plan_title'] as String? ?? '',
         window: j['window'] as String? ?? 'month',
         priceCents: (j['price_cents'] as num?)?.toInt() ?? 0,
         usage: {

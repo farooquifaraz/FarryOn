@@ -39,9 +39,15 @@ def sold_plans(
         price_cents = settings.plan_price_cents(name)
         if price_cents <= 0:
             continue  # free/unsold tier is not a billable row
-        minutes = int(plan.get("voice_minutes", 0))
-        description = f"{name.capitalize()} — {minutes} minutes of voice a month."
-        out[name] = (price_cents, "month", description)
+        minutes = int(plan.get("talk_minutes", 0))
+        interval = settings.plan_interval(name)
+        # "talk" not "voice": the budget covers live translation too.
+        billing = "billed yearly" if interval == "year" else "billed monthly"
+        description = (
+            f"{settings.plan_title(name)} — {minutes} talk minutes a month, "
+            f"{billing}."
+        )
+        out[name] = (price_cents, interval, description)
     return out
 
 # code -> human description

@@ -24,6 +24,7 @@ void main() {
     ],
     bool checkoutAvailable = true,
     String window = 'month',
+    String planTitle = '',
   }) =>
       SubscriptionOverview(
         plan: plan,
@@ -32,6 +33,7 @@ void main() {
         upgrades: upgrades,
         checkoutAvailable: checkoutAvailable,
         window: window,
+        planTitle: planTitle,
       );
 
   Future<void> pump(
@@ -217,6 +219,44 @@ void main() {
       expect(find.textContaining('used in total'), findsWidgets);
       expect(find.textContaining('does not reset each month'), findsOneWidget);
       expect(find.textContaining("THIS MONTH"), findsNothing);
+    });
+  });
+
+  group('yearly plans', () {
+    testWidgets('a yearly upgrade shows its real price per YEAR', (tester) async {
+      // /mo on a $165 yearly price would read as a tenfold price rise.
+      await pump(
+        tester,
+        overview(upgrades: const [
+          PlanOffer(
+            name: 'plus_yearly',
+            priceCents: 16500,
+            title: 'Plus (yearly)',
+            interval: 'year',
+          ),
+        ]),
+      );
+
+      expect(find.textContaining('Plus (yearly) — \$165.00/yr'), findsOneWidget);
+      expect(find.textContaining('/mo'), findsNothing);
+      expect(find.textContaining('cheaper than monthly'), findsOneWidget);
+    });
+
+    testWidgets('the current plan card names the year, not the key',
+        (tester) async {
+      await pump(
+        tester,
+        overview(
+          plan: 'pro_yearly',
+          planTitle: 'Pro (yearly)',
+          priceCents: 27500,
+          upgrades: const [],
+        ),
+      );
+
+      expect(find.text('Pro (yearly) plan'), findsOneWidget);
+      expect(find.text('\$275.00 / year'), findsOneWidget);
+      expect(find.textContaining('pro_yearly'), findsNothing);
     });
   });
 }
