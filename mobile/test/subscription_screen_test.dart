@@ -67,8 +67,8 @@ void main() {
     testWidgets('voice reads in minutes, others in counts', (tester) async {
       await pump(tester, overview());
 
-      expect(find.text('1 of 3 min used'), findsOneWidget);
-      expect(find.text('1 of 2 used'), findsOneWidget);
+      expect(find.text('1 of 3 min used this month'), findsOneWidget);
+      expect(find.text('1 of 2 used this month'), findsOneWidget);
     });
 
     testWidgets('a -1 cap reads Unlimited with no meter bar', (tester) async {
@@ -105,7 +105,7 @@ void main() {
         overview(usage: const {'voice_seconds': UsageMeter(used: 1, cap: 180)}),
       );
 
-      expect(find.text('1 of 3 min used'), findsOneWidget);
+      expect(find.text('1 of 3 min used this month'), findsOneWidget);
     });
   });
 

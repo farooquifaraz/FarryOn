@@ -651,10 +651,12 @@ class DailyUsage(Base):
     user_key: Mapped[str] = mapped_column(String(64), primary_key=True)
     day: Mapped[str] = mapped_column(String(10), primary_key=True)  # YYYY-MM-DD
     voice_seconds: Mapped[int] = mapped_column(Integer, default=0)
-    # Live translation is metered apart from `voice_seconds` on purpose: that
-    # column is the assistant's allowance, and half an hour of translating a
-    # meeting would empty it, leaving someone unable to talk to Farry because
-    # they listened to a talk.
+    # Live translation now draws on the SAME talk budget as the assistant and
+    # is billed into `voice_seconds` too (repriced 2026-09-05): it runs through
+    # the same model at the same price, so a separate allowance was a second
+    # helping of the most expensive thing we sell. This column survives as a
+    # RECORD of what the minutes went on — the admin usage view reads it — not
+    # as an allowance of its own.
     translate_seconds: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )

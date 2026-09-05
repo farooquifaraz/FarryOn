@@ -82,6 +82,28 @@ async def export_users_endpoint(db: AsyncSession = Depends(get_db)) -> PlainText
     )
 
 
+@router.get(
+    "/usage", dependencies=[Depends(require_permission("users.read"))]
+)
+async def users_usage_endpoint(
+    month: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    q: str | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Who used what, per user, for one month — every metered feature.
+
+    Declared BEFORE ``/{user_id}`` on purpose: a literal path must win over the
+    parameterised one, or "usage" is read as a user id and 422s.
+    """
+    return ok(
+        await service.usage_report(
+            db, month=month, page=page, page_size=page_size, search=q
+        )
+    )
+
+
 @router.get("/{user_id}", dependencies=[Depends(require_permission("users.read"))])
 async def get_user_endpoint(user_id: int, db: AsyncSession = Depends(get_db)) -> dict:
     user = await service.get_user_or_404(db, user_id)

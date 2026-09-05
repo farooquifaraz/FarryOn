@@ -303,3 +303,103 @@ async def export_csv(db: AsyncSession) -> str:
         roles = ",".join(await role_names(db, u.id))
         writer.writerow([u.id, u.email, u.display_name or "", u.status, roles, u.created_at.isoformat()])
     return buf.getvalue()
+
+# ---- usage reporting (admin) ---------------------------------------------
+
+#: Every metered counter, with how the admin view should read it. Seconds are
+#: shown as minutes; the rest are plain counts. `translate_seconds` is a
+#: BREAKDOWN of talk time, not a separate allowance (see DailyUsage).
+USAGE_METRICS: tuple[tuple[str, str], ...] = (
+    ("voice_seconds", "seconds"),
+    ("translate_seconds", "seconds"),
+    ("image_scans", "count"),
+    ("web_searches", "count"),
+    ("text_turns", "count"),
+    ("frames_sent", "count"),
+)
+
+
+async def usage_report(
+    db: AsyncSession,
+    *,
+    month: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    search: str | None = None,
+) -> dict:
+    """Per-user usage for one month, with each user's plan and caps.
+
+    Answers the question an operator actually has — "who is using what, and
+    how close are they to their limit?" — in one call, because the data is
+    scattered across three places: the usage counters (keyed by `u<id>`), the
+    subscription that decides the plan, and the caps that plan carries.
+
+    ``month`` is ``YYYY-MM``; omitted means the current one. A trial user's
+    numbers are their LIFETIME totals, matching what the meters enforce, and
+    the row says so.
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import func, or_, select as sa_select
+
+    from app.config import get_settings
+    from app.db.models import DailyUsage
+    from app.modules.billing.service import active_plan_name
+
+    settings = get_settings()
+    month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+
+    q = sa_select(User).where(User.deleted_at.is_(None))
+    if search:
+        like = f"%{search.lower()}%"
+        q = q.where(
+            or_(
+                func.lower(User.email).like(like),
+                func.lower(User.display_name).like(like),
+            )
+        )
+    total = int(
+        (await db.execute(sa_select(func.count()).select_from(q.subquery())))
+        .scalar_one()
+    )
+    rows = list(
+        (
+            await db.execute(
+                q.order_by(User.id).offset((page - 1) * page_size).limit(page_size)
+            )
+        ).scalars()
+    )
+
+    items = []
+    for user in rows:
+        plan = await active_plan_name(db, user.id)
+        caps = settings.plan_limits.get(plan, {})
+        lifetime = settings.usage_window(plan) == "lifetime"
+        key = f"u{user.id}"
+        cols = [getattr(DailyUsage, m) for m, _ in USAGE_METRICS]
+        stmt = sa_select(*[func.coalesce(func.sum(c), 0) for c in cols]).where(
+            DailyUsage.user_key == key
+        )
+        if not lifetime:
+            stmt = stmt.where(DailyUsage.day.like(f"{month}-%"))
+        totals = (await db.execute(stmt)).one()
+        items.append(
+            {
+                "user_id": user.id,
+                "email": user.email,
+                "display_name": user.display_name,
+                "status": user.status,
+                "plan": plan,
+                "window": "lifetime" if lifetime else month,
+                "metrics": {
+                    name: {
+                        "used": int(value or 0),
+                        "cap": caps.get(name, -1),
+                        "unit": unit,
+                    }
+                    for (name, unit), value in zip(USAGE_METRICS, totals)
+                },
+            }
+        )
+    return {"items": items, "total": total, "page": page, "page_size": page_size,
+            "month": month}

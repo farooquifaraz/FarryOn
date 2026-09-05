@@ -6,6 +6,7 @@ import Billing from "./pages/Billing";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Roles from "./pages/Roles";
+import Usage from "./pages/Usage";
 import Users from "./pages/Users";
 
 export default function App() {
@@ -22,6 +23,7 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="/admin" element={<Dashboard />} />
             <Route path="/admin/users" element={<Users />} />
+            <Route path="/admin/usage" element={<Usage />} />
             <Route path="/admin/roles" element={<Roles />} />
             <Route path="/admin/billing" element={<Billing />} />
             <Route path="/admin/audit" element={<Audit />} />
