@@ -72,8 +72,16 @@ class WebSearchTool(Tool):
         blocked = await check_quota(ctx, "web_searches")
         if blocked:
             return blocked
-        query: str = kwargs["query"]
+        return await self.search(ctx, kwargs["query"])
 
+    async def search(self, ctx: ToolContext, query: str) -> dict[str, Any]:
+        """The search itself, with NO quota gate.
+
+        `run` is the user-facing tool and meters the call. Other tools reuse
+        this when a search is an implementation detail of something else they
+        were asked to do (``play_music`` resolving a song to a link), which
+        must not eat an allowance the user never spent.
+        """
         # Per-session config from the client (if any) wins over server env.
         ov = ctx.web_search or {}
         if ov.get("provider") or ov.get("apiKey"):

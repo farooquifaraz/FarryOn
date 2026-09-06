@@ -186,6 +186,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         /** `workTypeIng` value meaning "recording video" (see
          *  [describeWorkType]) — the only authoritative start/stop signal. */
         private const val WORK_TYPE_RECORDING_VIDEO = 2
+
+        /** `workTypeIng` value meaning "doing nothing" — the only state
+         *  from which a toggle that did not start recording proves that one
+         *  was stopped. Every other value means the glasses were busy. */
+        private const val WORK_TYPE_IDLE = 0
     }
 
     override val implementationName = "heycyan"
@@ -1916,15 +1921,36 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         cancelVideoTimers()
         if (starting) {
             if (!recording) {
-                // The toggle turned recording OFF, which means the glasses were
-                // ALREADY recording (started on the device itself). Report the
-                // truth rather than pretending we started something.
-                failVideo(
-                    requestId, seconds, "already_recording",
-                    "the glasses were already recording; that recording has been " +
-                        "stopped — tap again to start a fresh one"
-                )
-                return
+                // We toggled, and the glasses came back doing something OTHER
+                // than recording video. What that means depends entirely on
+                // WHICH something.
+                //
+                // A named mode (photo, transfer, OTA, AI conversation) means
+                // they were busy and never started. Zero means nothing at all
+                // — it is the value the neutral ack carries — and reading it
+                // as "already recording" was the lie the user caught
+                // (2026-09-06: "koi recording nahi ho rahi thi").
+                if (workTypeIng == WORK_TYPE_IDLE) {
+                    // 0 is ALSO what the neutral "command sent" ack carries
+                    // (hardware-verified, see takePhoto), so it cannot tell
+                    // "we just stopped a recording" apart from "accepted, no
+                    // state reported". Reading it as the former is what told
+                    // the user a recording was already running when none was
+                    // (2026-09-06). takePhoto has always trusted this ack and
+                    // works mid-conversation; video now does the same, and the
+                    // recording state that follows is what proves it.
+                    Log.i(TAG, "videoToggle: neutral workType=0 — trusting the start")
+                } else {
+                    // A REAL other mode: the glasses were doing something else
+                    // and never started. Say which, so the next report needs no
+                    // guessing.
+                    failVideo(
+                        requestId, seconds, "busy",
+                        "the glasses are busy (" + describeWorkType(workTypeIng) +
+                            ") and did not start recording — try again in a moment"
+                    )
+                    return
+                }
             }
             videoConfirmed = true
             videoStartMs = SystemClock.elapsedRealtime()

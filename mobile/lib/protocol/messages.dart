@@ -248,6 +248,21 @@ class DeviceUpdateMessage extends ClientMessage {
       {'type': type, 'videoKind': videoKind, 'audioKind': audioKind};
 }
 
+/// Tells the backend a phone call started or ended.
+///
+/// Without it the assistant has no way to know: it called someone, was told
+/// "calling", and then went on saying the call was still in progress long
+/// after it ended (device-observed 2026-09-06). The backend turns this into a
+/// silent note so the model knows where things stand without announcing it.
+class CallStateMessage extends ClientMessage {
+  const CallStateMessage({required this.inCall});
+  final bool inCall;
+  @override
+  String get type => MsgType.callState;
+  @override
+  Map<String, dynamic> toJson() => {'type': type, 'inCall': inCall};
+}
+
 /// Barge-in: stop the current TTS playback.
 class InterruptMessage extends ClientMessage {
   const InterruptMessage();

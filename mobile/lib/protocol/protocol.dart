@@ -68,6 +68,7 @@ abstract final class MsgType {
   static const String resolveContactResult = 'resolve_contact_result';
   static const String captureFailed = 'capture_failed';
   static const String deviceUpdate = 'device_update';
+  static const String callState = 'call_state';
   static const String ping = 'ping';
 
   // server → client

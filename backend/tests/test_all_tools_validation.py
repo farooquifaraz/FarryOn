@@ -175,6 +175,34 @@ async def test_every_registered_tool_dispatches(db_session) -> None:
         str(r),
     )
 
+    # --- call + music (client-executed; the phone acts, we only ask) ------
+    r = await run("make_call", {"phone_number": "+971500000000"})
+    ok(
+        "make_call(number)",
+        r.get("ok") is True and r.get("action") == "open_url"
+        and r.get("url") == "tel:+971500000000" and r.get("answered") is False,
+        str(r),
+    )
+
+    r = await run("make_call", {"contact_id": "c1"})
+    ok(
+        "make_call(device-contact)",
+        r.get("action") == "place_call" and r.get("contact_id") == "c1"
+        and "url" not in r,
+        str(r),
+    )
+
+    r = await run("play_music", {"command": "play", "query": "Arijit Singh"})
+    ok(
+        "play_music(play)",
+        r.get("ok") is True and r.get("action") == "music_control"
+        and r.get("query") == "Arijit Singh" and r.get("playing") is None,
+        str(r),
+    )
+
+    r = await run("play_music", {"command": "next"})
+    ok("play_music(next)", r.get("command") == "next", str(r))
+
     # --- web search (mock provider in test env) ---------------------------
     r = await run("web_search", {"query": "latest news"})
     ok(

@@ -55,6 +55,11 @@
     <!-- Resolve a spoken contact name to a WhatsApp number (read-only, on-device). -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
+    <!-- make_call: place the call outright rather than filling in the dialer.
+         Runtime-granted, and refusable: with no permission the app opens the
+         dialer instead and says so, so a "no" costs a tap, never a silence. -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
@@ -134,6 +139,16 @@
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="sms" />
+        </intent>
+        <!-- make_call: the dialer, used as the fallback when the call
+             permission has not been granted. -->
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <!-- play_music: whichever installed player answers "play this". -->
+        <intent>
+            <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
         </intent>
     </queries>
 </manifest>

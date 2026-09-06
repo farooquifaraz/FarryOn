@@ -13,12 +13,14 @@ import '../capture/glasses_capture_source.dart';
 import '../capture/mic_gate.dart';
 import '../capture/phone_capture_source.dart';
 import '../core/cache_patch.dart';
+import '../core/call_controller.dart';
 import '../core/chat_history.dart';
 import '../core/config.dart';
 import '../core/location.dart';
 import '../core/log_store.dart';
 import '../core/logger.dart';
 import '../core/media_saver.dart';
+import '../core/music_controller.dart';
 import '../core/notifications.dart';
 import '../data/data_api.dart';
 import '../data/finder_api.dart';
@@ -83,6 +85,7 @@ class LiveController {
     // successful subscribe (plugin missing on some platform) land in
     // onError and are just logged.
     if (_bindingReady()) {
+      _watchCallAudio();
       _connectivitySub = Connectivity().onConnectivityChanged.listen(
         (results) {
           if (results.any((r) => r != ConnectivityResult.none)) {
@@ -838,7 +841,7 @@ class LiveController {
       case 'stopped':
         final finished = _state.recording;
         _endRecording();
-        _announceRecordingDone(finished);
+        unawaited(_announceRecordingDone(finished));
         // Pull it onto the phone if the user asked for that. The debounce also
         // gives the glasses a moment to finalise the file.
         if (_config.autoMediaSync) {
@@ -875,13 +878,20 @@ class LiveController {
   ///
   /// Safe to say out loud now: [_endRecording] has already cleared the
   /// recording, so the playback gate is open again.
-  void _announceRecordingDone(GlassesRecording? finished) {
+  Future<void> _announceRecordingDone(GlassesRecording? finished) async {
     final length = finished == null
         ? ''
         : ' (${GlassesRecording.format(Duration(seconds: finished.seconds))})';
+    // Auto-sync CANNOT run without the Nearby-devices grant, and it refuses to
+    // pop an OS prompt from a background trigger. Promising "saving to your
+    // phone" and then silently skipping is how a 60-second recording sat on
+    // the glasses while the user believed it had landed (device-seen
+    // 2026-09-06). Ask the permission state BEFORE making the promise.
+    final willSync =
+        _config.autoMediaSync && await _permissions.hasNearbyWifi();
     unawaited(Notifications.showActivity(
       'Recording finished',
-      _config.autoMediaSync
+      willSync
           ? 'Saving it to your phone…'
           : "Waiting on your glasses — tap Sync when you're ready.",
       done: true,
@@ -891,7 +901,7 @@ class LiveController {
         ..._state.transcripts,
         TranscriptEntry(
           role: 'notice',
-          text: _config.autoMediaSync
+          text: willSync
               ? 'Recording finished$length — saving to your phone.'
               : 'Recording finished$length — waiting on your glasses.',
           isFinal: true,
@@ -1213,6 +1223,20 @@ class LiveController {
         _log.warn('auto glasses sync skipped: Nearby-devices permission '
             'missing — use Sync now once to grant it');
         _autoSyncing = false;
+        // Say so. The media is safe on the glasses, but only the user can
+        // grant the permission, and they cannot do that if nothing tells them.
+        _emit(_state.copyWith(
+          transcripts: [
+            ..._state.transcripts,
+            TranscriptEntry(
+              role: 'notice',
+              text: "It's still on your glasses — saving to the phone "
+                  'needs the "Nearby devices" permission. Tap Sync now once '
+                  'and it will ask.',
+              isFinal: true,
+            ),
+          ],
+        ));
         return;
       }
       try {
@@ -1874,6 +1898,8 @@ class LiveController {
     applyToolResultToCache(msg, _currentUserId());
     _applyOpenUrl(msg);
     _applyOpenMessaging(msg);
+    _applyPlaceCall(msg);
+    _applyMusicControl(msg);
 
     // Voice flow: surface identify_image results so the UI can show the same
     // result sheet the scan button shows. The tool returns the full
@@ -1954,6 +1980,12 @@ class LiveController {
     // Telegram links can't pre-fill text, so the backend asks us to copy the
     // message to the clipboard — the user opens the chat then long-press →
     // Paste → Send (one tap instead of typing it out).
+    // A tel: link is a call to place, not a page to open. Everything else
+    // (wa.me, sms:, a checkout page) still opens as a link.
+    if (uri.scheme == 'tel') {
+      unawaited(_dial(uri.path.isNotEmpty ? uri.path : url.substring(4)));
+      return;
+    }
     final toCopy = res['copy_to_clipboard'] as String?;
     if (toCopy != null && toCopy.isNotEmpty) {
       unawaited(Clipboard.setData(ClipboardData(text: toCopy)));
@@ -1989,6 +2021,111 @@ class LiveController {
         contactId: contactId,
         message: message,
       ),
+    ));
+  }
+
+  /// `make_call` on a contact the DEVICE resolved: the backend never saw the
+  /// number, so it sends the opaque `contact_id` and we dial from the number we
+  /// kept locally — the same round trip WhatsApp and SMS already use.
+  ///
+  /// A plain number needs nothing here: the tool returns `open_url` with a
+  /// `tel:` link and [_applyOpenUrl] opens the dialer.
+  void _applyPlaceCall(ToolResultMessage msg) {
+    if (!msg.ok) return;
+    final res = msg.result;
+    if (res == null || res['action'] != 'place_call') return;
+    final contactId = res['contact_id'] as String?;
+    if (contactId == null || contactId.isEmpty) return;
+    unawaited(_handleOpenMessaging(
+      OpenMessagingMessage(
+        channel: 'call',
+        contactId: contactId,
+        message: '',
+      ),
+    ));
+  }
+
+  /// `play_music`: hand the request to the phone's own player. Nothing here can
+  /// report back whether music actually started — Android doesn't say — so a
+  /// failure only surfaces when we couldn't even ask (no music app installed).
+  void _applyMusicControl(ToolResultMessage msg) {
+    if (!msg.ok) return;
+    final res = msg.result;
+    if (res == null || res['action'] != 'music_control') return;
+    final command = (res['command'] as String?) ?? '';
+    if (command.isEmpty) return;
+    // A resolved link (music.youtube.com/watch?v=...) starts playing on its
+    // own; the search intent only opens the app, so it is the fallback.
+    final url = (res['url'] as String?) ?? '';
+    if (command == 'play' && url.isNotEmpty) {
+      unawaited(_openExternal(Uri.parse(url)));
+      return;
+    }
+    unawaited(() async {
+      final ok = command == 'play'
+          ? await MusicController.play(
+              (res['query'] as String?) ?? '',
+              app: res['app'] as String?,
+            )
+          : await MusicController.command(command);
+      if (!ok && command == 'play') {
+        _emit(_state.copyWith(
+          lastError: "I couldn't find a music app on this phone.",
+        ));
+      }
+    }());
+  }
+
+  /// Place a real call, falling back to the dialer when we may not.
+  ///
+  /// The permission is refusable, so this never leaves the user believing a
+  /// call is happening when it isn't: it opens the dialer with the number
+  /// ready and says why.
+  /// True while a phone call has the audio; the mic we gave up is restored
+  /// when it ends, but only if we were the ones listening beforehand.
+  StreamSubscription<bool>? _callAudioSub;
+  bool _micBeforeCall = false;
+
+  /// Stand aside for a phone call, and come back when it is over.
+  ///
+  /// Device-proven 2026-09-06: with a call up, the session still held the
+  /// microphone and the audio mode, and the person on the other end heard
+  /// nothing. One microphone cannot serve both, and a call outranks us.
+  void _watchCallAudio() {
+    try {
+      _callAudioSub ??= _listenForCallAudio();
+    } catch (e) {
+      _log.warn('call-audio watch unavailable: $e');
+    }
+  }
+
+  StreamSubscription<bool> _listenForCallAudio() {
+    return CallController.callAudio.listen((inCall) async {
+      // Tell the backend either way: the assistant otherwise keeps saying a
+      // finished call is still in progress, having no way to learn otherwise.
+      _client.send(CallStateMessage(inCall: inCall));
+      if (inCall) {
+        _micBeforeCall = _state.micOpen;
+        _log.info('phone call started - releasing the mic');
+        await stopListening();
+        await _voiceAudioMode.exit();
+      } else {
+        _log.info('phone call ended - taking the mic back');
+        if (_micBeforeCall) await startListening();
+        _micBeforeCall = false;
+      }
+    }, onError: (Object e) => _log.warn('call-audio watch failed: $e'));
+  }
+
+  Future<void> _dial(String number) async {
+    final outcome = await CallController.call(number);
+    if (outcome == CallOutcome.called) return;
+    await _openExternal(Uri.parse('tel:$number'));
+    _emit(_state.copyWith(
+      lastError: outcome == CallOutcome.noPermission
+          ? 'Allow phone calls to let Farry dial for you — the dialer is open '
+              'in the meantime.'
+          : "I couldn't start the call — the dialer is open with the number.",
     ));
   }
 
@@ -2108,6 +2245,12 @@ class LiveController {
       ));
       return;
     }
+    // A call carries no message — it is the same "open the right thing for
+    // this resolved contact" step, with the dialer as the destination.
+    if (msg.channel == 'call') {
+      await _dial('+$number');
+      return;
+    }
     final body = Uri.encodeComponent(msg.message);
     final uri = Uri.parse(msg.channel == 'sms'
         ? 'sms:+$number?body=$body'
@@ -2120,21 +2263,53 @@ class LiveController {
   Future<List<Contact>> _findContactsByName(String name) async {
     final q = name.toLowerCase().trim();
     if (q.isEmpty) return const [];
+    final terms = _searchTerms(q);
+    if (terms.isEmpty) return const [];
     final all = await FlutterContacts.getContacts(withProperties: true);
-    final hits = all.where((c) => _searchText(c).contains(q)).toList()
+    // Every word must appear SOMEWHERE in the contact, rather than the whole
+    // query appearing as one run of characters. People say "Faraz ji" and
+    // "Ahmed office" for contacts saved as "Faraz Sharjah Home" and "Ahmed
+    // Ali" — device-observed 2026-09-06, where a contact that plainly existed
+    // came back not found because "faraz sharjah home" does not contain the
+    // literal string "faraz ji".
+    final hits = all.where((c) {
+      final text = _searchText(c);
+      return terms.every(text.contains);
+    }).toList()
       ..sort((a, b) {
         // Exact display-name match ranks first, then a name that starts with
         // the query, then the rest.
         int rank(Contact c) {
           final dn = c.displayName.toLowerCase();
           if (dn == q) return 0;
-          if (dn.startsWith(q)) return 1;
+          if (dn.startsWith(q) || dn.startsWith(terms.first)) return 1;
           return 2;
         }
 
         return rank(a).compareTo(rank(b));
       });
     return hits;
+  }
+
+  /// Words worth matching on, with the politeness stripped out.
+  ///
+  /// "ji", "bhai", "sir" and their like are how people address someone, not
+  /// part of how the contact is saved, and requiring them finds nobody. If the
+  /// name is ONLY an honorific we keep it — the user must have meant it.
+  static const _honorifics = {
+    'ji', 'bhai', 'bhaiya', 'bhaijaan', 'sir', 'madam', 'maam', 'ma\'am',
+    'sahab', 'saheb', 'sahib', 'uncle', 'aunty', 'auntie', 'mr', 'mrs', 'ms',
+    'dr', 'doctor', 'bhabhi', 'baji', 'apa', 'didi',
+  };
+
+  static List<String> _searchTerms(String query) {
+    final words = query
+        .split(RegExp(r'[\s,]+'))
+        .map((w) => w.trim())
+        .where((w) => w.isNotEmpty)
+        .toList();
+    final kept = words.where((w) => !_honorifics.contains(w)).toList();
+    return kept.isEmpty ? words : kept;
   }
 
   /// All the fields we match a spoken name against: display name, first/last,
@@ -2598,6 +2773,7 @@ class LiveController {
 
   Future<void> dispose() async {
     await _connectivitySub?.cancel();
+    await _callAudioSub?.cancel();
     _historySaveTimer?.cancel();
     _locationTimer?.cancel();
     await ChatHistoryStore.saveSession(_state.transcripts);

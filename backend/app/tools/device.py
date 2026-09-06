@@ -221,14 +221,17 @@ class RecordVideoTool(Tool):
     name = "record_video"
     description = (
         "Start recording VIDEO — on the user's smart glasses when they are "
-        "connected, otherwise with the phone's camera. Call this ONLY when "
-        "the user has CLEARLY and UNAMBIGUOUSLY asked to record a video ('video "
-        "banao', 'video record karo', 'start recording') AND you have "
-        "confirmed and they said yes — recording captures their surroundings, "
-        "so a garbled or half-heard phrase must NEVER start one. Only for "
-        "video — a request for a photo, or a question about what they are "
-        "looking at, is capture_photo instead. Nothing is recorded unless "
-        "this is called. What to tell the user comes back in the result."
+        "connected, otherwise with the phone's camera. There is always a "
+        "camera, so recording is never unavailable: if you are unsure the user "
+        "meant it, ASK — do not refuse. Call this once the user has CLEARLY "
+        "asked to record a video ('video banao', 'video record karo', 'start "
+        "recording') AND confirmed — recording captures their surroundings, so "
+        "a garbled or half-heard phrase must NEVER start one, but a clear "
+        "request that you confirmed MUST. Only for video — a request for a "
+        "photo, or a question about what they are looking at, is capture_photo "
+        "instead. Nothing is recorded unless this is called, and nothing but "
+        "this can tell you whether a recording started. What to tell the user "
+        "comes back in the result."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -245,7 +248,7 @@ class RecordVideoTool(Tool):
     #: What went wrong, in words the model can say out loud.
     _REASONS = {
         "not_connected": "the smart glasses aren't connected",
-        "busy": "the glasses are busy with another capture",
+        "busy": "the glasses are busy with something else right now",
         "low_battery": "the glasses' battery is too low to record",
         "bad_duration": "the recording length is out of range",
         "disconnected": "the glasses disconnected",

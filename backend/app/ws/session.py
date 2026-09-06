@@ -508,6 +508,9 @@ class Session:
         gw = self._gateway
         if uid is None or not hasattr(gw, "resume_handle"):
             return
+        if not getattr(self._settings, "session_resume_enabled", True):
+            logger.info("session.resume_disabled", session_id=self.session_id)
+            return
         entry = _RESUME_HANDLES.get(uid)
         if entry is not None and time.monotonic() - entry[1] < _RESUME_TTL_S:
             gw.resume_handle = entry[0]
@@ -823,6 +826,24 @@ class Session:
             if isinstance(loc, dict) and self._orchestrator is not None:
                 self._orchestrator.location = loc
                 logger.info("location.updated", session_id=self.session_id)
+        elif mtype == "call_state":
+            # A phone call took the microphone, or gave it back. The model
+            # cannot see this, so it kept reporting a finished call as still
+            # ringing (device-observed 2026-09-06). A silent note puts the fact
+            # in its context without making it announce anything.
+            in_call = bool(message.get("inCall"))
+            note_fn = getattr(self._gateway, "send_silent_note", None)
+            if callable(note_fn):
+                await note_fn(
+                    "(A phone call is in progress. The user cannot talk to you "
+                    "until it ends.)"
+                    if in_call
+                    else "(The phone call has ended. You are no longer calling "
+                    "anyone \u2014 do not say a call is in progress.)"
+                )
+            logger.info(
+                "call_state.updated", session_id=self.session_id, in_call=in_call
+            )
         elif mtype == "device_update":
             # The client switched its active capture device mid-session (e.g.
             # glasses connected by voice AFTER hello and became the camera).

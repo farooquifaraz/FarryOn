@@ -371,6 +371,14 @@ class Settings(BaseSettings):
     # user's — the "real ChatGPT/Gemini app" feel Faraz asked for (2026-08-27).
     # When on, the Gemini connect ladder tries v1alpha first (the only channel
     # that accepts the field); turning this off restores the v1beta-first order.
+    # Hand a reconnecting session its previous Gemini conversation, so a drop
+    # or an idle restart continues where the user left off. Set false to force
+    # every connection to start clean — the switch exists because resumed
+    # sessions were the common factor in a run of `1011 Internal error` drops
+    # (2026-09-06), and the only way to tell a provider fault from ours is to
+    # be able to turn this off and watch.
+    session_resume_enabled: bool = Field(default=True)
+
     affective_dialog_enabled: bool = Field(default=True)
     # Bound runaway sessions. On reaching a limit the server sends a JSON
     # `session_expired` event and closes; the app reconnects fresh (cheap,

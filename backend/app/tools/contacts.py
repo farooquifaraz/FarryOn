@@ -60,13 +60,15 @@ class ResolveContactTool(Tool):
 
     name = "resolve_contact"
     description = (
-        "Find a person to message BEFORE sending. Read-only, NO confirmation "
-        "needed — call this FIRST whenever the user names someone to WhatsApp or "
-        "Telegram and you don't already have their number/handle. Returns "
+        "Look a person up in the user's own phone contacts. Read-only, NO "
+        "confirmation needed — call it immediately. This is the ONLY way you "
+        "can see those contacts, so you MUST call it before saying anyone is "
+        "or is not in there. Use it when the user names someone to message or "
+        "phone, AND when they simply ask you to search their contacts. Returns "
         "status=found with a MASKED number (read it back to confirm) and a "
-        "contact_id to pass to send_whatsapp; or not_found / ambiguous / "
-        "no_number / permission_denied so you can ask the user. NEVER say a "
-        "message was sent based on this — it only looks up the recipient."
+        "contact_id to pass to send_whatsapp / make_call; or not_found / "
+        "ambiguous / no_number / permission_denied so you can ask the user. "
+        "NEVER say a message was sent based on this — it only looks someone up."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -74,8 +76,9 @@ class ResolveContactTool(Tool):
             "name": {"type": "string", "description": "Person's name to find."},
             "channel": {
                 "type": "string",
-                "enum": ["whatsapp", "telegram", "sms"],
-                "description": "Which app the user wants to message on.",
+                "enum": ["whatsapp", "telegram", "sms", "call"],
+                "description": "Which app the user wants to message on, "
+                "or \"call\" to look someone up before phoning them.",
             },
         },
         "required": ["name"],
@@ -84,7 +87,7 @@ class ResolveContactTool(Tool):
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
         name = (kwargs.get("name") or "").strip()
         channel = (kwargs.get("channel") or "whatsapp").strip().lower()
-        if channel not in ("whatsapp", "telegram", "sms"):
+        if channel not in ("whatsapp", "telegram", "sms", "call"):
             channel = "whatsapp"
         if not name:
             return {"ok": True, "status": "not_found", "message": "Who?"}

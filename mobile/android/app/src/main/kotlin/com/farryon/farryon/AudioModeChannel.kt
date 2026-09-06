@@ -73,6 +73,13 @@ class AudioModeChannel(private val app: Context) : MethodChannel.MethodCallHandl
             Log.i(TAG, "enterVoiceMode: external audio route — leaving media path alone")
             return "skipped_external_route"
         }
+        // A phone call owns the audio while it lasts. Taking the mode from it
+        // was device-proven to leave the person on the other end hearing
+        // nothing (2026-09-06), so the call wins and we stay out.
+        if (am.mode == AudioManager.MODE_IN_CALL || am.mode == AudioManager.MODE_RINGTONE) {
+            Log.i(TAG, "enterVoiceMode: a phone call owns the audio — standing down")
+            return "skipped_in_call"
+        }
         return try {
             previousMode = am.mode
             am.mode = AudioManager.MODE_IN_COMMUNICATION

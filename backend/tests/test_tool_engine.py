@@ -35,6 +35,7 @@ def test_export_schemas_matches_protocol() -> None:
         "web_search",
         "create_task",
         "send_message",
+        "make_call",
         "set_camera_zoom",
         "list_notes",
         "list_tasks",
@@ -56,7 +57,8 @@ def test_export_schemas_matches_protocol() -> None:
         "resolve_contact",
         "save_contact",
         "list_sent_messages",
-        # Glasses + device control.
+        # Phone + glasses + device control.
+        "play_music",
         "capture_photo",
         "connect_glasses",
         "disconnect_glasses",
@@ -185,6 +187,36 @@ def test_prompt_forbids_claiming_unperformed_actions() -> None:
     prompt = build_system_prompt(None).lower()
     assert "saying an action happened does not make it happen" in prompt
     assert "unless you called the tool" in prompt
+
+
+def test_tools_forbid_refusing_without_calling() -> None:
+    """The mirror image of claiming an action: claiming it is impossible.
+
+    Device-seen 2026-09-06. Asked four times to record a video the assistant
+    answered "I cannot start recording right now" and called nothing — the
+    glasses were connected the whole time. It made the same move for music
+    ("playing that now", no call) and contacts ("no such contact", no search).
+    A tool the model cannot see the state of must say, in its own description,
+    that only calling it settles the question.
+    """
+    schemas = {s["name"]: s for s in _engine().export_schemas()}
+    for name in ("record_video", "play_music", "resolve_contact"):
+        desc = schemas[name]["description"].lower()
+        assert "never" in desc, (
+            f"{name} must forbid the answer it cannot know without being called"
+        )
+
+    record = schemas["record_video"]["description"].lower()
+    assert "never unavailable" in record or "always" in record, (
+        "record_video works on the phone when the glasses are absent, and its "
+        "description must say so or the model refuses"
+    )
+
+    contacts = schemas["resolve_contact"]["description"].lower()
+    assert "only way" in contacts, (
+        "resolve_contact is the only view of the contacts; saying a name is "
+        "absent without calling it is a guess"
+    )
 
 
 def test_language_pin_does_not_trust_a_misheard_room() -> None:

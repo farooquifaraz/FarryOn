@@ -7,6 +7,7 @@ import io.flutter.embedding.engine.FlutterEngine
 class MainActivity : FlutterActivity() {
     private var glasses: GlassesChannels? = null
     private var audioMode: AudioModeChannel? = null
+    private var call: CallChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -18,6 +19,17 @@ class MainActivity : FlutterActivity() {
         )
         // Save live captures (phone/glasses JPEG bytes) into the phone gallery.
         MediaChannel.register(
+            flutterEngine.dartExecutor.binaryMessenger,
+            applicationContext,
+        )
+        // "Call Ahmed" — placed for real, once the user has granted the
+        // permission; falls back to the dialer when they haven't.
+        call = CallChannel.register(
+            flutterEngine.dartExecutor.binaryMessenger,
+            applicationContext,
+        )
+        // "Play some music" — handed to whatever player the phone has.
+        MusicChannel.register(
             flutterEngine.dartExecutor.binaryMessenger,
             applicationContext,
         )
@@ -42,6 +54,8 @@ class MainActivity : FlutterActivity() {
         // Never leave the phone stuck in call mode if we're torn down mid-session.
         audioMode?.exit()
         audioMode = null
+        call?.dispose()
+        call = null
         super.onDestroy()
     }
 }
