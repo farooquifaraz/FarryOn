@@ -48,6 +48,13 @@ from app.ai.events import (
     TurnCompleteEvent,
 )
 from app.config import Settings, get_settings
+from app.ai.transcript_refiner import (
+    MIN_AUDIO_SECONDS,
+    clip_to_budget,
+    refine_transcript,
+    seconds_of,
+)
+from app.ws.audio_dump import AudioDump
 from app.core.account import token_rejection
 from app.db import repo
 from app.prompts.system import build_system_prompt
@@ -159,6 +166,28 @@ class Session:
         #: When the last INPUT_AUDIO frame arrived — drives the audio.resumed
         #: gap log (input-side latency evidence).
         self._last_audio_frame_at: float = 0.0
+        #: Off unless a dump directory is configured; a copy of exactly the
+        #: audio the transcriber was given, for when the transcript is wrong.
+        self._audio_dump = AudioDump(
+            getattr(settings, "debug_audio_dump_dir", ""), self.session_id
+        )
+        #: The current user turn's microphone audio, kept so a second reader
+        #: can correct the words on screen once the reply has begun. The
+        #: client mutes its mic while the assistant speaks, so everything that
+        #: arrives between one reply and the next is the user's utterance.
+        self._turn_pcm = bytearray()
+        #: What each turn's user utterance has come to so far, keyed by turn:
+        #: the saved row id once the Live final has been stored, and/or the
+        #: refined text once the second reading has landed. The two arrive in
+        #: EITHER order — a short reply finishes before a 3-second second
+        #: reading — and a one-shot flag saved both and then ate the next
+        #: turn's text (device-seen 2026-09-07). Whichever comes second
+        #: corrects, never duplicates.
+        self._turn_rows: dict[int, int] = {}
+        self._turn_refined_text: dict[int, str] = {}
+        #: Which turn the audio in `_turn_pcm` belongs to — it is the turn
+        #: whose reply has not started yet, which is the current index.
+        self._refine_task: asyncio.Task[None] | None = None
         self._t_user_first: float = 0.0
         self._t_user_last: float = 0.0
         self._t_reply_started: float = 0.0
@@ -688,6 +717,16 @@ class Session:
         if tag == FrameTag.INPUT_AUDIO:
             metrics.FRAMES_IN.labels(kind="audio").inc()
             metrics.AUDIO_BYTES_IN.inc(len(payload))
+            self._audio_dump.write(payload)
+            if self._mode == "agent" and getattr(
+                self._settings, "refine_user_transcripts", False
+            ):
+                self._turn_pcm += payload
+                if seconds_of(bytes(self._turn_pcm)) > 60:
+                    # A quiet room streams nothing (the gate holds silence
+                    # back), so this only grows while someone talks; still,
+                    # bound it — the last 30 s are what is on screen.
+                    self._turn_pcm = bytearray(clip_to_budget(bytes(self._turn_pcm)))
             now_audio = time.monotonic()
             # Input-lag evidence: mic audio streams every 20-100 ms, so a gap
             # followed by a burst means the CLIENT held the audio back (mic
@@ -1021,6 +1060,64 @@ class Session:
         await self._gateway.interrupt()
         await self._send_state("listening")
 
+    async def _save_user_final(self, live_text: str) -> None:
+        """Store the Live transcriber's final user text — unless a better
+        reading of the same turn already landed, in which case store THAT."""
+        turn = self._turn_index
+        refined = self._turn_refined_text.pop(turn, None)
+        row_id = await repo_safe_transcript(
+            self.session_id, "user", refined or live_text
+        )
+        if refined is None and row_id is not None:
+            # The second reading may still be on its way; leave it the row.
+            self._turn_rows[turn] = row_id
+
+    def _start_refining_turn(self) -> None:
+        """Hand this turn's audio to a second reader, off the critical path."""
+        pcm = bytes(self._turn_pcm)
+        self._turn_pcm = bytearray()
+        if not getattr(self._settings, "refine_user_transcripts", False):
+            return
+        if seconds_of(pcm) < MIN_AUDIO_SECONDS:
+            return
+        turn = self._turn_index
+        self._refine_task = asyncio.create_task(self._refine_and_send(pcm, turn))
+
+    async def _refine_and_send(self, pcm: bytes, turn: int) -> None:
+        started = time.monotonic()
+        text = await refine_transcript(
+            pcm,
+            api_key=self._settings.gemini_api_key,
+            model=self._settings.refine_transcript_model,
+            timeout_s=self._settings.refine_transcript_timeout_s,
+        )
+        if not text or self._closing:
+            return
+        logger.info(
+            "transcript.refined",
+            session_id=self.session_id,
+            turn=turn,
+            audio_s=round(seconds_of(pcm), 1),
+            took_ms=int((time.monotonic() - started) * 1000),
+        )
+        await self._send_json(
+            {
+                "type": "transcript",
+                "role": "user",
+                "text": text,
+                "final": True,
+                # A correction to the bubble already on screen, not a new one.
+                "refined": True,
+            }
+        )
+        row_id = self._turn_rows.pop(turn, None)
+        if row_id is not None:
+            # The Live final got there first: correct its row in place.
+            await repo_safe_update_transcript(row_id, text)
+        else:
+            # We are first: the Live final, when it comes, will save this.
+            self._turn_refined_text[turn] = text
+
     def _log_turn_timing(self, *, outcome: str) -> None:
         """One summary line + metrics for the turn that just ended.
 
@@ -1122,13 +1219,17 @@ class Session:
                 }
             )
             if event.final and event.text:
-                await repo_safe_transcript(
-                    self.session_id, event.role, event.text
-                )
+                if event.role == "user" and self._mode == "agent":
+                    await self._save_user_final(event.text)
+                else:
+                    await repo_safe_transcript(
+                        self.session_id, event.role, event.text
+                    )
         elif event.type == EventType.AUDIO_START:
             assert isinstance(event, AudioStartEvent)
             if self._mode == "agent" and self._t_reply_started == 0.0:
                 self._t_reply_started = time.monotonic()
+                self._start_refining_turn()
             await self._send_state("speaking")
             await self._send_json({"type": "audio_start"})
         elif event.type == EventType.AUDIO_CHUNK:
@@ -1561,6 +1662,9 @@ class Session:
         logger.info(
             "session.closing", session_id=self.session_id, reason=reason
         )
+        self._audio_dump.close()
+        if self._refine_task is not None and not self._refine_task.done():
+            self._refine_task.cancel()
         # Bill the speech since the last flush. Without this every session under
         # _VOICE_FLUSH_EVERY_S would be free, and a user could talk all day in
         # 14-second bursts — the cap would count nothing. The translate meter
@@ -1605,19 +1709,38 @@ class Session:
                 await self._ws.close()
 
 
-async def repo_safe_transcript(session_id: str, role: str, text: str) -> None:
+async def repo_safe_transcript(
+    session_id: str, role: str, text: str
+) -> int | None:
     """Persist a transcript segment, swallowing storage errors.
 
     Transcripts are convenience history; a DB hiccup must not interrupt the
-    live conversation, so failures are logged and dropped.
+    live conversation, so failures are logged and dropped. Returns the row
+    id so a later, better reading of the same words can correct it in place.
     """
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as db:
         try:
-            await repo.add_transcript(
+            row = await repo.add_transcript(
                 db, role=role, text=text, session_id=session_id
+            )
+            await db.commit()
+            return row.id
+        except Exception as exc:  # noqa: BLE001
+            await db.rollback()
+            logger.warning("transcript.persist_failed", error=str(exc))
+            return None
+
+
+async def repo_safe_update_transcript(transcript_id: int, text: str) -> None:
+    """Correct a saved transcript in place; failures are logged and dropped."""
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as db:
+        try:
+            await repo.update_transcript_text(
+                db, transcript_id=transcript_id, text=text
             )
             await db.commit()
         except Exception as exc:  # noqa: BLE001
             await db.rollback()
-            logger.warning("transcript.persist_failed", error=str(exc))
+            logger.warning("transcript.update_failed", error=str(exc))

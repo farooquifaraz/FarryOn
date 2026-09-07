@@ -117,6 +117,21 @@ class GeminiGateway(AIGateway):
         # enough to compare tuning changes against.
         self._last_user_tx_at = 0.0
 
+    @staticmethod
+    def _input_transcription_config(types: Any) -> Any:
+        """Transcription of the USER's audio, with language hints when set.
+
+        Hints, not a pin: ``LanguageHints`` tells the recogniser what is
+        probable and leaves everything else possible. An empty setting is the
+        pre-2026-09-06 behaviour — full auto-detection per utterance.
+        """
+        hints = [h for h in get_settings().assistant_language_hints if h]
+        if not hints:
+            return types.AudioTranscriptionConfig()
+        return types.AudioTranscriptionConfig(
+            language_hints=types.LanguageHints(language_codes=hints)
+        )
+
     def _build_config(self, api_version: str = "v1beta") -> Any:
         """Construct the ``LiveConnectConfig`` with tools + system prompt."""
         from google.genai import types  # type: ignore[import-not-found]
@@ -139,7 +154,10 @@ class GeminiGateway(AIGateway):
             # native-audio model the spoken words arrive here — NOT as
             # ``model_turn.parts[].text`` (which is the model's private
             # reasoning). Without this we have no clean transcript to show.
-            input_audio_transcription=types.AudioTranscriptionConfig(),
+            # The user's side is told what it is likely to hear (see
+            # Settings.assistant_language_hints); the model's own speech needs
+            # no hint, it chose the language.
+            input_audio_transcription=self._input_transcription_config(types),
             output_audio_transcription=types.AudioTranscriptionConfig(),
         )
         # Keep the model's chain-of-thought OUT of the response stream so it can

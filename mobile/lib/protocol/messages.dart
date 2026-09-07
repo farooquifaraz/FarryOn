@@ -413,6 +413,7 @@ class TranscriptMessage extends ServerMessage {
     required this.isFinal,
     this.lang,
     this.utterance,
+    this.refined = false,
   });
 
   /// `"user"` (ASR) or `"assistant"`.
@@ -439,6 +440,11 @@ class TranscriptMessage extends ServerMessage {
   /// the assistant path, where turns happen strictly one at a time.
   final int? utterance;
 
+  /// A better reading of the user's last utterance, from a second model that
+  /// read the same audio after the reply had begun. It REPLACES the bubble
+  /// already on screen; it is never a new line.
+  final bool refined;
+
   bool get isUser => role == 'user';
   bool get isAssistant => role == 'assistant';
 
@@ -449,6 +455,7 @@ class TranscriptMessage extends ServerMessage {
         isFinal: json['final'] as bool? ?? false,
         lang: json['lang'] as String?,
         utterance: json['utterance'] as int?,
+        refined: json['refined'] as bool? ?? false,
       );
 }
 

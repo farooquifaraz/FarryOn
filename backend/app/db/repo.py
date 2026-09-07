@@ -537,6 +537,22 @@ async def add_transcript(
     return row
 
 
+async def update_transcript_text(
+    session: AsyncSession, *, transcript_id: int, text: str
+) -> bool:
+    """Replace the text of a saved transcript row; False if it is gone.
+
+    A second, better reading of the same words corrects the row the first
+    reading made — one row per utterance, whichever reading landed first.
+    """
+    row = await session.get(Transcript, transcript_id)
+    if row is None:
+        return False
+    row.text = text
+    await session.flush()
+    return True
+
+
 async def record_tool_call(
     session: AsyncSession,
     *,

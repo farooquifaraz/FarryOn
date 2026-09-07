@@ -127,6 +127,31 @@ class Settings(BaseSettings):
         "Empty means auto-detect.",
     )
 
+    # Languages the ASSISTANT's transcriber is told it is likely to hear.
+    # Empty leaves detection to the model, per utterance — which is how it
+    # shipped, and how one Hinglish speaker's afternoon came back in FIVE
+    # scripts (Devanagari, Latin, Urdu, Bengali, Gujarati; 2026-09-06), with
+    # English words spelt in Devanagari and a contact's name mangled into
+    # something the phone could never match.
+    #
+    # These are HINTS (`LanguageHints`), not a pin: other languages still
+    # transcribe, the model is only told what is probable. Separate from
+    # `translate_language_hints` on purpose — the translator hears strangers
+    # in any language; the assistant hears its owner. A lever, because the
+    # translate experiment found hints changed nothing THERE, and whether they
+    # help HERE is a measurement, not a belief.
+    #
+    # Default OFF. Five phrases through hi-IN,en-IN (2026-09-07) moved two
+    # English sentences from Devanagari to Latin, put one into Telugu, and
+    # changed not a single wrong word — every error was at the word's
+    # onset (Teach/Reach, Wife/life), which is the audio's doing. The lever
+    # stays for a larger measurement; the default does not carry it.
+    assistant_language_hints: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        description="Comma-separated BCP-47 hints for what the user speaks to "
+        "the assistant. Empty means auto-detect.",
+    )
+
     # -- Translate: which pipeline ---------------------------------------------
     #
     # `direct` is one model doing hear-translate-speak. It is fast and, for a
@@ -379,6 +404,24 @@ class Settings(BaseSettings):
     # be able to turn this off and watch.
     session_resume_enabled: bool = Field(default=True)
 
+    # Directory to keep a WAV of every session's incoming mic audio. Empty
+    # (the default, and production) writes nothing. A measuring instrument:
+    # the only way to know whether a word that was transcribed wrong at its
+    # start ever arrived intact (see app/ws/audio_dump.py).
+    debug_audio_dump_dir: str = Field(default="")
+
+    # Read each user turn's audio a second time with a text model and correct
+    # the on-screen words. The Live transcriber put a plain English sentence
+    # into Telugu script and heard "Call" as "aal" from audio that
+    # gemini-2.5-flash read correctly, byte for byte (2026-09-07). Off the
+    # critical path: the reply is already speaking when this is asked. One
+    # switch, so it can go in a line if it ever misbehaves.
+    refine_user_transcripts: bool = Field(default=True)
+    refine_transcript_model: str = Field(default="gemini-2.5-flash")
+    # Past this the first reading stands; a correction that arrives after the
+    # user has moved on is a distraction, not a help.
+    refine_transcript_timeout_s: float = Field(default=8.0)
+
     affective_dialog_enabled: bool = Field(default=True)
     # Bound runaway sessions. On reaching a limit the server sends a JSON
     # `session_expired` event and closes; the app reconnects fresh (cheap,
@@ -539,6 +582,7 @@ class Settings(BaseSettings):
         "allowed_providers",
         "translate_allowed_target_langs",
         "translate_language_hints",
+        "assistant_language_hints",
         mode="before",
     )
     @classmethod

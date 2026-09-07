@@ -1614,7 +1614,20 @@ class LiveController {
   /// out of view anyway, so we keep only the most recent ones.
   static const int _maxTranscripts = 80;
 
+  /// True once a refined reading has replaced this utterance's bubble, so
+  /// the Live transcriber's own final text for it — which arrives later,
+  /// at the end of the reply — is not laid on top as a second line.
+  bool _utteranceRefined = false;
+
   void _applyTranscript(TranscriptMessage msg) {
+    // A second, better reading of what the user just said. It lands while
+    // the assistant is speaking (so it must be handled BEFORE the echo
+    // guard below, which would drop it) and replaces the last user bubble
+    // rather than adding one.
+    if (msg.refined && msg.isUser) {
+      _applyRefinedUserTranscript(msg.text);
+      return;
+    }
     // Echo suppression: while the assistant's TTS is playing (and its tail
     // margin) the mic is muted, so any "user" transcript in that window can
     // only be the assistant's own voice leaking back in. Drop it so it never
@@ -1627,6 +1640,7 @@ class LiveController {
     // or transport); every delta refreshes the felt-latency anchor read when
     // the reply's audio starts.
     if (msg.role == 'user' && !msg.isFinal) {
+      _utteranceRefined = false; // a new utterance is being heard
       final now = DateTime.now();
       if (_turnHeardAt == null) {
         _turnHeardAt = now;
@@ -1647,6 +1661,13 @@ class LiveController {
     // utterance — some providers, e.g. Grok, emit it 2-3× as it builds, which
     // looked like the user "repeating"), or ACCEPT (a genuinely new line).
     if (msg.role == 'user' && msg.isFinal) {
+      if (_utteranceRefined) {
+        // The refined reading already stands; the Live transcriber's
+        // version of the same words would only add a worse duplicate.
+        _utteranceRefined = false;
+        _dropTrailingUserPartial();
+        return;
+      }
       switch (_classifyUserFinal(msg.text)) {
         case _UserVerdict.reject:
           _dropTrailingUserPartial();
@@ -1742,6 +1763,26 @@ class LiveController {
       return _UserVerdict.reject; // echo of the assistant's own voice
     }
     return _UserVerdict.accept;
+  }
+
+  /// Replace the last user bubble with a better reading of the same words.
+  void _applyRefinedUserTranscript(String text) {
+    final clean = text.trim();
+    if (clean.isEmpty) return;
+    final cur = List<TranscriptEntry>.of(_state.transcripts);
+    for (var i = cur.length - 1; i >= 0; i--) {
+      if (cur[i].role == 'user') {
+        cur[i] = cur[i].copyWith(text: clean, isFinal: true);
+        _lastUserFinal = clean;
+        _utteranceRefined = true;
+        _log.info('USER (refined): $clean');
+        _emit(_state.copyWith(transcripts: cur));
+        return;
+      }
+      if (cur[i].role == 'assistant' && i < cur.length - 1) {
+        break; // an older turn; the utterance this corrects is not on screen
+      }
+    }
   }
 
   /// Debounced log of the user's line: a growing utterance only logs ONCE — the
