@@ -19,7 +19,7 @@ from typing import Any
 
 from app.logging_conf import get_logger
 from app.tools.base import Tool, ToolContext
-from app.tools.email_accounts import account_labels, resolve_account, usable_accounts
+from app.tools.email_accounts import resolve_account
 from app.tools.idempotency import already_sent, mark_sent  # UX Spec §3.4
 from app.tools.validators import valid_email  # UX Spec §3.1
 
@@ -74,8 +74,10 @@ class SendEmailTool(Tool):
         "Send an email from the user's account. IMPORTANT: only call this "
         "AFTER reading the recipient, subject and body back to the user and "
         "getting their explicit confirmation — never send without a clear yes. "
-        "If the user has more than one mailbox, also confirm WHICH account to "
-        "send from and pass its label as 'account'."
+        "The sending account is never assumed either: omit 'account' the first "
+        "time and the tool tells you which accounts exist and what to ask; "
+        "then pass what the user said ('primary', 'secondary', a label or an "
+        "address)."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -88,9 +90,10 @@ class SendEmailTool(Tool):
             "body": {"type": "string"},
             "account": {
                 "type": "string",
-                "description": "Which mailbox to send FROM: the account label "
-                "(e.g. 'Personal', 'Work'). Required when the user has more "
-                "than one mailbox; omit if they have only one.",
+                "description": "Which mailbox to send FROM, as the user said "
+                "it: 'primary', 'secondary', the account label, or the "
+                "address. Omit on the first email request of a session and "
+                "the tool tells you what to ask (never assume one).",
             },
         },
         "required": ["to", "body"],
@@ -98,28 +101,12 @@ class SendEmailTool(Tool):
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
         account_arg = (kwargs.get("account") or "").strip()
-        accts = usable_accounts(ctx)
-        if not accts:
-            return {
-                "ok": False,
-                "message": (
-                    "No email is configured. Ask the user to add their email "
-                    "address and app password in Settings."
-                ),
-            }
-        # Send-safety: never guess the sender when there's more than one mailbox.
-        if not account_arg and len(accts) > 1:
-            labels = ", ".join(account_labels(ctx))
-            return {
-                "ok": False,
-                "message": (
-                    f"The user has more than one mailbox ({labels}). Ask which "
-                    "account to send FROM, then call again with 'account' set."
-                ),
-            }
-        account, err = resolve_account(ctx, account_arg or None)
-        if err:
-            return {"ok": False, "message": err}
+        # Send-safety: the sender is the mailbox the user confirmed or chose
+        # this session — never a guess. Until they have, the answer is the
+        # question to ask them.
+        account, ask = resolve_account(ctx, account_arg or None)
+        if ask:
+            return ask
         host, port, address, password, label = _smtp_creds(account)
         to = (kwargs.get("to") or "").strip()
         # CHANGED (UX Spec §3.1): real email validation instead of `"@" in to`,

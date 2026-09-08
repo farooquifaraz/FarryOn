@@ -16,9 +16,10 @@ pytestmark = pytest.mark.asyncio
 async def test_read_emails_without_config(db_session) -> None:
     """No credentials -> a friendly 'configure it' result, not an error crash."""
     ctx = ToolContext(session=db_session, email=None)
-    result = await ReadEmailsTool().run(ctx)
+    result = await ReadEmailsTool().run(ctx, account="primary")
     assert result["ok"] is False
-    assert "configured" in result["message"].lower()
+    assert result["status"] == "no_account"
+    assert "no email account is registered" in result["message"].lower()
 
 
 async def test_read_emails_returns_messages(db_session, monkeypatch) -> None:
@@ -42,7 +43,8 @@ async def test_read_emails_returns_messages(db_session, monkeypatch) -> None:
         email={"address": "me@gmail.com", "appPassword": "app-pw"},
     )
     result = await ReadEmailsTool().run(
-        ctx, limit=5, query="invoice", category="promotions", range="week"
+        ctx, limit=5, query="invoice", category="promotions", range="week",
+        account="primary",
     )
 
     assert result["ok"] is True
@@ -79,7 +81,7 @@ async def test_read_emails_limit_is_clamped(db_session, monkeypatch) -> None:
         session=db_session,
         email={"address": "me@gmail.com", "appPassword": "pw"},
     )
-    await ReadEmailsTool().run(ctx, limit=9999)
+    await ReadEmailsTool().run(ctx, limit=9999, account="primary")
     assert seen["limit"] == email_read._MAX_LIMIT
 
 
@@ -93,7 +95,7 @@ async def test_read_emails_auth_error_is_graceful(db_session, monkeypatch) -> No
         session=db_session,
         email={"address": "me@gmail.com", "appPassword": "wrong"},
     )
-    result = await ReadEmailsTool().run(ctx)
+    result = await ReadEmailsTool().run(ctx, account="primary")
     assert result["ok"] is False
     assert "password" in result["message"].lower()
 
@@ -119,7 +121,7 @@ async def test_read_emails_retries_once_on_network_error(
         session=db_session,
         email={"address": "me@gmail.com", "appPassword": "pw"},
     )
-    result = await ReadEmailsTool().run(ctx)
+    result = await ReadEmailsTool().run(ctx, account="primary")
     assert result["ok"] is True
     assert result["count"] == 1
     assert calls["n"] == 2
@@ -140,7 +142,7 @@ async def test_read_emails_auth_error_is_not_retried(
         session=db_session,
         email={"address": "me@gmail.com", "appPassword": "wrong"},
     )
-    result = await ReadEmailsTool().run(ctx)
+    result = await ReadEmailsTool().run(ctx, account="primary")
     assert result["ok"] is False
     assert calls["n"] == 1
 

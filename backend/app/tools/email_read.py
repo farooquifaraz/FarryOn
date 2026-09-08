@@ -26,7 +26,11 @@ from typing import Any
 
 from app.logging_conf import get_logger
 from app.tools.base import Tool, ToolContext
-from app.tools.email_accounts import resolve_account, usable_accounts
+from app.tools.email_accounts import (
+    NO_ACCOUNT_MESSAGE,
+    resolve_account,
+    usable_accounts,
+)
 
 logger = get_logger(__name__)
 
@@ -330,9 +334,12 @@ class ReadEmailsTool(Tool):
             },
             "account": {
                 "type": "string",
-                "description": "Which mailbox to read: the account label the "
-                "user set (e.g. 'Personal', 'Work'), or 'all' to read from "
-                "every mailbox. Omit to use their primary mailbox.",
+                "description": "Which mailbox to read, as the user said it: "
+                "'primary', 'secondary', the account label, or the address. "
+                "Omit it on the FIRST email request of a session: the tool "
+                "then tells you which accounts exist and what to ask the user "
+                "(never assume one). Pass 'all' only when the user explicitly "
+                "asks for every mailbox.",
             },
         },
     }
@@ -351,13 +358,8 @@ class ReadEmailsTool(Tool):
         if account_arg.lower() == "all":
             accts = usable_accounts(ctx)
             if not accts:
-                return {
-                    "ok": False,
-                    "message": (
-                        "No email is configured. Ask the user to add their "
-                        "email address and app password in Settings."
-                    ),
-                }
+                _none, result = resolve_account(ctx, None)
+                return result or {"ok": False, "message": NO_ACCOUNT_MESSAGE}
             merged: list[dict[str, Any]] = []
             failed: list[str] = []
             for acct in accts:
@@ -402,10 +404,11 @@ class ReadEmailsTool(Tool):
                 )
             return result
 
-        # Single mailbox: the named one, else the primary.
-        account, err = resolve_account(ctx, account_arg or None)
-        if err:
-            return {"ok": False, "message": err}
+        # One mailbox: the one the user named or already settled on. Until
+        # they have, the answer is the question to ask them — never a guess.
+        account, ask = resolve_account(ctx, account_arg or None)
+        if ask:
+            return ask
         host, address, password, label = _imap_creds(account)
         try:
             emails = await _fetch_with_retry(
@@ -457,16 +460,18 @@ class ReadEmailTool(Tool):
             },
             "account": {
                 "type": "string",
-                "description": "Which mailbox to search: the account label "
-                "(e.g. 'Personal', 'Work'). Omit to use the primary mailbox.",
+                "description": "Which mailbox to search, as the user said it: "
+                "'primary', 'secondary', the account label, or the address. "
+                "Omit it on the first email request of a session: the tool "
+                "then tells you what to ask the user (never assume one).",
             },
         },
     }
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
-        account, err = resolve_account(ctx, (kwargs.get("account") or "").strip() or None)
-        if err:
-            return {"ok": False, "message": err}
+        account, ask = resolve_account(ctx, (kwargs.get("account") or "").strip() or None)
+        if ask:
+            return ask
         host, address, password, label = _imap_creds(account)
         query = (kwargs.get("query") or None)
         range_ = (kwargs.get("range") or "week")

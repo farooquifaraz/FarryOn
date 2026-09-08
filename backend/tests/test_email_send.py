@@ -15,9 +15,10 @@ pytestmark = pytest.mark.asyncio
 
 async def test_send_email_without_config(db_session) -> None:
     ctx = ToolContext(session=db_session, email=None)
-    result = await SendEmailTool().run(ctx, to="a@b.com", body="hi")
+    result = await SendEmailTool().run(ctx, account="primary", to="a@b.com", body="hi")
     assert result["ok"] is False
-    assert "configured" in result["message"].lower()
+    assert result["status"] == "no_account"
+    assert "no email account is registered" in result["message"].lower()
 
 
 async def test_send_email_requires_valid_recipient(db_session) -> None:
@@ -25,7 +26,7 @@ async def test_send_email_requires_valid_recipient(db_session) -> None:
         session=db_session,
         email={"address": "me@gmail.com", "appPassword": "pw"},
     )
-    result = await SendEmailTool().run(ctx, to="not-an-email", body="hi")
+    result = await SendEmailTool().run(ctx, account="primary", to="not-an-email", body="hi")
     assert result["ok"] is False
     # The hardened validator rejects an incomplete address by name.
     msg = result["message"].lower()
@@ -47,7 +48,8 @@ async def test_send_email_sends(db_session, monkeypatch) -> None:
         email={"address": "me@gmail.com", "appPassword": "pw"},
     )
     result = await SendEmailTool().run(
-        ctx, to="faraz@gmail.com", subject="Hi", body="See you tomorrow"
+        ctx, to="faraz@gmail.com", subject="Hi", body="See you tomorrow",
+        account="primary",
     )
     assert result["ok"] is True
     assert result["sent"] is True
@@ -72,7 +74,7 @@ async def test_send_email_custom_host_and_port(db_session, monkeypatch) -> None:
             "smtpHost": "smtp.hostinger.com", "smtpPort": 465,
         },
     )
-    result = await SendEmailTool().run(ctx, to="a@b.com", body="hi")
+    result = await SendEmailTool().run(ctx, account="primary", to="a@b.com", body="hi")
     assert result["ok"] is True
     assert seen["host"] == "smtp.hostinger.com"
     assert seen["port"] == 465
@@ -87,6 +89,6 @@ async def test_send_email_auth_error_is_graceful(db_session, monkeypatch) -> Non
         session=db_session,
         email={"address": "me@gmail.com", "appPassword": "wrong"},
     )
-    result = await SendEmailTool().run(ctx, to="a@b.com", body="hi")
+    result = await SendEmailTool().run(ctx, account="primary", to="a@b.com", body="hi")
     assert result["ok"] is False
     assert "sign in" in result["message"].lower()

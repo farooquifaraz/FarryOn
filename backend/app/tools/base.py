@@ -102,6 +102,12 @@ class ToolContext:
     #: resolved. A field rather than an ad-hoc attribute because ToolContext is
     #: ``slots=True`` — an arbitrary attribute would silently fail to stick.
     resolved_plan: str | None = None
+    #: The mailbox the user confirmed or chose this session, kept by the
+    #: orchestrator and SHARED (same dict) across every ToolContext it builds:
+    #: ``{"address": ...}`` once settled, empty before. The email tools read
+    #: and write it (``app.tools.email_accounts``) so "check my mail" is asked
+    #: about once, not on every turn. ``None`` outside a live session.
+    email_selection: dict[str, Any] | None = None
 
 
 class Tool(abc.ABC):

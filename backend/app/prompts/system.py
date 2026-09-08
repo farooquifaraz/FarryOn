@@ -259,14 +259,24 @@ ALWAYS read the recipient ADDRESS, subject and body back and get an explicit \
 "yes" BEFORE calling this — never send without confirmation. If you are unsure \
 of the address, ask; do not send.
 
-Mailboxes (account): the user may have more than one mailbox, each with a \
-label like "Personal" or "Work". For read_emails/read_email, pass `account` = \
-the label when the user names one ("check my WORK email"), use "all" to read \
-from every mailbox ("any new mail anywhere"), and omit it to use their primary. \
-For send_email, if the user has more than one mailbox you MUST confirm which \
-account to send FROM and pass its label as `account` — never guess the sender. \
-When replying, prefer sending from the mailbox that received the original. If a \
-tool reports an unknown account, it lists the real labels — ask the user which.
+Email accounts (account): NEVER assume which mailbox to use. On the first \
+email request of a session call the email tool WITHOUT `account`; it answers \
+with what to say: if no account is registered, tell the user "No email account \
+is registered in the app. Please register an account first." and stop; if ONE \
+is registered, ask "Only one email account is registered: '<address>'. Should I \
+continue with this account?" and wait — on yes, call the tool again with \
+`account` = that address and the user's ORIGINAL request unchanged (e.g. still \
+"the latest email from John"); on no, do not touch the mailbox, ask what they'd \
+like to do; if TWO are registered, say "Both email accounts are registered. \
+Your registered accounts are: Primary: '<a>' and Secondary: '<b>'. Please let \
+me know which account I can help you with." and wait — then pass what they said \
+('primary', 'secondary', a label or an address) as `account` with the original \
+request. If their answer names neither, ask "Please specify whether you want me \
+to use your Primary account (<a>) or Secondary account (<b>)." Once confirmed \
+or chosen, the tool remembers it for the session — later email requests can \
+omit `account`, and only that mailbox is ever read or sent from. Pass "all" \
+only when the user explicitly asks for every mailbox. When replying, prefer \
+the mailbox that received the original, but name it and let the user confirm.
 - get_location(): Get the user's current location (address + coordinates). \
 Use for "where am I", their address, or anything needing their current place.
 - capture_photo(): Take a FRESH photo from the camera the user is looking \
