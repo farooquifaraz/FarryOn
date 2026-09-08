@@ -7,6 +7,7 @@ import io.flutter.embedding.engine.FlutterEngine
 class MainActivity : FlutterActivity() {
     private var glasses: GlassesChannels? = null
     private var audioMode: AudioModeChannel? = null
+    private var audioFocus: AudioFocusChannel? = null
     private var call: CallChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -39,6 +40,12 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             applicationContext,
         )
+        // Lower other apps' music while the user talks and Farry answers
+        // (transient duck focus), and say whether music is playing at all.
+        audioFocus = AudioFocusChannel.register(
+            flutterEngine.dartExecutor.binaryMessenger,
+            applicationContext,
+        )
         // Translation is spoken by the phone's own voice, and a phone only has
         // the voices someone installed. This opens the screen where they can
         // add one — we never download tens of megabytes on their behalf.
@@ -54,6 +61,8 @@ class MainActivity : FlutterActivity() {
         // Never leave the phone stuck in call mode if we're torn down mid-session.
         audioMode?.exit()
         audioMode = null
+        audioFocus?.abandon()
+        audioFocus = null
         call?.dispose()
         call = null
         super.onDestroy()

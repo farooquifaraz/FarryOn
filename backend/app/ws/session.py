@@ -826,7 +826,7 @@ class Session:
         # note). Pings arrive every 5 s and location_update every 5 min from
         # any OPEN app — neither means a human is there. Substantive control
         # messages (typed text, audio_start, config, device events) count.
-        if mtype not in ("ping", "location_update"):
+        if mtype not in ("ping", "location_update", "mic_dropped"):
             self._last_activity = time.monotonic()
         if mtype == "text":
             text = (message.get("text") or "").strip()
@@ -865,6 +865,19 @@ class Session:
             if isinstance(loc, dict) and self._orchestrator is not None:
                 self._orchestrator.location = loc
                 logger.info("location.updated", session_id=self.session_id)
+        elif mtype == "mic_dropped":
+            # A measurement from the phone: speech-like audio it threw away
+            # during one mute window. `tail_ms` is the part with the speaker
+            # already silent — the user talking into a deaf app. Logged so
+            # the mute tail can be sized on numbers (see live_controller).
+            logger.info(
+                "mic.dropped",
+                session_id=self.session_id,
+                speech_ms=int(message.get("speechMs") or 0),
+                tail_ms=int(message.get("tailMs") or 0),
+                window_ms=int(message.get("windowMs") or 0),
+                chunks=int(message.get("chunks") or 0),
+            )
         elif mtype == "call_state":
             # A phone call took the microphone, or gave it back. The model
             # cannot see this, so it kept reporting a finished call as still

@@ -30,6 +30,7 @@ class MicGate {
     this.hangover = const Duration(seconds: 1),
     this.noiseMultiplier = 2.2,
     this.absoluteFloor = 180.0,
+    this.maxNoiseFloor = 450.0,
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
 
@@ -47,6 +48,20 @@ class MicGate {
   /// Absolute RMS (PCM16 units) below which nothing counts as speech, however
   /// quiet the room gets — stops a silent room from making the gate jumpy.
   final double absoluteFloor;
+
+  /// The most the measured "room" is ever allowed to be, in RMS units.
+  ///
+  /// The floor learns whatever is steady, and music from the phone's own
+  /// speaker is steady: at a floor of 1000 the bar sits at 2200, and speech —
+  /// which on this pipeline opens the gate at 180–500 most of the time (every
+  /// gate-open logged up to 2026-09-08) — never clears it again. The user
+  /// talks over the music and nothing is sent, which is exactly "Farry can't
+  /// hear me while music plays". Capping the floor bounds the harm: loud
+  /// music may then pass the gate as if it were speech (the server's own
+  /// turn detector still judges it), but a voice raised over it can always
+  /// get through. 450 → a bar of 990, above every quiet-room opening seen and
+  /// below the levels a person reaches when they raise their voice.
+  final double maxNoiseFloor;
 
   final DateTime Function() _now;
 
@@ -76,6 +91,20 @@ class MicGate {
   double get noiseFloor => _noiseFloor;
 
   int get _bytesPerSecond => sampleRate * 2;
+
+  /// The bar a chunk must clear right now to count as speech. Exposed so the
+  /// caller can measure audio it is about to DROP against the same bar the
+  /// gate would have used, instead of a second guess of its own.
+  double get threshold => math.max(absoluteFloor, _noiseFloor * noiseMultiplier);
+
+  /// RMS level of a chunk in PCM16 units; 0 for anything unmeasurable.
+  double levelOf(Uint8List pcm16) {
+    try {
+      return _rms(pcm16);
+    } catch (_) {
+      return 0;
+    }
+  }
 
   /// Feed one captured chunk; returns the chunks to actually transmit.
   ///
@@ -107,6 +136,7 @@ class MicGate {
       _noiseFloor = rms < _noiseFloor
           ? (_noiseFloor * 0.9) + (rms * 0.1)
           : (_noiseFloor * 0.995) + (rms * 0.005);
+      if (_noiseFloor > maxNoiseFloor) _noiseFloor = maxNoiseFloor;
     }
     final threshold = math.max(absoluteFloor, _noiseFloor * noiseMultiplier);
 
@@ -142,6 +172,14 @@ class MicGate {
     _ringBytes = 0;
     _open = false;
     _lastSpeechAt = null;
+    _noiseFloor = absoluteFloor;
+  }
+
+  /// Forget the learned room level only — keep the pre-roll and the open
+  /// state. For the moment something loud and steady (music) stops: the
+  /// floor it taught is wrong now, and re-learning from silence is quicker
+  /// than decaying from the old level.
+  void resetFloor() {
     _noiseFloor = absoluteFloor;
   }
 

@@ -20,6 +20,7 @@ import '../glasses/glasses_connect_flow.dart';
 import '../glasses_lab/glasses_lab_screen.dart';
 import '../settings/settings_screen.dart';
 import '../translate/translate_screen.dart';
+import 'mic_status.dart';
 import 'widgets/aurora_orb.dart';
 import 'widgets/camera_preview_view.dart';
 import 'widgets/status_indicator.dart';
@@ -455,9 +456,27 @@ class _MicChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final glasses = state.audioKind == 'glasses';
-    final listening = state.micOpen;
-    final color = listening ? Aurora.mint : Aurora.textMuted;
-    final label = glasses ? 'Glasses mic' : 'Phone / earbuds';
+    // The chip tells the truth about the mic, not just whether it was asked
+    // for: "Listening" only while audio really flows, "Hearing you…" while
+    // speech is going out, and a fault in amber/red the moment the recorder
+    // goes quiet — so nobody is left guessing whether Farry heard them.
+    final status = micStatusFor(state);
+    final color = switch (status) {
+      MicStatus.notHearing => Aurora.danger,
+      MicStatus.restarting => Aurora.amber,
+      MicStatus.muted => Aurora.textMuted,
+      _ => Aurora.mint,
+    };
+    final icon = switch (status) {
+      MicStatus.muted => Icons.mic_none,
+      MicStatus.notHearing => Icons.mic_off,
+      MicStatus.restarting => Icons.autorenew_rounded,
+      MicStatus.speaking => Icons.volume_up_rounded,
+      MicStatus.thinking => Icons.more_horiz_rounded,
+      _ => Icons.mic,
+    };
+    final device = glasses ? 'Glasses' : 'Phone';
+    final label = '${status.label} · $device';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -468,7 +487,7 @@ class _MicChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(listening ? Icons.mic : Icons.mic_none, size: 14, color: color),
+          Icon(icon, size: 14, color: color),
           const SizedBox(width: 6),
           Text(label,
               style: TextStyle(

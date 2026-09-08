@@ -210,6 +210,15 @@ class PhoneCaptureSource implements CaptureSource {
       echoCancel: true,
       noiseSuppress: false,
       autoGain: true,
+      // THE reason Farry went deaf whenever music played (device-proven
+      // 2026-09-08, `dumpsys audio` focus log). The recorder's default is
+      // `pause`: it requests AUDIOFOCUS_GAIN when it starts — which PAUSES
+      // any music the moment the mic opens — and on losing focus, which is
+      // what a music app starting does, it PAUSES ITSELF and never resumes.
+      // No chunk, no error, no onDone: ten minutes of "listening" with a
+      // silent recorder. A microphone has no business holding playback
+      // focus at all; `none` asks for nothing and reacts to nothing.
+      audioInterruption: AudioInterruptionMode.none,
       androidConfig: AndroidRecordConfig(
         audioSource: AndroidAudioSource.voiceCommunication,
         // The session's audio focus/mode is managed by VoiceAudioMode and the
@@ -218,16 +227,35 @@ class PhoneCaptureSource implements CaptureSource {
         manageBluetooth: false,
       ),
     ));
-    _recorderSub = stream.listen((chunk) {
-      if (chunk.isNotEmpty) _audioController.add(chunk);
-    });
+    _recorderSub = stream.listen(
+      (chunk) {
+        if (chunk.isNotEmpty) _audioController.add(chunk);
+      },
+      // The recorder's stream can end or fail on its own — the OS took the
+      // mic, the capture thread died — and until 2026-09-08 nothing here
+      // noticed: the subscription just went quiet, `_audioRunning` stayed
+      // true, and every later start was a no-op on a dead recorder. The
+      // controller watches for the silence and restarts; this makes sure the
+      // restart is a real one.
+      onError: (Object e) {
+        _log.warn('audio capture stream error: $e');
+        _audioRunning = false;
+      },
+      onDone: () {
+        if (_audioRunning) _log.warn('audio capture stream ended on its own');
+        _audioRunning = false;
+      },
+    );
     _audioRunning = true;
     _log.info('audio capture started @ ${AudioFormat.micSampleRate}Hz');
   }
 
   @override
   Future<void> stopAudio() async {
-    if (!_audioRunning) return;
+    // Not gated on `_audioRunning`: a recorder whose stream died still holds
+    // native capture state, and a stop that skips it leaves the next start
+    // to fail as "already recording".
+    if (!_audioRunning && _recorderSub == null) return;
     _audioRunning = false;
     try {
       await _recorder.stop();

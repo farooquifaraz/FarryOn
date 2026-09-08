@@ -145,6 +145,7 @@ class ConfigStore {
       // keeps the choice it already made.
       autoMediaSync: p.getBool('cfg.autoMediaSync') ??
           p.getBool('cfg.saveRecordingsToPhone'),
+      duckMusicForVoice: p.getBool('cfg.duckMusicForVoice'),
       translateTargetLanguage: p.getString('cfg.translate.target'),
       translateCaptionsOnly: p.getBool('cfg.translate.captionsOnly'),
     );
@@ -208,6 +209,7 @@ class ConfigStore {
     await p.setInt('cfg.glassesVolume', c.glassesVolume);
     await p.setInt('cfg.videoRecordSeconds', c.videoRecordSeconds);
     await p.setBool('cfg.autoMediaSync', c.autoMediaSync);
+    await p.setBool('cfg.duckMusicForVoice', c.duckMusicForVoice);
     await p.setString('cfg.translate.target', c.translateTargetLanguage);
     await p.setBool('cfg.translate.captionsOnly', c.translateCaptionsOnly);
   }

@@ -751,11 +751,14 @@ class _VoiceMicPage extends ConsumerStatefulWidget {
 
 class _VoiceMicPageState extends ConsumerState<_VoiceMicPage> {
   late bool _handsFree = ref.read(configProvider).handsFree;
+  late bool _duckMusic = ref.read(configProvider).duckMusicForVoice;
 
   void _save() {
     final cfg = ref.read(configProvider);
-    ref.read(configProvider.notifier).state =
-        cfg.copyWith(handsFree: _handsFree);
+    ref.read(configProvider.notifier).state = cfg.copyWith(
+      handsFree: _handsFree,
+      duckMusicForVoice: _duckMusic,
+    );
     Navigator.pop(context);
   }
 
@@ -785,6 +788,31 @@ class _VoiceMicPageState extends ConsumerState<_VoiceMicPage> {
         const Text(
           'Tap-to-talk is best with background noise or a TV — the mic stays '
           'closed until you tap it, so phantom turns can never trigger.',
+          style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
+        ),
+        const SizedBox(height: 18),
+        _fieldLabel('Music'),
+        const SizedBox(height: 10),
+        SettingsGroup(children: [
+          SettingsRow(
+            icon: Icons.music_off_rounded,
+            gradient: Aurora.gradTeal,
+            title: 'Lower music while talking',
+            subtitle: _duckMusic
+                ? 'Music quietens while you speak and Farry answers'
+                : 'Music keeps its volume while you talk',
+            showDivider: false,
+            trailing: Switch(
+              value: _duckMusic,
+              activeThumbColor: Aurora.mint,
+              onChanged: (v) => setState(() => _duckMusic = v),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        const Text(
+          'Asks the music app to turn itself down for the moment, the way a '
+          'navigation prompt does. It comes back up on its own.',
           style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
         ),
       ],

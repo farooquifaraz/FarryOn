@@ -80,12 +80,30 @@ class ToolActivity {
       );
 }
 
+/// Whether the microphone is actually delivering audio while it is "open".
+///
+/// `micOpen` says what the user asked for; this says what the phone is doing
+/// about it. They came apart on 2026-09-08: after music playback the mic chip
+/// showed "listening" for ten minutes while not one chunk reached the server.
+enum MicHealth {
+  /// Audio is flowing (or the mic is closed, and there is nothing to judge).
+  ok,
+
+  /// The recorder went quiet and is being restarted.
+  restarting,
+
+  /// Restarted and still silent — the user has been told.
+  silent,
+}
+
 /// Immutable snapshot of everything the live UI renders.
 class LiveSessionState {
   const LiveSessionState({
     this.connection = ConnectionStatus.disconnected,
     this.liveState = LiveState.idle,
     this.micOpen = false,
+    this.hearing = false,
+    this.micHealth = MicHealth.ok,
     this.cameraOn = false,
     this.cameraPortrait = true,
     this.cameraFront = false,
@@ -120,6 +138,13 @@ class LiveSessionState {
 
   /// Whether the mic is currently streaming.
   final bool micOpen;
+
+  /// True while speech energy is holding the mic gate open — the user's voice
+  /// is being sent right now. What the "Hearing you" label is made of.
+  final bool hearing;
+
+  /// Whether the open mic is really producing audio. See [MicHealth].
+  final MicHealth micHealth;
 
   /// Whether the camera is currently streaming frames.
   final bool cameraOn;
@@ -216,6 +241,8 @@ class LiveSessionState {
     ConnectionStatus? connection,
     LiveState? liveState,
     bool? micOpen,
+    bool? hearing,
+    MicHealth? micHealth,
     bool? cameraOn,
     bool? cameraPortrait,
     bool? cameraFront,
@@ -248,6 +275,8 @@ class LiveSessionState {
         connection: connection ?? this.connection,
         liveState: liveState ?? this.liveState,
         micOpen: micOpen ?? this.micOpen,
+        hearing: hearing ?? this.hearing,
+        micHealth: micHealth ?? this.micHealth,
         cameraOn: cameraOn ?? this.cameraOn,
         cameraPortrait: cameraPortrait ?? this.cameraPortrait,
         cameraFront: cameraFront ?? this.cameraFront,

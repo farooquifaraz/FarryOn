@@ -34,6 +34,7 @@ class AppConfig {
     this.glassesVolume = 70,
     this.videoRecordSeconds = 60,
     this.autoMediaSync = true,
+    this.duckMusicForVoice = false,
     this.translateTargetLanguage = '',
     this.translateCaptionsOnly = false,
   });
@@ -119,6 +120,13 @@ class AppConfig {
   /// shooting several clips wants them all first and the transfer afterwards,
   /// so this exists. Default on, which is the behaviour everyone had before.
   final bool autoMediaSync;
+
+  /// Ask the phone to lower other apps' audio (music) while the user speaks
+  /// and while Farry answers, via a transient audio-focus request. Off by
+  /// default: the app has never held audio focus, and taking it changes what
+  /// every other player on the phone does — a thing to switch on and test,
+  /// not to ship silently (2026-09-08).
+  final bool duckMusicForVoice;
 
   /// Save every live capture (phone camera / glasses still) into the phone
   /// gallery (`Pictures/Farry`). Default on.
@@ -214,6 +222,7 @@ class AppConfig {
     int? glassesVolume,
     int? videoRecordSeconds,
     bool? autoMediaSync,
+    bool? duckMusicForVoice,
     String? translateTargetLanguage,
     bool? translateCaptionsOnly,
   }) =>
@@ -241,6 +250,7 @@ class AppConfig {
         glassesVolume: glassesVolume ?? this.glassesVolume,
         videoRecordSeconds: videoRecordSeconds ?? this.videoRecordSeconds,
         autoMediaSync: autoMediaSync ?? this.autoMediaSync,
+        duckMusicForVoice: duckMusicForVoice ?? this.duckMusicForVoice,
         translateTargetLanguage:
             translateTargetLanguage ?? this.translateTargetLanguage,
         translateCaptionsOnly:

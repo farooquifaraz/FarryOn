@@ -26,6 +26,7 @@ import '../data/data_api.dart';
 import '../data/finder_api.dart';
 import '../data/live_client.dart';
 import '../features/glasses_lab/bridge/glasses_channel.dart';
+import '../playback/audio_focus.dart';
 import '../playback/pcm_player.dart';
 import '../playback/voice_audio_mode.dart';
 import '../protocol/frames.dart';
@@ -63,12 +64,14 @@ class LiveController {
     String? platform,
     GlassesBridgeApi? glassesBridge,
     int? Function()? currentUserId,
+    AudioFocus? audioFocus,
   })  : _currentUserId = currentUserId ?? (() => null),
         _config = config,
         _registry = registry,
         _player = player,
         _permissions = permissions,
         _glassesBridge = glassesBridge,
+        _audioFocus = audioFocus ?? AudioFocus(),
         platform = platform ?? defaultPlatform {
     _client = clientFactory(_config, _activeDeviceInfo);
     _bindClient();
@@ -187,6 +190,31 @@ class LiveController {
   /// native side skips it for glasses/earbuds).
   final VoiceAudioMode _voiceAudioMode = VoiceAudioMode();
 
+  /// Transient duck focus so music lowers itself while the user talks and
+  /// Farry answers — only when the user has switched it on
+  /// ([AppConfig.duckMusicForVoice]); also the phone's own word on whether
+  /// music is playing, for the gate and the log.
+  final AudioFocus _audioFocus;
+  Timer? _focusRelease;
+
+  // Mic watchdog. The recorder can go silent without ending — Android muted
+  // or reclaimed it — and nothing above it would know: the chip said
+  // "listening", the server heard nothing (2026-09-08, ten minutes of it after
+  // music playback). So while the phone mic is open, every second without a
+  // single chunk is counted; after [_micStaleTicks] of them the recorder is
+  // restarted, and after [_micMaxRestarts] restarts the user is told.
+  Timer? _micWatchdog;
+  int _micSilentTicks = 0;
+  int _micRestarts = 0;
+  bool _micRestarting = false;
+  static const int _micStaleTicks = 3;
+  static const int _micMaxRestarts = 3;
+
+  /// The phone says something other than us is playing on the music stream
+  /// (two polls in a row, so our own voice's ring-down does not count).
+  bool _foreignMusic = false;
+  int _musicActivePolls = 0;
+
   late final MicGate _micGate = MicGate()
     ..onOpen = (rms, threshold) {
       // The moment speech energy crossed the bar IS when Farry began hearing
@@ -198,6 +226,8 @@ class LiveController {
       _utteranceStartAt ??= DateTime.now();
       _log.info(
           'mic gate opened (level ${rms.round()} > bar ${threshold.round()})');
+      // The user is speaking: ask music to step aside for the exchange.
+      _holdFocus();
     };
 
   /// When the current utterance's speech energy first opened the mic gate —
@@ -1474,8 +1504,17 @@ class LiveController {
     _utteranceStartAt = null;
     _ttsBytes = 0;
     _ttsStart = DateTime.now();
+    // Farry is about to speak: keep music lowered until she is done.
+    _holdFocus();
     // Safety: never stay muted forever if audio_end is somehow lost.
-    _ttsClear = Timer(const Duration(seconds: 20), () => _ttsActive = false);
+    _ttsClear = Timer(const Duration(seconds: 20), _ttsOver);
+  }
+
+  /// The turn's audio has fully played out (or been cut short): the mic may
+  /// hear again, and music may come back up shortly after.
+  void _ttsOver() {
+    _ttsActive = false;
+    _releaseFocusSoon(const Duration(milliseconds: 1500));
   }
 
   /// After audio_end, keep muted until the buffered audio has actually played
@@ -1488,8 +1527,7 @@ class LiveController {
     final remainingMs =
         (playMs - elapsedMs).clamp(0, 60000) + _ttsTailMarginMs;
     _ttsClear?.cancel();
-    _ttsClear =
-        Timer(Duration(milliseconds: remainingMs), () => _ttsActive = false);
+    _ttsClear = Timer(Duration(milliseconds: remainingMs), _ttsOver);
   }
 
   void _onServerMessage(ServerMessage msg) {
@@ -2416,8 +2454,16 @@ class LiveController {
     // counts the very first words (audio sent before audio_start is dropped).
     _log.info('event: mic opened (listening)');
     _client.send(const AudioStartMessage());
+    // A deliberate re-open is a fresh start for the watchdog: whatever it
+    // gave up on before, the user has asked again.
+    _micRestarts = 0;
+    _micSilentTicks = 0;
     await _startAudio();
-    _emit(_state.copyWith(micOpen: true, liveState: LiveState.listening));
+    _emit(_state.copyWith(
+      micOpen: true,
+      liveState: LiveState.listening,
+      micHealth: MicHealth.ok,
+    ));
   }
 
   /// Close the mic and announce `audio_stop`.
@@ -2426,6 +2472,8 @@ class LiveController {
     _log.info('event: mic closed');
     await _stopAudio();
     _client.send(const AudioStopMessage());
+    _focusRelease?.cancel();
+    unawaited(_audioFocus.release());
     _emit(_state.copyWith(
       micOpen: false,
       liveState:
@@ -2441,7 +2489,7 @@ class LiveController {
   Future<void> interrupt() async {
     // Re-open the mic immediately — playback is being cut short.
     _ttsClear?.cancel();
-    _ttsActive = false;
+    _ttsOver();
     _client.send(const InterruptMessage());
     await _player.flush();
     if (_state.liveState == LiveState.speaking) {
@@ -2495,10 +2543,61 @@ class LiveController {
 
   // ---- Capture stream piping --------------------------------------------
 
+  // ---- Mute-window measurement (instrument only) --------------------------
+  //
+  // While the assistant speaks, and for _ttsTailMarginMs after her audio has
+  // drained, every mic chunk is discarded. That is deliberate (echo). What it
+  // COSTS is not known: if the user answers the moment she stops, the start
+  // of their words falls in that window and is gone. Two WAV dumps of what
+  // did arrive showed every onset intact — but discarded audio is not in
+  // a dump. So this counts it, at the point of discard, against the gate's
+  // own bar, and reports once per window. It changes no behaviour: not one
+  // byte more or less is sent.
+  int _dropSpeechMs = 0;
+  int _dropTailMs = 0;
+  int _dropChunks = 0;
+  DateTime? _dropWindowStart;
+
+  void _noteDroppedChunk(Uint8List pcm) {
+    _dropWindowStart ??= DateTime.now();
+    final ms = (pcm.length * 1000) ~/ (16000 * 2);
+    if (_micGate.levelOf(pcm) <= _micGate.threshold) return;
+    _dropChunks += 1;
+    _dropSpeechMs += ms;
+    // The tail: the server says the turn's audio is over AND the player has
+    // drained — only the ring-down margin is keeping the mic shut. The
+    // speaker is silent, so energy here is the user, not an echo.
+    if (!_ttsActive && !_player.isPlayingWithin(Duration.zero)) {
+      _dropTailMs += ms;
+    }
+  }
+
+  void _reportDroppedIfAny() {
+    final start = _dropWindowStart;
+    if (start == null) return;
+    final windowMs = DateTime.now().difference(start).inMilliseconds;
+    if (_dropChunks > 0) {
+      _log.info('mute-drop: speech-like ${_dropSpeechMs}ms dropped '
+          '(tail ${_dropTailMs}ms), $_dropChunks chunks, window ${windowMs}ms');
+      _client.send(MicDroppedMessage(
+        speechMs: _dropSpeechMs,
+        tailMs: _dropTailMs,
+        windowMs: windowMs,
+        chunks: _dropChunks,
+      ));
+    }
+    _dropSpeechMs = 0;
+    _dropTailMs = 0;
+    _dropChunks = 0;
+    _dropWindowStart = null;
+  }
+
   Future<void> _startAudio() async {
     await _audioSource.startAudio();
     await _audioSub?.cancel();
     _audioSub = _audioSource.audio16k.listen((pcm) {
+      // Any chunk at all — sent or discarded — proves the recorder is alive.
+      _noteMicAlive();
       // Half-duplex echo guard. Two independent conditions, either of which
       // keeps the mic shut:
       //   * _ttsActive — the server says this turn is still speaking;
@@ -2509,9 +2608,12 @@ class LiveController {
       // several audio_starts, and the assistant's voice leaked back in as a
       // bogus user turn (device-proven 2026-08-05).
       if (_ttsActive || _player.isPlayingWithin(_ttsTail)) {
+        _noteDroppedChunk(pcm);
         _micGate.reset(); // re-learn the room after the speaker goes quiet
+        _setHearing(false);
         return;
       }
+      _reportDroppedIfAny();
       // Energy gate: hold back non-speech so the provider's turn detector
       // never sees it and the transcriber can't invent words for it.
       List<Uint8List> toSend;
@@ -2527,13 +2629,145 @@ class LiveController {
       for (final chunk in toSend) {
         _client.sendAudio(chunk);
       }
+      _setHearing(_micGate.isOpen);
     }, onError: (Object e) => _log.warn('mic stream error: $e'));
+    _startMicWatchdog();
   }
 
   Future<void> _stopAudio() async {
-    await _audioSub?.cancel();
+    _micWatchdog?.cancel();
+    _micWatchdog = null;
+    _micRestarting = false;
+    // Not awaited: every capture source's audio stream is a broadcast, whose
+    // cancel is complete before it returns (its future is dart:async's
+    // shared, already-done one). Nothing waits on nothing — and awaiting it
+    // under a fake clock never resumes, which is how the watchdog tests
+    // stalled here.
+    unawaited(_audioSub?.cancel());
     _audioSub = null;
     await _audioSource.stopAudio();
+    _setHearing(false);
+  }
+
+  // ---- Mic health -------------------------------------------------------
+
+  /// "Hearing you" is the gate being open: speech energy is going out right
+  /// now. Emitted only on change, so the UI is not rebuilt per chunk.
+  void _setHearing(bool hearing) {
+    if (hearing == _state.hearing) return;
+    _emit(_state.copyWith(hearing: hearing));
+    // The user has stopped speaking: unless Farry starts answering, music
+    // may come back up.
+    if (!hearing) _releaseFocusSoon(const Duration(seconds: 6));
+  }
+
+  void _noteMicAlive() {
+    _micSilentTicks = 0;
+    if (_state.micHealth != MicHealth.ok) {
+      _log.info('mic watchdog: audio is flowing again');
+      _micRestarts = 0;
+      _emit(_state.copyWith(micHealth: MicHealth.ok));
+    }
+  }
+
+  /// Only the phone mic streams continuously (silence included); the glasses
+  /// are push-to-talk, and silence from them is the user not pressing.
+  void _startMicWatchdog() {
+    _micWatchdog?.cancel();
+    _micWatchdog = null;
+    if (_registry.audioKind != CaptureDeviceKind.phone) return;
+    _micSilentTicks = 0;
+    _micWatchdog =
+        Timer.periodic(const Duration(seconds: 1), (_) => _micWatchdogTick());
+  }
+
+  void _micWatchdogTick() {
+    if (!_state.micOpen || _micRestarting) return;
+    unawaited(_pollMusic());
+    _micSilentTicks += 1;
+    if (_micSilentTicks < _micStaleTicks) return;
+    if (_micRestarts >= _micMaxRestarts) {
+      _giveUpOnMic();
+      return;
+    }
+    unawaited(_restartMic());
+  }
+
+  Future<void> _restartMic() async {
+    if (_micRestarting) return;
+    _micRestarting = true;
+    _micRestarts += 1;
+    _log.warn('mic watchdog: no audio from the microphone for '
+        '${_micSilentTicks}s - restarting it (attempt $_micRestarts)');
+    _emit(_state.copyWith(micHealth: MicHealth.restarting, hearing: false));
+    try {
+      await _audioSource.stopAudio();
+      await _audioSource.startAudio();
+    } catch (e) {
+      _log.warn('mic restart failed: $e');
+    } finally {
+      // The fresh recorder gets a full stale window of its own.
+      _micSilentTicks = 0;
+      _micRestarting = false;
+    }
+  }
+
+  /// Restarted the allowed number of times and still nothing: say so where
+  /// the user is looking, and stop trying until they touch the mic.
+  void _giveUpOnMic() {
+    _micWatchdog?.cancel();
+    _micWatchdog = null;
+    _log.warn('mic watchdog: still silent after $_micRestarts restarts - '
+        'giving up until the mic is toggled');
+    _emit(_state.copyWith(
+      micHealth: MicHealth.silent,
+      hearing: false,
+      transcripts: [
+        ..._state.transcripts,
+        TranscriptEntry(
+          role: 'notice',
+          text: "I'm unable to listen right now - the microphone isn't giving "
+              'me any audio. Tap the mic off and on to try again.',
+          isFinal: true,
+        ),
+      ],
+    ));
+  }
+
+  /// The phone's own answer to "is music playing?", once a second while the
+  /// mic is open. Our own voice counts as music to the phone, so a turn's
+  /// ring-down is filtered by asking twice. When music stops, the gate's
+  /// learned floor is the music's level and is thrown away at once.
+  Future<void> _pollMusic() async {
+    final active = await _audioFocus.isMusicActive();
+    final ours = _ttsActive || _player.isPlayingWithin(_ttsTail);
+    _musicActivePolls = (active && !ours) ? _musicActivePolls + 1 : 0;
+    final foreign = _musicActivePolls >= 2;
+    if (foreign == _foreignMusic) return;
+    _foreignMusic = foreign;
+    if (foreign) {
+      _log.info('music is playing on the phone (gate floor '
+          '${_micGate.noiseFloor.round()}, bar ${_micGate.threshold.round()})');
+    } else {
+      _log.info('music stopped - re-learning the room (floor was '
+          '${_micGate.noiseFloor.round()})');
+      _micGate.resetFloor();
+    }
+  }
+
+  // ---- Audio focus (opt-in) --------------------------------------------
+
+  void _holdFocus() {
+    if (!_config.duckMusicForVoice) return;
+    _focusRelease?.cancel();
+    _focusRelease = null;
+    unawaited(_audioFocus.duck());
+  }
+
+  void _releaseFocusSoon(Duration after) {
+    if (!_audioFocus.isHeld) return;
+    _focusRelease?.cancel();
+    _focusRelease = Timer(after, () => unawaited(_audioFocus.release()));
   }
 
   Future<void> _startVideo() async {
@@ -2824,6 +3058,9 @@ class LiveController {
     _autoSyncWatchdog?.cancel();
     _recordingTicker?.cancel();
     _pendingMediaTimer?.cancel();
+    _micWatchdog?.cancel();
+    _focusRelease?.cancel();
+    await _audioFocus.release();
     await _audioSub?.cancel();
     await _videoSub?.cancel();
     await _glassesSub?.cancel();

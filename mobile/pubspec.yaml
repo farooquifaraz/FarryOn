@@ -73,6 +73,8 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  # Fake clock for the mic-watchdog tests (seconds of silence in no time).
+  fake_async: ^1.3.1
   # Generates all launcher-icon densities (mdpi→xxxhdpi) + adaptive icon from a
   # single source PNG. Run: dart run flutter_launcher_icons
   flutter_launcher_icons: ^0.14.1

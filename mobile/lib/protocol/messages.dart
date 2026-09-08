@@ -263,6 +263,37 @@ class CallStateMessage extends ClientMessage {
   Map<String, dynamic> toJson() => {'type': type, 'inCall': inCall};
 }
 
+/// A measurement, not a request: how much speech-like audio the phone threw
+/// away during one mute window (the assistant speaking, plus the ring-down
+/// tail after it). The mic is deliberately shut then — this reports what
+/// that silence cost, so the tail can be sized on numbers instead of guesses.
+///
+/// [tailMs] is the part that fell in the tail alone, with the speaker already
+/// silent — energy there is the user, not an echo, and is the number that
+/// matters.
+class MicDroppedMessage extends ClientMessage {
+  const MicDroppedMessage({
+    required this.speechMs,
+    required this.tailMs,
+    required this.windowMs,
+    required this.chunks,
+  });
+  final int speechMs;
+  final int tailMs;
+  final int windowMs;
+  final int chunks;
+  @override
+  String get type => MsgType.micDropped;
+  @override
+  Map<String, dynamic> toJson() => {
+        'type': type,
+        'speechMs': speechMs,
+        'tailMs': tailMs,
+        'windowMs': windowMs,
+        'chunks': chunks,
+      };
+}
+
 /// Barge-in: stop the current TTS playback.
 class InterruptMessage extends ClientMessage {
   const InterruptMessage();

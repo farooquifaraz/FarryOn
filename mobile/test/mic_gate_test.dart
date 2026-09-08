@@ -16,6 +16,17 @@ Uint8List chunk(double amplitude, {int ms = 20}) {
 }
 
 void main() {
+  test('levelOf and threshold expose what the gate itself would decide', () {
+    final gate = MicGate();
+    // The bar starts at the absolute floor times the multiplier and a loud
+    // chunk clears it; a faint one does not — the same answer process()
+    // gives, so audio measured at the point of discard is judged fairly.
+    expect(gate.threshold, gate.absoluteFloor * gate.noiseMultiplier);
+    expect(gate.levelOf(chunk(2000)) > gate.threshold, isTrue);
+    expect(gate.levelOf(chunk(40)) > gate.threshold, isFalse);
+    expect(gate.levelOf(Uint8List(1)), 0, reason: 'unmeasurable is 0, never a throw');
+  });
+
   test('quiet room is held back entirely', () {
     final gate = MicGate();
     var sent = 0;
@@ -70,6 +81,32 @@ void main() {
     expect(gate.isOpen, isFalse, reason: 'background alone must not open it');
     // Speech still gets through in that same room.
     expect(gate.process(chunk(8000)), isNotEmpty);
+  });
+
+  test('music cannot raise the bar out of reach', () {
+    // Steady, loud music from the phone's own speaker. Before the cap the
+    // floor followed it up and the bar went past anything a voice reaches
+    // (every quiet-room gate-open logged sat at 180-500).
+    final gate = MicGate();
+    for (var i = 0; i < 600; i++) {
+      gate.process(chunk(3000));
+    }
+    expect(gate.noiseFloor, lessThanOrEqualTo(gate.maxNoiseFloor));
+    expect(gate.threshold, lessThanOrEqualTo(gate.maxNoiseFloor * gate.noiseMultiplier));
+    // A voice raised over the music still gets through.
+    expect(gate.process(chunk(1500)), isNotEmpty);
+  });
+
+  test('resetFloor forgets the room but keeps the pre-roll', () {
+    final gate = MicGate();
+    for (var i = 0; i < 50; i++) {
+      gate.process(chunk(400));
+    }
+    expect(gate.noiseFloor, greaterThan(gate.absoluteFloor));
+    gate.resetFloor();
+    expect(gate.noiseFloor, gate.absoluteFloor);
+    // The buffered pre-roll is still there: the first loud chunk carries it.
+    expect(gate.process(chunk(8000)).length, greaterThan(1));
   });
 
   test('reset re-learns the room', () {
