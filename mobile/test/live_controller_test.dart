@@ -801,6 +801,38 @@ void main() {
         reason: 'a failure must never leave the assistant permanently mute');
   });
 
+  test('the headset assistant button (temple long-press) opens a closed mic',
+      () async {
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    fake.pushJson({
+      'type': 'ready',
+      'sessionId': 'sess-vc',
+      'protocolVersion': 1,
+      'model': 'test',
+    });
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+    // The user muted Farry (the hands-free session opens the mic by itself).
+    await ctl.stopListening();
+    await tick();
+    expect(ctl.state.micOpen, isFalse);
+
+    glasses.emit('voiceCommand', {'source': 'headset'});
+    await tick();
+    expect(ctl.state.micOpen, isTrue,
+        reason: 'the press that used to open Google/Bixby now opens Farry');
+
+    // Pressing again while open is a no-op, not a toggle: the PCM path is
+    // already streaming for as long as the temple is held.
+    glasses.emit('voiceCommand', {'source': 'headset'});
+    await tick();
+    expect(ctl.state.micOpen, isTrue);
+  });
+
   test('the mic is closed before the glasses are told to roll', () async {
     final glasses = FakeGlassesBridge();
     final ctl = newGlassesController(glasses);

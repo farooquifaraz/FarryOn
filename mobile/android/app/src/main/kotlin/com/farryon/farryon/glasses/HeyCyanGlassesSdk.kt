@@ -21,23 +21,24 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.speech.tts.TextToSpeech
 import android.util.Log
-import com.oudmon.wifi.GlassesControl
+import com.glasses.wifi.AudioSoundControl
+import com.glasses.wifi.GlassesControl
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
-import com.oudmon.ble.base.bluetooth.BleAction
-import com.oudmon.ble.base.bluetooth.BleBaseControl
-import com.oudmon.ble.base.bluetooth.BleOperateManager
-import com.oudmon.ble.base.bluetooth.DeviceManager
-import com.oudmon.ble.base.bluetooth.QCBluetoothCallbackCloneReceiver
-import com.oudmon.ble.base.communication.LargeDataHandler
-import com.oudmon.ble.base.communication.bigData.resp.GlassesDeviceNotifyListener
-import com.oudmon.ble.base.communication.bigData.resp.GlassesDeviceNotifyRsp
-import com.oudmon.ble.base.communication.file.FileHandle
-import com.oudmon.ble.base.communication.file.SimpleCallback
-import com.oudmon.ble.base.scan.BleScannerHelper
-import com.oudmon.ble.base.scan.ScanRecord
-import com.oudmon.ble.base.scan.ScanWrapperCallback
+import com.glasses.ble.base.bluetooth.BleAction
+import com.glasses.ble.base.bluetooth.BleBaseControl
+import com.glasses.ble.base.bluetooth.BleOperateManager
+import com.glasses.ble.base.bluetooth.DeviceManager
+import com.glasses.ble.base.bluetooth.QCBluetoothCallbackCloneReceiver
+import com.glasses.ble.base.communication.LargeDataHandler
+import com.glasses.ble.base.communication.bigData.resp.GlassesDeviceNotifyListener
+import com.glasses.ble.base.communication.bigData.resp.GlassesDeviceNotifyRsp
+import com.glasses.ble.base.communication.file.FileHandle
+import com.glasses.ble.base.communication.file.SimpleCallback
+import com.glasses.ble.base.scan.BleScannerHelper
+import com.glasses.ble.base.scan.ScanRecord
+import com.glasses.ble.base.scan.ScanWrapperCallback
 
 /**
  * Real L801 bridge over the HeyCyan Android SDK (LIB_GLASSES_SDK-release_3.aar,
@@ -92,6 +93,15 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
          *  it only fires when the transfer genuinely stalls. */
         private const val THUMBNAIL_CHUNK_TIMEOUT_MS = 3_000L
 
+        /** The same budget while the call-mode mic holds a SCO link: BLE and
+         *  the voice link share one radio, and a 15-33 KB thumbnail that took
+         *  ~2 s alone was seen stalling past 3 s between chunks with SCO up
+         *  (2026-09-12). The whole transfer still completed later. */
+        private const val THUMBNAIL_CHUNK_TIMEOUT_SCO_MS = 8_000L
+
+        private fun thumbnailChunkTimeoutMs(callMicOn: Boolean): Long =
+            if (callMicOn) THUMBNAIL_CHUNK_TIMEOUT_SCO_MS else THUMBNAIL_CHUNK_TIMEOUT_MS
+
         /** Vendor thumbnailSize argument (range 0x00..0x06). 0x02 measures
          *  512×384 / 15-33 KB — recognition-grade; lower is faster. */
         private const val THUMBNAIL_SIZE: Byte = 0x02
@@ -137,6 +147,15 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
         /** HFP mic probe: SCO route settle time + recording duration. */
         private const val HFP_SCO_SETTLE_MS = 1_000L
+        private const val CALL_MIC_SCO_WAIT_MS = 3_000L
+        /** How long a recording waits for the call-mode voice link to drop. */
+        private const val VIDEO_SCO_RELEASE_WAIT_MS = 2_500L
+        /** Extra time the glasses get to leave call state after the link drops. */
+        private const val VIDEO_SCO_SETTLE_MS = 2_000L
+        /** A start refused with err=255 is retried this many times, 1 s apart. */
+        private const val VIDEO_BUSY_RETRIES = 4
+        private const val VIDEO_BUSY_RETRY_MS = 1_000L
+        private const val CALL_MIC_CHUNK_BYTES = 1280 // 40 ms of 16 kHz mono PCM16
         private const val HFP_RECORD_DURATION_MS = 10_000L
 
         /** Delay after connect before sweeping aged retention files, so the BLE
@@ -284,6 +303,13 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     private var pcmOut: FileOutputStream? = null
 
     @Volatile private var hfpRecording = false
+
+    // Call-mode mic (see startCallModeMic): the capture thread, and the audio
+    // mode we found so it can be put back exactly.
+    @Volatile private var callMicThread: Thread? = null
+    @Volatile private var callMicRunning = false
+    private var callModePreviousMode = AudioManager.MODE_NORMAL
+    private var callModeApplied = false
     private var tts: TextToSpeech? = null
     private var classicBtReceiverRegistered = false
     private var lastWifiSpeedKbps = 0.0
@@ -512,7 +538,8 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     }
 
     private fun emit(type: String, data: Map<String, Any?>) {
-        Log.i(TAG, "event $type $data")
+        // PCM arrives 25 times a second; logging each one is noise and CPU.
+        if (type != "pcmChunk") Log.i(TAG, "event $type $data")
         main.post { listener?.onEvent(type, data) }
     }
 
@@ -1189,7 +1216,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
 
         override fun fileWasDownloadSuccessfully(
-            entity: com.oudmon.wifi.bean.GlassAlbumEntity,
+            entity: com.glasses.wifi.bean.GlassAlbumEntity,
         ) {
             armSyncWatchdog()
             emit("deviceEvent", mapOf("hex" to "downloaded ${entity.fileName}"))
@@ -1260,6 +1287,12 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
         override fun recordingToPcmError(fileName: String, errorInfo: String) =
             emit("deviceEvent", mapOf("hex" to "recordingToPcm error $errorInfo"))
+
+        // SDK 1.2.5: the glasses can push a live RTSP stream (AP / P2P
+        // real-time preview). Not used by Farry; logged so a stray start is
+        // visible.
+        override fun realTimePreview(url: String) =
+            emit("deviceEvent", mapOf("hex" to "realTimePreview $url"))
     }
 
     /**
@@ -1419,10 +1452,72 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         emit("audio", mapOf("status" to "classic BT scanning…"))
     }
 
+    /**
+     * SDK 1.2.5 (aar 20260709_8): the glasses stream their own microphone
+     * continuously — no temple press — as Opus over the BLE large-data
+     * channel; the SDK decodes it to PCM 16 kHz mono (its OpusOption:
+     * 16000 Hz, packet 40, 1 channel) and hands it to this listener. That is
+     * exactly [audio16k]'s contract, so the left channel goes out on the same
+     * `pcmChunk` event the press-to-talk path uses. Why it exists: with the
+     * glasses as speaker and the PHONE as microphone, Farry could not hear a
+     * phone in a pocket (2026-09-11); this puts the microphone on the face.
+     */
+    private val twsListener = object : AudioSoundControl.TwsStereoAudioListener {
+        override fun onTwsLeftPcmData(pcmData: ByteArray) {
+            if (audioMode != "tws" || pcmData.isEmpty()) return
+            pcmBytesTotal += pcmData.size
+            pcmChunks++
+            emit("pcmChunk", mapOf("bytes" to pcmData.size, "data" to pcmData))
+        }
+
+        override fun onTwsRightPcmData(pcmData: ByteArray) {
+            // One ear is enough for speech; the right channel is dropped.
+        }
+
+        override fun onTwsLeftOpusData(opusData: ByteArray) {}
+
+        override fun onTwsRightOpusData(opusData: ByteArray) {}
+
+        override fun onTwsStereoStatus(status: Int) {
+            Log.i(TAG, "tws status=$status")
+            emit("audio", mapOf("status" to "tws status=$status", "twsStatus" to status))
+        }
+    }
+
+    private fun startTwsCapture() {
+        pcmBytesTotal = 0
+        pcmChunks = 0
+        pcmStartMs = SystemClock.elapsedRealtime()
+        try {
+            val ctl = AudioSoundControl.getInstance(app)
+            ctl.setStereoListener(twsListener)
+            ctl.startTwsStereoCapture()
+            emit("audio", mapOf("status" to "glasses mic ON (hands-free)"))
+        } catch (e: Throwable) {
+            Log.i(TAG, "startTwsStereoCapture failed: $e")
+            emit("audio", mapOf("status" to "tws failed: $e", "twsStatus" to -1))
+        }
+    }
+
+    private fun stopTwsCapture() {
+        try {
+            AudioSoundControl.getInstance(app).stopTwsStereoCapture()
+        } catch (e: Throwable) {
+            Log.i(TAG, "stopTwsStereoCapture failed: $e")
+        }
+        val secs = (SystemClock.elapsedRealtime() - pcmStartMs) / 1000.0
+        emit(
+            "audio",
+            mapOf("status" to "glasses mic OFF (hands-free) — $pcmBytesTotal B in ${"%.1f".format(secs)}s")
+        )
+    }
+
     override fun startAudioTest(mode: String) {
         Log.i(TAG, "startAudioTest $mode")
         audioMode = mode
         when (mode) {
+            "call" -> startCallModeMic()
+            "tws" -> startTwsCapture()
             "pcm" -> emit(
                 "audio",
                 mapOf("status" to "PCM armed — long-press the glasses to talk")
@@ -1439,6 +1534,158 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 }
             }
         }
+    }
+
+    /**
+     * Call-mode microphone: the glasses' own mic, continuously, the way a
+     * phone call uses it. Faraz's finding 2026-09-12: on a call through the
+     * glasses the phone sat far away and the other side heard him fine, so
+     * Farry should hear him the same way — no temple press, no phone near
+     * the mouth.
+     *
+     * How: the L80x is a Bluetooth headset (HFP). Opening the SCO link
+     * (`startBluetoothSco` + `isBluetoothScoOn`, on `MODE_IN_COMMUNICATION`
+     * like every call app) makes the glasses mic the phone's VOICE_COMMUNICATION
+     * input AND — because the legacy SCO switch forces the media route too —
+     * sends the assistant's voice to the glasses over the same link. The
+     * BLE/Opus hands-free command is not in this firmware (AM01L2_2.00.00), and
+     * the temple long-press only sends the HFP assistant key once HFP is
+     * connected, so the call path is what actually exists.
+     *
+     * PCM 16 kHz mono 16-bit goes out on the same `pcmChunk` event the BLE
+     * path uses (40 ms per chunk), so the Dart side needs no new plumbing.
+     * If the SCO link is not up within [CALL_MIC_SCO_WAIT_MS] (Call audio
+     * switched off for the glasses, no HFP bond) the recorder still runs on
+     * whatever input the phone has — a working phone mic beats a dead one —
+     * and says so in a status event.
+     */
+    private fun startCallModeMic() {
+        val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        pcmBytesTotal = 0
+        pcmChunks = 0
+        pcmStartMs = SystemClock.elapsedRealtime()
+        try {
+            if (am.mode != AudioManager.MODE_IN_CALL && am.mode != AudioManager.MODE_RINGTONE) {
+                callModePreviousMode = am.mode
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                callModeApplied = true
+            }
+            @Suppress("DEPRECATION")
+            am.startBluetoothSco()
+            @Suppress("DEPRECATION")
+            am.isBluetoothScoOn = true
+        } catch (e: Throwable) {
+            Log.i(TAG, "call-mode: SCO request failed: $e")
+        }
+        emit("audio", mapOf("status" to "call-mode mic: opening the glasses link…"))
+        callMicRunning = true
+        val t = Thread({ runCallModeMic(am) }, "CallModeMic")
+        callMicThread = t
+        t.start()
+    }
+
+    private fun runCallModeMic(am: AudioManager) {
+        // Wait for the SCO link; record regardless once the wait is over.
+        val deadline = SystemClock.elapsedRealtime() + CALL_MIC_SCO_WAIT_MS
+        var sco = false
+        while (callMicRunning && SystemClock.elapsedRealtime() < deadline) {
+            sco = scoIsUp(am)
+            if (sco) break
+            SystemClock.sleep(100)
+        }
+        if (!callMicRunning) return
+        emit(
+            "audio",
+            mapOf(
+                "status" to if (sco) "call-mode mic: glasses link up"
+                else "call-mode mic: no glasses link (Call audio off?) — phone mic in use",
+                "scoRoute" to sco,
+            )
+        )
+        val rate = 16000
+        val minBuf = AudioRecord.getMinBufferSize(
+            rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        )
+        if (minBuf <= 0) {
+            emit("audio", mapOf("status" to "call-mode mic: no 16 kHz input", "scoRoute" to sco))
+            return
+        }
+        val recorder = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                rate, AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, minBuf * 4,
+            )
+        } catch (e: SecurityException) {
+            emit("audio", mapOf("status" to "call-mode mic: RECORD_AUDIO missing", "scoRoute" to sco))
+            return
+        }
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            emit("audio", mapOf("status" to "call-mode mic: recorder init failed", "scoRoute" to sco))
+            recorder.release()
+            return
+        }
+        val chunk = ByteArray(CALL_MIC_CHUNK_BYTES)
+        try {
+            recorder.startRecording()
+            emit("audio", mapOf("status" to "glasses mic ON (call mode)", "scoRoute" to sco))
+            while (callMicRunning) {
+                val n = recorder.read(chunk, 0, chunk.size)
+                if (n <= 0) continue
+                val out = if (n == chunk.size) chunk.copyOf() else chunk.copyOf(n)
+                pcmBytesTotal += n
+                pcmChunks++
+                emit("pcmChunk", mapOf("bytes" to n, "data" to out))
+            }
+        } catch (e: Throwable) {
+            Log.i(TAG, "call-mode mic stopped: $e")
+        } finally {
+            try {
+                recorder.stop()
+            } catch (_: Throwable) {
+            }
+            recorder.release()
+        }
+    }
+
+    private fun scoIsUp(am: AudioManager): Boolean = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            am.communicationDevice?.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        } else {
+            @Suppress("DEPRECATION")
+            am.isBluetoothScoOn
+        }
+    } catch (e: Throwable) {
+        false
+    }
+
+    private fun stopCallModeMic() {
+        callMicRunning = false
+        callMicThread?.let { t ->
+            try {
+                t.join(1_500)
+            } catch (_: InterruptedException) {
+            }
+        }
+        callMicThread = null
+        val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        try {
+            @Suppress("DEPRECATION")
+            am.isBluetoothScoOn = false
+            @Suppress("DEPRECATION")
+            am.stopBluetoothSco()
+            if (callModeApplied) {
+                am.mode = callModePreviousMode
+                callModeApplied = false
+            }
+        } catch (e: Throwable) {
+            Log.i(TAG, "call-mode: SCO release failed: $e")
+        }
+        val secs = (SystemClock.elapsedRealtime() - pcmStartMs) / 1000.0
+        emit(
+            "audio",
+            mapOf("status" to "glasses mic OFF (call mode) — $pcmBytesTotal B in ${"%.1f".format(secs)}s")
+        )
     }
 
     /**
@@ -1557,6 +1804,8 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 Log.i(TAG, "stopGlassesVoice: $e")
             }
         }
+        if (was == "tws") stopTwsCapture()
+        if (was == "call") stopCallModeMic()
         emit("audio", mapOf("status" to "audio_test_stopped"))
     }
 
@@ -1589,8 +1838,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             byteArrayOf(0x02, 0x01, 0x01)
         ) { _, rsp ->
             // err=-1/workType=0 is the SDK's neutral "command sent" ack
-            // (hardware-verified) — only a positive errorCode is a refusal.
-            if (rsp != null && rsp.errorCode > 0) {
+            // (hardware-verified) — only a positive errorCode is a refusal,
+            // and 0xff is the vendor's "proceed" (see takeAiPhoto).
+            if (rsp != null && rsp.errorCode > 0 && rsp.errorCode != 0xff) {
                 emit(
                     "deviceEvent",
                     mapOf(
@@ -1664,8 +1914,13 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         LargeDataHandler.getInstance().glassesControl(
             byteArrayOf(0x02, 0x01, 0x06, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 0x02)
         ) { _, rsp ->
-            // See takePhoto: err=-1 is the send ack, not a rejection.
-            if (rsp != null && rsp.errorCode > 0) {
+            // See takePhoto: err=-1 is the send ack, not a rejection. Nor is
+            // 0xff: the vendor sample treats `errorCode == 0 || == 0xff` as
+            // "proceed", and device-seen 2026-09-12 with the headset (SCO)
+            // link up the glasses answer EVERY AI-photo command with 0xff and
+            // then take the photo 2 s later regardless. Reading it as "busy"
+            // failed the tool in 1 s while the capture notify was on its way.
+            if (rsp != null && rsp.errorCode > 0 && rsp.errorCode != 0xff) {
                 Log.i(TAG, "takeAiPhoto refused err=${rsp.errorCode}")
                 cancelPhotoWatchdog()
                 if (photoRequestId == requestId) photoRequestId = null
@@ -1794,6 +2049,37 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             )
             return
         }
+        // The call-mode mic was just released for this recording (the Dart
+        // side closes the mic first), but the SCO link takes a moment to
+        // drop — and a video toggle sent while the glasses still hold a
+        // voice link comes back err=255 / workTypeIng=255 with no recording
+        // (device-seen 2026-09-12 02:36: 330 ms after the mic stop). The
+        // camera needs the glasses' own mic for the video's audio track, so
+        // wait for the link to be gone, briefly, before asking.
+        if (scoIsUp(app.getSystemService(Context.AUDIO_SERVICE) as AudioManager)) {
+            val started = SystemClock.elapsedRealtime()
+            fun retry() {
+                val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val waited = SystemClock.elapsedRealtime() - started
+                if (scoIsUp(am) && waited < VIDEO_SCO_RELEASE_WAIT_MS) {
+                    main.postDelayed({ retry() }, 100)
+                } else {
+                    // The phone's side of the link drops in ~100 ms, but the
+                    // toggle sent right then still came back err=255 with no
+                    // recording (02:43:41, 112 ms after release). The glasses
+                    // leave their call state on their own clock, so give them
+                    // a moment more before asking.
+                    Log.i(TAG, "startVideoRecording: voice link ${if (scoIsUp(am)) "still up" else "released"} after $waited ms — settling ${VIDEO_SCO_SETTLE_MS} ms")
+                    main.postDelayed({ startVideoRecordingNow(requestId, seconds) }, VIDEO_SCO_SETTLE_MS)
+                }
+            }
+            retry()
+            return
+        }
+        startVideoRecordingNow(requestId, seconds)
+    }
+
+    private fun startVideoRecordingNow(requestId: String, seconds: Int) {
         videoRequestId = requestId
         videoSeconds = seconds
         videoConfirmed = false
@@ -1842,6 +2128,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         seconds: Int,
         starting: Boolean,
         correcting: Boolean = false,
+        busyRetriesLeft: Int = VIDEO_BUSY_RETRIES,
     ) {
         cancelVideoTimers()
         val watchdog = Runnable {
@@ -1881,6 +2168,28 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 if (rsp.dataType != 1) return@post
                 if (rsp.errorCode > 0) {
                     val why = "refused err=${rsp.errorCode} ${describeWorkType(rsp.workTypeIng)}"
+                    // err=0xff with no work type is how the glasses answer a
+                    // start while they are still leaving the voice-link
+                    // (call-mode mic) state — device-seen 2026-09-12 at 330 ms
+                    // AND at 112 ms after the link dropped, with nothing
+                    // recorded either time. A refused toggle changes no state,
+                    // so asking again a second later is safe; give up only
+                    // after VIDEO_BUSY_RETRIES so a genuinely busy device still
+                    // gets an honest answer within a few seconds.
+                    if (starting && rsp.errorCode == 0xff && rsp.workTypeIng == 0xff &&
+                        busyRetriesLeft > 0
+                    ) {
+                        Log.i(TAG, "videoToggle: busy (err=255) — retrying in ${VIDEO_BUSY_RETRY_MS} ms, $busyRetriesLeft left")
+                        main.postDelayed({
+                            if (videoRequestId == requestId) {
+                                sendVideoToggle(
+                                    requestId, seconds, starting = true,
+                                    busyRetriesLeft = busyRetriesLeft - 1,
+                                )
+                            }
+                        }, VIDEO_BUSY_RETRY_MS)
+                        return@post
+                    }
                     if (starting) {
                         failVideo(requestId, seconds, "busy", why)
                     } else {
@@ -2098,11 +2407,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             Log.i(TAG, "thumbnail transfer stalled ($requestId)")
             emitCaptureFailed(
                 requestId, "transfer_stalled",
-                "no thumbnail chunk within ${THUMBNAIL_CHUNK_TIMEOUT_MS} ms"
+                "no thumbnail chunk within ${thumbnailChunkTimeoutMs(callMicRunning)} ms"
             )
         }
         thumbnailWatchdog = r
-        main.postDelayed(r, THUMBNAIL_CHUNK_TIMEOUT_MS)
+        main.postDelayed(r, thumbnailChunkTimeoutMs(callMicRunning))
     }
 
     /**
@@ -2606,7 +2915,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      *       day-based policy could never fire — a freshly-synced photo is
      *       always age≈0, and the firmware never re-lists it for us to re-check.
      * Safe: the file is already backed up on the phone before we ever delete. */
-    private fun applyRetention(entity: com.oudmon.wifi.bean.GlassAlbumEntity) {
+    private fun applyRetention(entity: com.glasses.wifi.bean.GlassAlbumEntity) {
         val policy = retentionDays
         if (policy == 0) return // keep everything
         val name = entity.fileName ?: return

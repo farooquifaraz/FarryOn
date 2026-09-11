@@ -74,6 +74,7 @@ class LiveController {
         _audioFocus = audioFocus ?? AudioFocus(),
         platform = platform ?? defaultPlatform {
     _client = clientFactory(_config, _activeDeviceInfo);
+    GlassesCaptureSource.handsFreeMic = _config.glassesHandsFreeMic;
     _bindClient();
     // Wi-Fi flap recovery: the moment the OS reports a usable network again,
     // poke the client so a pending backoff wait ends NOW. Without this a
@@ -1051,6 +1052,14 @@ class LiveController {
           _emit(_state.copyWith(glassesBattery: pct));
           _maybeWarnLowBattery(pct);
         }
+      case 'voiceCommand':
+        // The glasses' temple long-press doubles as a Bluetooth headset
+        // "assistant" button; with Farry as its handler the press reaches
+        // here. Press-to-talk already streams the glasses PCM while held, so
+        // all that is needed is a closed mic being opened.
+        _log.info('glasses assistant button → ${_state.micOpen ? "mic already open" : "open mic"}');
+        if (_state.connection != ConnectionStatus.connected) return;
+        if (!_state.micOpen) unawaited(startListening());
       case 'wearState':
         final worn = event.data['worn'] == true;
         _emit(_state.copyWith(glassesWorn: worn));
@@ -1058,8 +1067,9 @@ class LiveController {
         _glassesWorn = worn;
         _log.info('glasses ${worn ? "worn → listen" : "removed → pause"}');
         if (_state.connection != ConnectionStatus.connected) return;
-        // Wear drives the mic only when it's the phone/earbuds (continuous);
-        // the glasses' own mic is push-to-talk and can't auto-stream.
+        // Wear drives the mic: put on → open, take off → close. Continuous
+        // for the phone mic and for the hands-free glasses mic alike; the
+        // press-to-talk glasses path is merely armed by it.
         if (worn) {
           if (!_state.micOpen) unawaited(startListening());
         } else {
@@ -3028,6 +3038,7 @@ class LiveController {
   /// Point the client at a new backend (settings change) and reconnect.
   void updateConfig(AppConfig config) {
     _config = config;
+    GlassesCaptureSource.handsFreeMic = config.glassesHandsFreeMic;
     _client.updateConfig(config);
     // Apply the glasses storage-retention choice immediately. Pushed
     // unconditionally (not gated on a live connection): it just updates a field

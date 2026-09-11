@@ -85,6 +85,40 @@ class GlassesCaptureSource implements CaptureSource {
 
   static final _log = Logger('GlassesCapture');
 
+  /// Hands-free glasses microphone (SDK 1.2.5 `startTwsStereoCapture`): the
+  /// glasses stream their own mic continuously as Opus over BLE and the SDK
+  /// hands back PCM 16 kHz mono — no temple press. Off means the old
+  /// press-to-talk path. Set from [AppConfig.glassesHandsFreeMic].
+  ///
+  /// Why: with the glasses as speaker and the PHONE as microphone, Farry
+  /// could not hear a phone in a pocket (2026-09-11). The mic on the face
+  /// hears the wearer wherever the phone is.
+  static bool handsFreeMic = true;
+
+  /// Which continuous-mic transport hands-free uses. `'call'` (default) is
+  /// the Bluetooth headset link the glasses already have — the same path a
+  /// phone call through them uses, which is how Faraz proved the glasses mic
+  /// works from across the room (2026-09-12). `'tws'` is the SDK 1.2.5
+  /// BLE/Opus stream, kept for a firmware that answers it (this one does not).
+  static String handsFreeTransport = 'call';
+
+  /// True once the glasses proved they cannot stream hands-free in this
+  /// process, so every later start goes straight to press-to-talk instead
+  /// of waiting out the SDK's 15 s again. Process-wide on purpose: the
+  /// answer is a property of the connected firmware, not of one session.
+  ///
+  /// Measured 2026-09-12 on L802 firmware AM01L2_2.00.00_260114: the SDK
+  /// sends `soundControl(on)` (0x41: 02 0d 01), the glasses answer with an
+  /// empty `ffff` (unknown command), not one Opus packet arrives, and the
+  /// SDK stops itself with status 2 after 15 s. The firmware predates the
+  /// feature (SDK 1.2.5 is from July 2026).
+  static bool handsFreeUnsupported = false;
+
+  /// Bytes of hands-free PCM received since the current start, so a status-2
+  /// stop can be told apart: "the SDK gave up with nothing" vs "we stopped".
+  int _handsFreeBytes = 0;
+  bool _handsFreeActive = false;
+
   /// Stable identifier reported in `hello.device.id`.
   final String deviceId;
 
@@ -230,6 +264,7 @@ class GlassesCaptureSource implements CaptureSource {
         }
         final data = event.data['data'];
         if (data is Uint8List && data.isNotEmpty) {
+          if (_handsFreeActive) _handsFreeBytes += data.length;
           _audioController.add(data);
         }
       case 'thumbnail':
@@ -281,6 +316,37 @@ class GlassesCaptureSource implements CaptureSource {
         if (s.contains('mic OFF') || s.contains('stopped')) {
           if (_lastStatus.talking) {
             _pushStatus(_lastStatus.copyWith(talking: false));
+          }
+        }
+        // Call mode without the headset link: the phone's own mic is what
+        // is recording. Say so — the user asked for the glasses.
+        final sco = event.data['scoRoute'];
+        if (sco == false && _audioRunning) {
+          _log.warn('call-mode mic: the glasses headset link is not up '
+              '(Call audio off in Bluetooth settings?) — the phone mic is '
+              'recording instead');
+        }
+        // Hands-free capture ended without us asking. Status < 0 is the SDK
+        // refusing outright; status 2 while we are still running and not a
+        // byte arrived is the SDK's own 15 s timeout — the glasses never
+        // streamed (firmware without the feature). Either way: say so once,
+        // remember it for the rest of the process, and fall back to
+        // press-to-talk rather than leave a "Listening" chip over a dead mic.
+        final tws = event.data['twsStatus'];
+        if (tws is int && _audioRunning && _handsFreeActive) {
+          final refused = tws < 0;
+          final timedOut = tws == 2 && _handsFreeBytes == 0;
+          if (refused || timedOut) {
+            _handsFreeActive = false;
+            handsFreeUnsupported = true;
+            _log.warn(
+              'hands-free glasses mic ${refused ? 'refused' : 'timed out with '
+                  'no audio'} ($s) — this firmware cannot stream the mic; '
+              'falling back to press-to-talk',
+            );
+            unawaited(_bridge.startAudioTest('pcm').catchError((Object e) {
+              _log.warn('press-to-talk fallback failed: $e');
+            }));
           }
         }
     }
@@ -381,10 +447,25 @@ class GlassesCaptureSource implements CaptureSource {
   @override
   Future<void> startAudio() async {
     _audioRunning = true;
-    // Arm the glasses PCM path; bytes flow on long-press (push-to-talk).
+    final tws = handsFreeTransport == 'tws';
+    final handsFree = handsFreeMic && !(tws && handsFreeUnsupported);
+    _handsFreeBytes = 0;
+    _handsFreeActive = handsFree && tws;
     try {
-      await _bridge.startAudioTest('pcm');
-      _log.info('glasses audio armed (long-press the temple to talk)');
+      if (handsFree && !tws) {
+        // The glasses' headset (HFP) mic, continuously, like a call. PCM
+        // arrives on `pcmChunk` exactly as the other glasses paths deliver it.
+        await _bridge.startAudioTest('call');
+        _log.info('glasses mic on (call mode)');
+      } else if (handsFree) {
+        // Continuous glasses mic (SDK 1.2.5); PCM arrives on `pcmChunk`.
+        await _bridge.startAudioTest('tws');
+        _log.info('glasses mic on (hands-free)');
+      } else {
+        // Arm the glasses PCM path; bytes flow on long-press (push-to-talk).
+        await _bridge.startAudioTest('pcm');
+        _log.info('glasses audio armed (long-press the temple to talk)');
+      }
     } catch (e) {
       _log.warn('glasses startAudio failed: $e');
     }
@@ -393,6 +474,7 @@ class GlassesCaptureSource implements CaptureSource {
   @override
   Future<void> stopAudio() async {
     _audioRunning = false;
+    _handsFreeActive = false;
     try {
       await _bridge.stopAudioTest();
     } catch (e) {

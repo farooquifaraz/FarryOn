@@ -752,12 +752,14 @@ class _VoiceMicPage extends ConsumerStatefulWidget {
 class _VoiceMicPageState extends ConsumerState<_VoiceMicPage> {
   late bool _handsFree = ref.read(configProvider).handsFree;
   late bool _duckMusic = ref.read(configProvider).duckMusicForVoice;
+  late bool _glassesHandsFree = ref.read(configProvider).glassesHandsFreeMic;
 
   void _save() {
     final cfg = ref.read(configProvider);
     ref.read(configProvider.notifier).state = cfg.copyWith(
       handsFree: _handsFree,
       duckMusicForVoice: _duckMusic,
+      glassesHandsFreeMic: _glassesHandsFree,
     );
     Navigator.pop(context);
   }
@@ -788,6 +790,31 @@ class _VoiceMicPageState extends ConsumerState<_VoiceMicPage> {
         const Text(
           'Tap-to-talk is best with background noise or a TV — the mic stays '
           'closed until you tap it, so phantom turns can never trigger.',
+          style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
+        ),
+        const SizedBox(height: 18),
+        _fieldLabel('Glasses microphone'),
+        const SizedBox(height: 10),
+        SettingsGroup(children: [
+          SettingsRow(
+            icon: Icons.mic_rounded,
+            gradient: Aurora.gradTeal,
+            title: 'Hands-free',
+            subtitle: _glassesHandsFree
+                ? 'The glasses listen like on a call - phone can stay in your pocket'
+                : 'Press and hold the glasses to talk',
+            showDivider: false,
+            trailing: Switch(
+              value: _glassesHandsFree,
+              activeThumbColor: Aurora.mint,
+              onChanged: (v) => setState(() => _glassesHandsFree = v),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        const Text(
+          'Applies when the microphone is set to Glasses. Takes effect the '
+          'next time the mic opens.',
           style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
         ),
         const SizedBox(height: 18),
@@ -835,6 +862,14 @@ class _DevicesPage extends ConsumerWidget {
     final audio = _kind(state.audioKind);
     final video = _kind(state.videoKind);
 
+    // Switch the live session AND remember the choice for the next launch.
+    Future<void> pickMic(CaptureDeviceKind kind) async {
+      final cfg = ref.read(configProvider);
+      ref.read(configProvider.notifier).state =
+          cfg.copyWith(micDevice: kind.name);
+      await notifier.setAudioDevice(kind);
+    }
+
     return _SubPage(
       title: 'Capture devices',
       children: [
@@ -851,14 +886,14 @@ class _DevicesPage extends ConsumerWidget {
             gradient: Aurora.gradTeal,
             title: 'Phone / earbuds mic',
             selected: audio == CaptureDeviceKind.phone,
-            onTap: () => notifier.setAudioDevice(CaptureDeviceKind.phone),
+            onTap: () => pickMic(CaptureDeviceKind.phone),
           ),
           _OptionRow(
             icon: Icons.visibility_rounded,
             gradient: Aurora.gradTeal,
-            title: 'Glasses mic (long-press to talk)',
+            title: 'Glasses mic (like a call - no press)',
             selected: audio == CaptureDeviceKind.glasses,
-            onTap: () => notifier.setAudioDevice(CaptureDeviceKind.glasses),
+            onTap: () => pickMic(CaptureDeviceKind.glasses),
             showDivider: false,
           ),
         ]),

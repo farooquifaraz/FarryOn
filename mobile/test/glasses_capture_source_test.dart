@@ -97,6 +97,103 @@ void main() {
 
   Future<void> pump() => Future<void>.delayed(Duration.zero);
 
+  group('hands-free glasses mic', () {
+    setUp(() {
+      GlassesCaptureSource.handsFreeMic = true;
+      GlassesCaptureSource.handsFreeUnsupported = false;
+      GlassesCaptureSource.handsFreeTransport = 'tws';
+    });
+    tearDown(() {
+      GlassesCaptureSource.handsFreeUnsupported = false;
+      GlassesCaptureSource.handsFreeTransport = 'call';
+    });
+
+    test('call mode is the default transport: the headset link, no press',
+        () async {
+      GlassesCaptureSource.handsFreeTransport = 'call';
+      final bridge = _FakeBridge();
+      final src = GlassesCaptureSource(bridge: bridge, config: testConfig);
+      await src.initialize();
+      await src.startAudio();
+      expect(bridge.calls, contains('startAudioTest:call'));
+      expect(bridge.calls, isNot(contains('startAudioTest:tws')));
+      expect(bridge.calls, isNot(contains('startAudioTest:pcm')));
+      // A stray tws status can never demote call mode.
+      bridge.emit('audio', {'status': 'tws status=2', 'twsStatus': 2});
+      await Future<void>.delayed(Duration.zero);
+      expect(GlassesCaptureSource.handsFreeUnsupported, isFalse);
+      expect(bridge.calls, isNot(contains('startAudioTest:pcm')));
+    });
+
+    test('call-mode PCM flows to audio16k like every glasses path', () async {
+      GlassesCaptureSource.handsFreeTransport = 'call';
+      final bridge = _FakeBridge();
+      final src = GlassesCaptureSource(bridge: bridge, config: testConfig);
+      await src.initialize();
+      final got = <int>[];
+      final sub = src.audio16k.listen((c) => got.add(c.length));
+      await src.startAudio();
+      bridge.emit('pcmChunk', {'bytes': 4, 'data': Uint8List(4)});
+      await Future<void>.delayed(Duration.zero);
+      expect(got, [4]);
+      await sub.cancel();
+    });
+
+    test('starts in tws mode when hands-free is on', () async {
+      final bridge = _FakeBridge();
+      final src = GlassesCaptureSource(bridge: bridge, config: testConfig);
+      await src.initialize();
+      await src.startAudio();
+      expect(bridge.calls, contains('startAudioTest:tws'));
+      expect(bridge.calls, isNot(contains('startAudioTest:pcm')));
+    });
+
+    test("the SDK's 15 s timeout with no audio falls back to press-to-talk",
+        () async {
+      // L802 firmware AM01L2_2.00.00_260114: soundControl is unknown to the
+      // glasses, nothing streams, the SDK stops itself with status 2.
+      final bridge = _FakeBridge();
+      final src = GlassesCaptureSource(bridge: bridge, config: testConfig);
+      await src.initialize();
+      await src.startAudio();
+      bridge.emit('audio', {'status': 'tws status=2', 'twsStatus': 2});
+      await Future<void>.delayed(Duration.zero);
+      expect(bridge.calls, contains('startAudioTest:pcm'));
+      expect(GlassesCaptureSource.handsFreeUnsupported, isTrue);
+      // The verdict sticks: the next start skips the 15 s wait entirely.
+      bridge.calls.clear();
+      await src.stopAudio();
+      await src.startAudio();
+      expect(bridge.calls, contains('startAudioTest:pcm'));
+      expect(bridge.calls, isNot(contains('startAudioTest:tws')));
+    });
+
+    test('a status-2 stop AFTER audio flowed is not a failure', () async {
+      final bridge = _FakeBridge();
+      final src = GlassesCaptureSource(bridge: bridge, config: testConfig);
+      await src.initialize();
+      await src.startAudio();
+      bridge.emit('pcmChunk', {'bytes': 3, 'data': Uint8List.fromList([1, 2, 3])});
+      await Future<void>.delayed(Duration.zero);
+      bridge.emit('audio', {'status': 'tws status=2', 'twsStatus': 2});
+      await Future<void>.delayed(Duration.zero);
+      expect(bridge.calls, isNot(contains('startAudioTest:pcm')));
+      expect(GlassesCaptureSource.handsFreeUnsupported, isFalse);
+    });
+
+    test('our own stop is never mistaken for a timeout', () async {
+      final bridge = _FakeBridge();
+      final src = GlassesCaptureSource(bridge: bridge, config: testConfig);
+      await src.initialize();
+      await src.startAudio();
+      await src.stopAudio();
+      bridge.emit('audio', {'status': 'tws status=2', 'twsStatus': 2});
+      await Future<void>.delayed(Duration.zero);
+      expect(bridge.calls, isNot(contains('startAudioTest:pcm')));
+      expect(GlassesCaptureSource.handsFreeUnsupported, isFalse);
+    });
+  });
+
   test('advertises audio-in and (photo-trigger) video-in', () {
     expect(src.capabilities.audioIn, isTrue);
     // B3: vision is on — not a continuous stream, but an on-demand photo whose
@@ -323,8 +420,10 @@ void main() {
     await pump();
     expect(got, isEmpty);
 
+    GlassesCaptureSource.handsFreeMic = false;
     await src.startAudio();
     expect(bridge.calls, contains('startAudioTest:pcm'));
+    GlassesCaptureSource.handsFreeMic = true;
     bridge.emit('pcmChunk', {'bytes': 4, 'data': Uint8List.fromList([9, 8, 7, 6])});
     await pump();
     expect(got, hasLength(1));

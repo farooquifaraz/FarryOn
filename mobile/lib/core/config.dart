@@ -35,6 +35,8 @@ class AppConfig {
     this.videoRecordSeconds = 60,
     this.autoMediaSync = true,
     this.duckMusicForVoice = false,
+    this.glassesHandsFreeMic = true,
+    this.micDevice = 'phone',
     this.translateTargetLanguage = '',
     this.translateCaptionsOnly = false,
   });
@@ -127,6 +129,18 @@ class AppConfig {
   /// every other player on the phone does — a thing to switch on and test,
   /// not to ship silently (2026-09-08).
   final bool duckMusicForVoice;
+
+  /// Use the glasses' own microphone continuously (SDK 1.2.5) instead of
+  /// press-to-talk. Default on: the mic on the face is what makes "phone in
+  /// a pocket" work (2026-09-11).
+  final bool glassesHandsFreeMic;
+
+  /// Which microphone a session opens with: `'phone'` (phone/earbuds) or
+  /// `'glasses'`. Chosen under Settings → Capture devices. Persisted because
+  /// until 2026-09-12 it lived only in the running controller: every app
+  /// launch silently went back to the phone mic, and the user who had picked
+  /// the glasses got a Farry that could not hear them from across the room.
+  final String micDevice;
 
   /// Save every live capture (phone camera / glasses still) into the phone
   /// gallery (`Pictures/Farry`). Default on.
@@ -223,6 +237,8 @@ class AppConfig {
     int? videoRecordSeconds,
     bool? autoMediaSync,
     bool? duckMusicForVoice,
+    bool? glassesHandsFreeMic,
+    String? micDevice,
     String? translateTargetLanguage,
     bool? translateCaptionsOnly,
   }) =>
@@ -251,6 +267,8 @@ class AppConfig {
         videoRecordSeconds: videoRecordSeconds ?? this.videoRecordSeconds,
         autoMediaSync: autoMediaSync ?? this.autoMediaSync,
         duckMusicForVoice: duckMusicForVoice ?? this.duckMusicForVoice,
+        glassesHandsFreeMic: glassesHandsFreeMic ?? this.glassesHandsFreeMic,
+        micDevice: micDevice ?? this.micDevice,
         translateTargetLanguage:
             translateTargetLanguage ?? this.translateTargetLanguage,
         translateCaptionsOnly:

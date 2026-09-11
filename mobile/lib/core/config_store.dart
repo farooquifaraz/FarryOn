@@ -146,6 +146,8 @@ class ConfigStore {
       autoMediaSync: p.getBool('cfg.autoMediaSync') ??
           p.getBool('cfg.saveRecordingsToPhone'),
       duckMusicForVoice: p.getBool('cfg.duckMusicForVoice'),
+      glassesHandsFreeMic: p.getBool('cfg.glassesHandsFreeMic'),
+      micDevice: p.getString('cfg.micDevice'),
       translateTargetLanguage: p.getString('cfg.translate.target'),
       translateCaptionsOnly: p.getBool('cfg.translate.captionsOnly'),
     );
@@ -210,6 +212,8 @@ class ConfigStore {
     await p.setInt('cfg.videoRecordSeconds', c.videoRecordSeconds);
     await p.setBool('cfg.autoMediaSync', c.autoMediaSync);
     await p.setBool('cfg.duckMusicForVoice', c.duckMusicForVoice);
+    await p.setBool('cfg.glassesHandsFreeMic', c.glassesHandsFreeMic);
+    await p.setString('cfg.micDevice', c.micDevice);
     await p.setString('cfg.translate.target', c.translateTargetLanguage);
     await p.setBool('cfg.translate.captionsOnly', c.translateCaptionsOnly);
   }

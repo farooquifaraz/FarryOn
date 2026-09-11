@@ -82,6 +82,16 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- The glasses' temple long-press is, over Bluetooth, a headset's
+                 "voice assistant" button: the phone fires VOICE_COMMAND and,
+                 with Google and Bixby both listening for it, shows a "Complete
+                 action using" chooser on every press (device-seen 2026-09-12).
+                 Farry offers itself as the third choice; picked "Always", the
+                 press comes here and opens the mic instead. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
         <meta-data
             android:name="flutterEmbedding"

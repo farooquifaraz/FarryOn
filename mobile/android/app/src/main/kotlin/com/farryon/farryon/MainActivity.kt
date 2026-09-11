@@ -1,5 +1,6 @@
 package com.farryon.farryon
 
+import android.content.Intent
 import com.farryon.farryon.glasses.GlassesChannels
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -53,6 +54,30 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             applicationContext,
         )
+    }
+
+    /**
+     * A headset "voice assistant" press (the glasses' temple long-press)
+     * arrives as ACTION_VOICE_COMMAND once the user has made Farry the
+     * default handler. Warm start lands here; a cold start lands in
+     * [onPostResume] via the launch intent. Either way the Dart side hears
+     * `voiceCommand` and opens the mic if it is closed.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleVoiceCommand(intent)
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        handleVoiceCommand(intent)
+    }
+
+    private fun handleVoiceCommand(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VOICE_COMMAND) return
+        // Consume it: a rotation or resume must not replay the press.
+        intent.action = null
+        glasses?.onVoiceCommand()
     }
 
     override fun onDestroy() {

@@ -22,7 +22,12 @@ final configProvider = StateProvider<AppConfig>((ref) => ConfigStore.load());
 
 /// The capture-device registry (phone ⇄ glasses switchboard).
 final deviceRegistryProvider = Provider<DeviceRegistry>((ref) {
-  final registry = DeviceRegistry();
+  // The saved microphone choice is the one the session opens with.
+  final registry = DeviceRegistry(
+    audio: ref.read(configProvider).micDevice == 'glasses'
+        ? CaptureDeviceKind.glasses
+        : CaptureDeviceKind.phone,
+  );
   ref.onDispose(registry.dispose);
   return registry;
 });

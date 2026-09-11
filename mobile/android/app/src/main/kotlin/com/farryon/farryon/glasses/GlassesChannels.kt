@@ -63,7 +63,7 @@ class GlassesChannels private constructor(
             val app = appContext?.applicationContext as? Application
             if (app != null) {
                 try {
-                    Class.forName("com.oudmon.ble.base.bluetooth.BleOperateManager")
+                    Class.forName("com.glasses.ble.base.bluetooth.BleOperateManager")
                     return HeyCyanGlassesSdk(app)
                 } catch (e: ClassNotFoundException) {
                     // No vendor .aar in this build — stub mode.
@@ -513,6 +513,14 @@ class GlassesChannels private constructor(
 
     override fun onCancel(arguments: Any?) {
         eventSink = null
+    }
+
+    /** The headset assistant button (temple long-press) reached the app. */
+    fun onVoiceCommand() {
+        android.util.Log.i("GlassesLab", "voice command (headset assistant button)")
+        eventSink?.success(
+            mapOf("type" to "voiceCommand", "data" to mapOf("source" to "headset"))
+        )
     }
 
     fun dispose() {
