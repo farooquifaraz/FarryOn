@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import wave
 from pathlib import Path
+from threading import Lock
 
 from app.logging_conf import get_logger
 
@@ -33,6 +34,10 @@ class AudioDump:
         self._path = Path(directory) / f"{session_id}.wav" if directory else None
         self._wav: wave.Wave_write | None = None
         self._failed = False
+        # ``Session`` writes and closes the diagnostic file from worker
+        # threads.  Serialise those operations so cancellation during teardown
+        # cannot race a final write against ``wave.close``.
+        self._lock = Lock()
         self.bytes_written = 0
 
     @property
@@ -44,31 +49,33 @@ class AudioDump:
         that never sends audio leaves nothing behind."""
         if not self.enabled or not pcm:
             return
-        try:
-            if self._wav is None:
-                assert self._path is not None
-                self._path.parent.mkdir(parents=True, exist_ok=True)
-                self._wav = wave.open(str(self._path), "wb")
-                self._wav.setnchannels(_CHANNELS)
-                self._wav.setsampwidth(_SAMPLE_WIDTH)
-                self._wav.setframerate(_SAMPLE_RATE)
-                logger.info("audio_dump.opened", path=str(self._path))
-            self._wav.writeframes(pcm)
-            self.bytes_written += len(pcm)
-        except Exception as exc:  # noqa: BLE001 - diagnostics never break audio
-            self._failed = True
-            logger.warning("audio_dump.failed", error=repr(exc))
-            self._close_quietly()
+        with self._lock:
+            try:
+                if self._wav is None:
+                    assert self._path is not None
+                    self._path.parent.mkdir(parents=True, exist_ok=True)
+                    self._wav = wave.open(str(self._path), "wb")
+                    self._wav.setnchannels(_CHANNELS)
+                    self._wav.setsampwidth(_SAMPLE_WIDTH)
+                    self._wav.setframerate(_SAMPLE_RATE)
+                    logger.info("audio_dump.opened", path=str(self._path))
+                self._wav.writeframes(pcm)
+                self.bytes_written += len(pcm)
+            except Exception as exc:  # noqa: BLE001 - diagnostics never break audio
+                self._failed = True
+                logger.warning("audio_dump.failed", error=repr(exc))
+                self._close_quietly()
 
     def close(self) -> None:
-        if self._wav is not None:
-            seconds = self.bytes_written / (_SAMPLE_RATE * _SAMPLE_WIDTH)
-            logger.info(
-                "audio_dump.closed",
-                path=str(self._path),
-                seconds=round(seconds, 1),
-            )
-        self._close_quietly()
+        with self._lock:
+            if self._wav is not None:
+                seconds = self.bytes_written / (_SAMPLE_RATE * _SAMPLE_WIDTH)
+                logger.info(
+                    "audio_dump.closed",
+                    path=str(self._path),
+                    seconds=round(seconds, 1),
+                )
+            self._close_quietly()
 
     def _close_quietly(self) -> None:
         wav, self._wav = self._wav, None

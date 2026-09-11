@@ -108,9 +108,14 @@ async def test_the_db_is_written_in_batches_not_per_frame(cap_of) -> None:
         await s._meter_voice(_MIC_BYTES_PER_SECOND)
     assert await _usage("u7") == 0, "flushed too early"
 
-    for _ in range(2):  # crosses _VOICE_FLUSH_EVERY_S = 15
-        await s._meter_voice(_MIC_BYTES_PER_SECOND)
+    # Crossing the threshold schedules persistence instead of making the mic
+    # path wait for a database round-trip.
+    await s._meter_voice(_MIC_BYTES_PER_SECOND)
+    assert s._voice_flush_task is not None
+    await s._voice_flush_task
     assert await _usage("u7") == 15
+
+    await s._meter_voice(_MIC_BYTES_PER_SECOND)
     assert s._voice_pending_s == pytest.approx(1.0)
 
 
@@ -185,6 +190,8 @@ async def test_a_failed_write_never_cuts_the_call(cap_of, monkeypatch) -> None:
     monkeypatch.setattr(repo, "bump_daily_usage", boom)
     assert await s._meter_voice(_MIC_BYTES_PER_SECOND * 20) is True
     assert s._voice_pending_s == 20.0, "unbilled seconds must not be dropped"
+    assert s._voice_flush_task is not None
+    await s._voice_flush_task
 
     monkeypatch.undo()
     # A failure now backs off before retrying: the seconds stay pending and

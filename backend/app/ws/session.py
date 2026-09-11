@@ -90,6 +90,21 @@ _VOICE_FLUSH_EVERY_S = 15.0
 #: as it ran. Postgres would have felt that a great deal more than SQLite did.
 _USAGE_RETRY_AFTER_S = 30.0
 
+# A live microphone normally produces one frame every 20-100 ms.  Keep a
+# short, bounded buffer between the WebSocket reader and an upstream provider:
+# the reader must stay available to receive fresh speech even when one send is
+# briefly slow, but an unbounded queue would turn a transient outage into a
+# delayed replay of stale speech.
+_AUDIO_FORWARD_QUEUE_MAX = 50
+
+# Audio dumping is diagnostic-only.  A separate, bounded queue guarantees a
+# slow disk can never take the live microphone path down with it.
+_AUDIO_DUMP_QUEUE_MAX = 200
+
+
+class AudioBackpressureError(RuntimeError):
+    """The upstream audio connection cannot keep up with real-time speech."""
+
 #: Last Gemini session-resumption handle per authed user, with the monotonic
 #: time it was issued. A NEW session within the TTL re-attaches the previous
 #: conversation's context — so an idle-expired session or a network drop no
@@ -171,6 +186,15 @@ class Session:
         self._audio_dump = AudioDump(
             getattr(settings, "debug_audio_dump_dir", ""), self.session_id
         )
+        # Audio forwarding and diagnostic writing intentionally run outside
+        # the WebSocket read pump.  Before this separation, one slow Gemini
+        # send, DB commit, or WAV write delayed every later microphone frame.
+        self._audio_queue: asyncio.Queue[tuple[bytes, int | None] | None] = (
+            asyncio.Queue(maxsize=_AUDIO_FORWARD_QUEUE_MAX)
+        )
+        self._audio_sender_task: asyncio.Task[None] | None = None
+        self._audio_dump_queue: asyncio.Queue[bytes | None] | None = None
+        self._audio_dump_task: asyncio.Task[None] | None = None
         #: The current user turn's microphone audio, kept so a second reader
         #: can correct the words on screen once the reply has begun. The
         #: client mutes its mic while the assistant speaks, so everything that
@@ -193,6 +217,21 @@ class Session:
         self._t_reply_started: float = 0.0
         self._t_first_audio_sent: float = 0.0
         self._turn_tools: int = 0
+        #: When mic audio first arrived with nobody heard and nobody speaking
+        #: (0 = not in such a stretch). See ``_note_unheard_audio``.
+        self._unheard_audio_since: float = 0.0
+        #: Silence filler (see ``_maybe_fill_silence``): the burst the filler
+        #: last completed, so it runs once per burst and never during one.
+        self._filler_task: asyncio.Task[None] | None = None
+        self._filler_filled_for: float = 0.0
+        #: Quiet-triggered nudge bookkeeping: the last frame time a quiet
+        #: nudge was sent for, so each pause nudges at most once.
+        self._quiet_nudged_for: float = 0.0
+        self._turn_watch_task: asyncio.Task[None] | None = None
+        #: Consecutive nudges (either kind) with nothing heard since. Reset
+        #: the moment the provider transcribes the user.
+        self._cap_nudges: int = 0
+        self._quiet_nudges: int = 0
         # Cost caps: session start + last real user activity (audio/text), used
         # by the watchdog to end runaway or forgotten-open sessions.
         self._session_started: float = time.monotonic()
@@ -214,7 +253,11 @@ class Session:
         self._voice_capped: bool = False
         # Monotonic time before which a failed usage write must not be retried.
         self._voice_flush_retry_at: float = 0.0
+        self._voice_flush_task: asyncio.Task[None] | None = None
+        self._voice_flush_lock = asyncio.Lock()
         self._translate_flush_retry_at: float = 0.0
+        self._translate_flush_task: asyncio.Task[None] | None = None
+        self._translate_flush_lock = asyncio.Lock()
         # Translation metering — the same three counters, kept apart from the
         # voice ones so neither can spend the other's budget. `_translate_warned`
         # makes the 80% heads-up fire once rather than on every frame.
@@ -462,6 +505,41 @@ class Session:
                     frame_wait_seconds=frame_wait_seconds,
                 )
 
+            # Start these only after the gateway is connected.  The read pump
+            # can now keep accepting microphone frames while the sender waits
+            # for provider I/O; diagnostic disk writes get their own worker.
+            self._audio_sender_task = asyncio.create_task(
+                self._audio_sender(), name="audio_sender"
+            )
+            if self._mode == "agent" and float(
+                getattr(self._settings, "vad_silence_filler_seconds", 0.0) or 0.0
+            ) > 0.0:
+                self._filler_task = asyncio.create_task(
+                    self._silence_filler(), name="silence_filler"
+                )
+            if self._mode == "agent" and float(
+                getattr(self._settings, "stuck_turn_quiet_nudge_seconds", 0.0) or 0.0
+            ) > 0.0:
+                self._turn_watch_task = asyncio.create_task(
+                    self._turn_watch(), name="turn_watch"
+                )
+            warm = float(getattr(self._settings, "vad_warmup_seconds", 0.0) or 0.0)
+            if self._mode == "agent" and warm > 0.0:
+                # Prime the provider's detector with the quiet before the
+                # first words (see Settings.vad_warmup_seconds). Not metered,
+                # not dumped: it is not the user's audio.
+                chunk = bytes(16_000 * 2 // 10)
+                for _ in range(max(1, int(round(warm * 10)))):
+                    await self._queue_audio(chunk, None)
+                logger.info("audio.warmup_sent", session_id=self.session_id, ms=int(warm * 1000))
+            if self._audio_dump.enabled:
+                self._audio_dump_queue = asyncio.Queue(
+                    maxsize=_AUDIO_DUMP_QUEUE_MAX
+                )
+                self._audio_dump_task = asyncio.create_task(
+                    self._audio_dump_writer(), name="audio_dump_writer"
+                )
+
             read_task = asyncio.create_task(self._read_pump(), name="read_pump")
             event_task = asyncio.create_task(
                 self._event_pump(), name="event_pump"
@@ -470,7 +548,7 @@ class Session:
                 self._session_watchdog(), name="watchdog"
             )
             done, pending = await asyncio.wait(
-                {read_task, event_task, watchdog_task},
+                {read_task, event_task, watchdog_task, self._audio_sender_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
@@ -706,6 +784,81 @@ class Session:
             elif message.get("text") is not None:
                 await self._handle_text(message["text"])
 
+    async def _audio_sender(self) -> None:
+        """Forward queued microphone frames without blocking the read pump."""
+        while True:
+            item = await self._audio_queue.get()
+            try:
+                if item is None:
+                    return
+                pcm, ts_ms = item
+                await self._gateway.send_audio(pcm, ts_ms=ts_ms)
+            finally:
+                self._audio_queue.task_done()
+
+    async def _audio_dump_writer(self) -> None:
+        """Write diagnostic WAV frames off the live event loop.
+
+        ``wave.writeframes`` is synchronous filesystem I/O.  It is safe in a
+        worker thread, but it must never run from ``_handle_binary`` where it
+        can make the next spoken word wait behind a slow disk.
+        """
+        queue = self._audio_dump_queue
+        assert queue is not None
+        while True:
+            pcm = await queue.get()
+            try:
+                if pcm is None:
+                    return
+                await asyncio.to_thread(self._audio_dump.write, pcm)
+            finally:
+                queue.task_done()
+
+    async def _queue_audio(self, pcm: bytes, ts_ms: int | None) -> None:
+        """Hand one mic frame to the background sender without stale buildup."""
+        # Direct calls to _handle_binary in focused tests do not start run(),
+        # so retain the old immediate behaviour for that narrow lifecycle.
+        if self._audio_sender_task is None:
+            await self._gateway.send_audio(pcm, ts_ms=ts_ms)
+            return
+        try:
+            self._audio_queue.put_nowait((pcm, ts_ms))
+        except asyncio.QueueFull:
+            # Never silently lose a user's words.  Keeping an unbounded queue
+            # would replay stale speech seconds later; dropping a frame would
+            # make the assistant appear to have misheard.  Instead end this
+            # unhealthy connection explicitly.  The mobile client reconnects
+            # on socket close and the session-resumption handle preserves the
+            # conversation context.
+            logger.error(
+                "audio.forward_queue_full",
+                session_id=self.session_id,
+                queued=self._audio_queue.qsize(),
+            )
+            await self._send_error(
+                "audio_backpressure",
+                "The live audio connection fell behind. Reconnecting now.",
+                fatal=True,
+            )
+            raise AudioBackpressureError("upstream audio queue is full")
+
+    def _queue_audio_dump(self, pcm: bytes) -> None:
+        """Best-effort diagnostic copy; it must never delay live audio."""
+        queue = self._audio_dump_queue
+        if queue is None:
+            # Same direct-test compatibility as _queue_audio.  In a running
+            # session an enabled dump always has its dedicated writer.
+            self._audio_dump.write(pcm)
+            return
+        try:
+            queue.put_nowait(pcm)
+        except asyncio.QueueFull:
+            logger.warning(
+                "audio_dump.queue_full",
+                session_id=self.session_id,
+                queued=queue.qsize(),
+            )
+
     async def _handle_binary(self, data: bytes) -> None:
         """Decode a binary media frame and forward it to the gateway."""
         try:
@@ -717,7 +870,7 @@ class Session:
         if tag == FrameTag.INPUT_AUDIO:
             metrics.FRAMES_IN.labels(kind="audio").inc()
             metrics.AUDIO_BYTES_IN.inc(len(payload))
-            self._audio_dump.write(payload)
+            self._queue_audio_dump(payload)
             if self._mode == "agent" and getattr(
                 self._settings, "refine_user_transcripts", False
             ):
@@ -763,7 +916,9 @@ class Session:
                     return  # over today's cap — the session has been ended
             elif not await self._meter_voice(len(payload)):
                 return  # over today's cap — _meter_voice ended the session
-            await self._gateway.send_audio(payload, ts_ms=ts)
+            await self._queue_audio(payload, ts)
+            if self._mode == "agent":
+                await self._note_unheard_audio(now_audio)
         elif tag == FrameTag.INPUT_VIDEO:
             metrics.FRAMES_IN.labels(kind="video").inc()
             self._frames_in_video += 1
@@ -1180,6 +1335,182 @@ class Session:
         self._t_reply_started = 0.0
         self._t_first_audio_sent = 0.0
         self._turn_tools = 0
+        self._unheard_audio_since = 0.0
+
+    async def _silence_filler(self) -> None:
+        """Poll for a burst that just ended and fill the quiet after it."""
+        try:
+            while not self._closing:
+                await asyncio.sleep(0.1)
+                await self._maybe_fill_silence(time.monotonic())
+        except asyncio.CancelledError:  # pragma: no cover - teardown
+            raise
+        except Exception as exc:  # noqa: BLE001 - a filler must never end a session
+            logger.warning("audio.filler_failed", session_id=self.session_id, error=repr(exc))
+
+    async def _maybe_fill_silence(self, now: float) -> bool:
+        """After the client's gate closes, send the silence it withheld.
+
+        The provider's end-of-speech decision needs quiet audio AFTER the
+        words; the gate stops streaming instead, so the decision waited for
+        the next burst (device-seen 2026-09-11: four short questions, 27 s
+        unheard). Once per burst: when no mic frame has arrived for
+        ``vad_silence_filler_after_ms``, ``vad_silence_filler_seconds`` of
+        zero PCM go to the provider in 100 ms pieces, stopping the moment a
+        real frame arrives. Returns True when a fill was sent.
+        """
+        seconds = float(getattr(self._settings, "vad_silence_filler_seconds", 0.0) or 0.0)
+        if seconds <= 0.0 or self._mode != "agent":
+            return False
+        last = self._last_audio_frame_at
+        if last <= 0.0 or last == self._filler_filled_for:
+            return False
+        after = int(getattr(self._settings, "vad_silence_filler_after_ms", 300) or 300)
+        if now - last < after / 1000.0:
+            return False
+        self._filler_filled_for = last
+        chunk = bytes(16_000 * 2 // 10)  # 100 ms of 16 kHz PCM16 silence
+        pieces = max(1, int(round(seconds * 10)))
+        sent = 0
+        for _ in range(pieces):
+            if self._closing or self._last_audio_frame_at != last:
+                break  # a real frame arrived: the gate reopened, stop filling
+            await self._queue_audio(chunk, None)
+            sent += 1
+            await asyncio.sleep(0.1)
+        logger.info(
+            "audio.silence_filled",
+            session_id=self.session_id,
+            ms=sent * 100,
+            gap_ms=int((now - last) * 1000),
+        )
+        return sent > 0
+
+    async def _turn_watch(self) -> None:
+        """Poll for a pause after unheard speech and nudge at once."""
+        try:
+            while not self._closing:
+                await asyncio.sleep(0.1)
+                await self._maybe_quiet_nudge(time.monotonic())
+        except asyncio.CancelledError:  # pragma: no cover - teardown
+            raise
+        except Exception as exc:  # noqa: BLE001 - a watcher must never end a session
+            logger.warning("turn.watch_failed", session_id=self.session_id, error=repr(exc))
+
+    async def _maybe_quiet_nudge(self, now: float) -> bool:
+        """The user stopped and nobody was heard: close the stream now.
+
+        Complements ``_note_unheard_audio`` (which fires while audio is still
+        flowing, as a cap). This one fires when the gate has gone quiet for
+        ``stuck_turn_quiet_nudge_seconds`` after audio that opened no turn -
+        the user finished a sentence and the provider is sitting on it. Once
+        per pause. Returns True when a nudge was sent.
+        """
+        quiet = float(getattr(self._settings, "stuck_turn_quiet_nudge_seconds", 0.0) or 0.0)
+        if quiet <= 0.0 or self._mode != "agent":
+            return False
+        if self._unheard_audio_since == 0.0:
+            return False  # nothing unheard is pending
+        if self._t_user_first > 0.0 or self._t_reply_started > 0.0:
+            return False
+        last = self._last_audio_frame_at
+        if last <= 0.0 or last == self._quiet_nudged_for:
+            return False
+        if now - last < quiet:
+            return False
+        self._quiet_nudged_for = last
+        self._quiet_nudges += 1
+        give_up = int(getattr(self._settings, "stuck_reconnect_after_nudges", 0) or 0)
+        if give_up > 0 and self._quiet_nudges >= give_up:
+            # Several separate utterances, each followed by a pause, none
+            # heard: the connection is deaf. Drop the socket WITHOUT a
+            # session_expired notice so the app reconnects by itself (the
+            # resume handle keeps the conversation). Counted on QUIET nudges
+            # only: music keeps the gate open and never gets here.
+            logger.warning(
+                "turn.stuck_reconnect",
+                session_id=self.session_id,
+                turn=self._turn_index,
+                nudges=self._quiet_nudges,
+            )
+            self._quiet_nudges = 0
+            self._cap_nudges = 0
+            closer = getattr(self, "_close_for_reconnect", None)
+            if callable(closer):
+                await closer()
+            return True
+        fn = getattr(self._gateway, "send_audio_stream_end", None)
+        if not callable(fn):
+            return False
+        try:
+            await fn()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("turn.nudge_failed", session_id=self.session_id, error=repr(exc))
+            return False
+        # The cap window restarts too, so the two triggers never double up.
+        self._unheard_audio_since = now
+        logger.info(
+            "turn.nudge",
+            session_id=self.session_id,
+            turn=self._turn_index,
+            quiet_s=round(now - last, 1),
+            unheard_s=None,
+        )
+        return True
+
+    async def _note_unheard_audio(self, now: float) -> None:
+        """Mic audio arrived: is anyone being heard?
+
+        Outdoors on 2026-09-09 the provider's detector went 28 s and then 67 s
+        with audio flowing and no turn opened, then delivered the lot as one
+        33 s turn - to the user, a minute of "she can't hear me". This counts
+        audio that arrives while no user speech has been heard in the current
+        turn and the assistant is not replying; past
+        ``stuck_turn_nudge_seconds`` it closes the provider's audio stream so
+        the detector must finalise, and the window restarts (a second nudge
+        follows if that changed nothing). The gate holds silence back, so
+        only speech-like audio can advance this; a quiet room never nudges.
+        """
+        limit = float(getattr(self._settings, "stuck_turn_nudge_seconds", 0.0) or 0.0)
+        if limit <= 0.0:
+            return
+        if self._t_user_first > 0.0 or self._t_reply_started > 0.0:
+            self._unheard_audio_since = 0.0
+            self._cap_nudges = 0
+            self._quiet_nudges = 0
+            return
+        if self._unheard_audio_since == 0.0:
+            self._unheard_audio_since = now
+            return
+        if now - self._unheard_audio_since < limit:
+            return
+        self._unheard_audio_since = now
+        self._cap_nudges += 1
+        fn = getattr(self._gateway, "send_audio_stream_end", None)
+        if not callable(fn):
+            return
+        try:
+            await fn()
+        except Exception as exc:  # noqa: BLE001 - a nudge must never end a session
+            logger.warning("turn.nudge_failed", session_id=self.session_id, error=repr(exc))
+            return
+        logger.info(
+            "turn.nudge",
+            session_id=self.session_id,
+            turn=self._turn_index,
+            unheard_s=round(limit, 1),
+        )
+
+    async def _close_for_reconnect(self) -> None:
+        """Close the client socket so the app reconnects (see stuck_reconnect)."""
+        ws = getattr(self, "_ws", None)
+        if ws is None:
+            return
+        try:
+            if ws.application_state == WebSocketState.CONNECTED:
+                await ws.close(code=1012)  # "service restart": try again
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("turn.stuck_reconnect_failed", session_id=self.session_id, error=repr(exc))
 
     # -- Event pump (gateway -> client) --------------------------------------
 
@@ -1204,6 +1535,8 @@ class Session:
                 self._last_activity = now
                 if self._t_user_first == 0.0:
                     self._t_user_first = now
+                    self._cap_nudges = 0
+                    self._quiet_nudges = 0
                     logger.info(
                         "turn.hearing",
                         session_id=self.session_id,
@@ -1389,7 +1722,7 @@ class Session:
                 return False
 
         if self._voice_pending_s >= _VOICE_FLUSH_EVERY_S:
-            await self._flush_voice_usage()
+            self._schedule_voice_flush()
         return True
 
     def _usage_key(self) -> str:
@@ -1402,28 +1735,43 @@ class Session:
         running total. Best-effort: a failed write must never break the call
         (see :meth:`_meter_voice`), but the seconds are kept pending so the next
         flush still bills them."""
-        if self._voice_pending_s < 1:
-            return
-        if time.monotonic() < self._voice_flush_retry_at:
-            return  # a recent write failed; don't hammer the database
-        whole = int(self._voice_pending_s)
-        sessionmaker = get_sessionmaker()
-        try:
-            async with sessionmaker() as db:
-                await repo.bump_daily_usage(
-                    db,
-                    user_key=self._usage_key(),
-                    day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                    voice_seconds=whole,
-                )
-                await db.commit()
-        except Exception as exc:  # noqa: BLE001 - never break the call over this
-            self._voice_flush_retry_at = time.monotonic() + _USAGE_RETRY_AFTER_S
-            logger.warning("quota.voice_flush_failed", error=str(exc))
-            return
-        self._voice_flush_retry_at = 0.0
-        self._voice_used_s += whole
-        self._voice_pending_s -= whole
+        # A scheduled batch flush and a cap/cleanup flush may arrive together.
+        # Serialising them prevents double-billing the same pending seconds.
+        lock = getattr(self, "_voice_flush_lock", None)
+        if lock is None:  # lightweight test fixtures built via __new__
+            lock = asyncio.Lock()
+            self._voice_flush_lock = lock
+        async with lock:
+            if self._voice_pending_s < 1:
+                return
+            if time.monotonic() < self._voice_flush_retry_at:
+                return  # a recent write failed; don't hammer the database
+            whole = int(self._voice_pending_s)
+            sessionmaker = get_sessionmaker()
+            try:
+                async with sessionmaker() as db:
+                    await repo.bump_daily_usage(
+                        db,
+                        user_key=self._usage_key(),
+                        day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                        voice_seconds=whole,
+                    )
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001 - never break the call over this
+                self._voice_flush_retry_at = time.monotonic() + _USAGE_RETRY_AFTER_S
+                logger.warning("quota.voice_flush_failed", error=str(exc))
+                return
+            self._voice_flush_retry_at = 0.0
+            self._voice_used_s += whole
+            self._voice_pending_s -= whole
+
+    def _schedule_voice_flush(self) -> None:
+        """Persist metering in the background; microphone forwarding wins."""
+        task = getattr(self, "_voice_flush_task", None)
+        if task is None or task.done():
+            self._voice_flush_task = asyncio.create_task(
+                self._flush_voice_usage(), name="voice_usage_flush"
+            )
 
     async def _meter_translate(self, payload_bytes: int) -> bool:
         """Count this audio chunk against today's translation budget.
@@ -1450,7 +1798,7 @@ class Session:
         cap = plan_cap("voice_seconds", self._plan_name)
         if not (get_settings().quota_enforcement_enabled and cap >= 0):
             if self._translate_pending_s >= _VOICE_FLUSH_EVERY_S:
-                await self._flush_translate_usage()
+                self._schedule_translate_flush()
             return True
 
         total = self._translate_used_s + self._translate_pending_s
@@ -1489,41 +1837,54 @@ class Session:
             )
 
         if self._translate_pending_s >= _VOICE_FLUSH_EVERY_S:
-            await self._flush_translate_usage()
+            self._schedule_translate_flush()
         return True
 
     async def _flush_translate_usage(self) -> None:
         """Write translation seconds counted since the last flush."""
-        if self._translate_pending_s < 1:
-            return
-        if time.monotonic() < self._translate_flush_retry_at:
-            return  # a recent write failed; don't hammer the database
-        whole = int(self._translate_pending_s)
-        try:
-            async with get_sessionmaker()() as db:
-                await repo.bump_daily_usage(
-                    db,
-                    user_key=self._usage_key(),
-                    day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                    # ONE budget for talking, whoever is being talked to
-                    # (2026-09-05): translation runs through the same model at
-                    # the same price, so it draws down the same seconds the
-                    # assistant does. `translate_seconds` is still written for
-                    # the admin view — it is a record of WHAT the minutes went
-                    # on, not a second allowance.
-                    voice_seconds=whole,
-                    translate_seconds=whole,
+        lock = getattr(self, "_translate_flush_lock", None)
+        if lock is None:  # lightweight test fixtures built via __new__
+            lock = asyncio.Lock()
+            self._translate_flush_lock = lock
+        async with lock:
+            if self._translate_pending_s < 1:
+                return
+            if time.monotonic() < self._translate_flush_retry_at:
+                return  # a recent write failed; don't hammer the database
+            whole = int(self._translate_pending_s)
+            try:
+                async with get_sessionmaker()() as db:
+                    await repo.bump_daily_usage(
+                        db,
+                        user_key=self._usage_key(),
+                        day=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                        # ONE budget for talking, whoever is being talked to
+                        # (2026-09-05): translation runs through the same model at
+                        # the same price, so it draws down the same seconds the
+                        # assistant does. `translate_seconds` is still written for
+                        # the admin view — it is a record of WHAT the minutes went
+                        # on, not a second allowance.
+                        voice_seconds=whole,
+                        translate_seconds=whole,
+                    )
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001 - never break the call over this
+                self._translate_flush_retry_at = (
+                    time.monotonic() + _USAGE_RETRY_AFTER_S
                 )
-                await db.commit()
-        except Exception as exc:  # noqa: BLE001 - never break the call over this
-            self._translate_flush_retry_at = (
-                time.monotonic() + _USAGE_RETRY_AFTER_S
+                logger.warning("quota.translate_flush_failed", error=str(exc))
+                return
+            self._translate_flush_retry_at = 0.0
+            self._translate_used_s += whole
+            self._translate_pending_s -= whole
+
+    def _schedule_translate_flush(self) -> None:
+        """Persist translation metering without pausing incoming speech."""
+        task = getattr(self, "_translate_flush_task", None)
+        if task is None or task.done():
+            self._translate_flush_task = asyncio.create_task(
+                self._flush_translate_usage(), name="translate_usage_flush"
             )
-            logger.warning("quota.translate_flush_failed", error=str(exc))
-            return
-        self._translate_flush_retry_at = 0.0
-        self._translate_used_s += whole
-        self._translate_pending_s -= whole
 
     async def _talk_used_seconds(self, db: AsyncSession) -> int:
         """Talk seconds already spent in the plan's window.
@@ -1675,15 +2036,36 @@ class Session:
         logger.info(
             "session.closing", session_id=self.session_id, reason=reason
         )
-        self._audio_dump.close()
+        # Stop background media workers before closing their resources.  Do
+        # not wait for an unhealthy provider or a slow diagnostic disk during
+        # teardown; session shutdown must remain prompt.
+        for task in (
+            self._audio_sender_task,
+            self._audio_dump_task,
+            self._filler_task,
+            self._turn_watch_task,
+        ):
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+        await asyncio.to_thread(self._audio_dump.close)
         if self._refine_task is not None and not self._refine_task.done():
             self._refine_task.cancel()
         # Bill the speech since the last flush. Without this every session under
         # _VOICE_FLUSH_EVERY_S would be free, and a user could talk all day in
         # 14-second bursts — the cap would count nothing. The translate meter
         # has exactly the same hole and closes it the same way.
+        voice_flush = self._voice_flush_task
+        if voice_flush is not None and not voice_flush.done():
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await voice_flush
         await self._flush_voice_usage()
         if self._mode == "translate":
+            translate_flush = self._translate_flush_task
+            if translate_flush is not None and not translate_flush.done():
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await translate_flush
             await self._flush_translate_usage()
             if self._translate_gauge_held:
                 self._translate_gauge_held = False

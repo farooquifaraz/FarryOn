@@ -132,6 +132,33 @@ class GeminiGateway(AIGateway):
             language_hints=types.LanguageHints(language_codes=hints)
         )
 
+    @staticmethod
+    def _activity_detection(types: Any, settings: Any) -> Any:
+        """The provider's automatic VAD, with the knobs the settings name.
+
+        Only what is set is passed; an empty setting keeps the provider's own
+        default for that knob, so a blank configuration is byte-for-byte the
+        pre-2026-09-10 request.
+        """
+        kwargs: dict[str, Any] = {"disabled": False}
+        start = (getattr(settings, "gemini_vad_start_sensitivity", "") or "").lower()
+        end = (getattr(settings, "gemini_vad_end_sensitivity", "") or "").lower()
+        if start in ("high", "low"):
+            kwargs["start_of_speech_sensitivity"] = getattr(
+                types.StartSensitivity, f"START_SENSITIVITY_{start.upper()}"
+            )
+        if end in ("high", "low"):
+            kwargs["end_of_speech_sensitivity"] = getattr(
+                types.EndSensitivity, f"END_SENSITIVITY_{end.upper()}"
+            )
+        silence = int(getattr(settings, "gemini_vad_silence_ms", 0) or 0)
+        if silence > 0:
+            kwargs["silence_duration_ms"] = silence
+        padding = int(getattr(settings, "gemini_vad_prefix_padding_ms", 0) or 0)
+        if padding > 0:
+            kwargs["prefix_padding_ms"] = padding
+        return types.AutomaticActivityDetection(**kwargs)
+
     def _build_config(self, api_version: str = "v1beta") -> Any:
         """Construct the ``LiveConnectConfig`` with tools + system prompt."""
         from google.genai import types  # type: ignore[import-not-found]
@@ -177,8 +204,8 @@ class GeminiGateway(AIGateway):
         # automatic VAD never re-triggers on the TTS.
         try:
             config_kwargs["realtime_input_config"] = types.RealtimeInputConfig(
-                automatic_activity_detection=types.AutomaticActivityDetection(
-                    disabled=False,
+                automatic_activity_detection=self._activity_detection(
+                    types, get_settings()
                 ),
             )
         except Exception:  # noqa: BLE001 - field optional across SDK versions
@@ -630,6 +657,18 @@ class GeminiGateway(AIGateway):
             turn_complete=False,
         )
         logger.info("gemini.image_attached", bytes=len(jpeg))
+
+    async def send_audio_stream_end(self) -> None:
+        """Tell the provider the mic stream has (for now) ended.
+
+        With automatic detection on, this is the one legal way to make it
+        finalise speech it is still holding: it flushes what it has and runs
+        its end-of-speech decision. The next audio chunk reopens the stream
+        by itself. Used by the session's stuck-turn nudge.
+        """
+        if self._session is None:
+            return
+        await self._session.send_realtime_input(audio_stream_end=True)
 
     async def send_silent_note(self, text: str) -> None:
         """Inject context WITHOUT triggering a reply (``turn_complete=False``).

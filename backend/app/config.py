@@ -422,6 +422,60 @@ class Settings(BaseSettings):
     # user has moved on is a distraction, not a help.
     refine_transcript_timeout_s: float = Field(default=8.0)
 
+    # Gemini's automatic voice-activity detection, made explicit. Only the
+    # START sensitivity is raised: with the provider default, about one short
+    # utterance in three was not noticed as speech at all - the turn opened
+    # only when the user repeated themselves (device-measured 2026-09-11: 6 of
+    # 16 turns took 6-12 s, every one heard exactly 2 s after the SECOND
+    # burst). With "high", 17 of 17 were heard first time in 1-2 s. The END
+    # knobs stay at the provider default on purpose: "high" end sensitivity
+    # with 600-700 ms of silence made the provider stop closing turns by
+    # itself entirely (every turn then waited for the nudge).
+    gemini_vad_start_sensitivity: str = Field(default="high")
+    gemini_vad_end_sensitivity: str = Field(default="")
+    gemini_vad_silence_ms: int = Field(default=0)
+    gemini_vad_prefix_padding_ms: int = Field(default=0)
+    # Safety net for the same failure: mic audio has been arriving for this
+    # long while no user speech has been heard and the assistant is silent ->
+    # the audio stream is closed for the provider (``audio_stream_end``), which
+    # makes its detector finalise whatever it is holding; the next chunk
+    # reopens the stream. 0 disables. Whatever it costs (an occasional reply
+    # to noise) is logged as ``turn.nudge`` so it can be measured.
+    stuck_turn_nudge_seconds: float = Field(default=20.0)
+    # The better trigger for the same nudge: the user has STOPPED (the client
+    # gate has sent nothing for this long) after speech the provider never
+    # opened a turn for. Device-seen 2026-09-11: with the default detector,
+    # about one turn in three ("Hello", "What is the day today") sat unheard
+    # after the words ended until something else prodded it; a nudge the
+    # moment the mic went quiet opens it in ~2 s and can never cut a sentence
+    # that is still being spoken. 0 disables; the cap above still applies.
+    stuck_turn_quiet_nudge_seconds: float = Field(default=2.0)
+    # Last resort. A provider connection can go deaf for good: nine separate
+    # utterances over 3.5 min, every nudge sent, nothing heard (live,
+    # 2026-09-11 20:01). A FRESH connection hears fine, so after this many
+    # consecutive QUIET nudges (a pause after unheard speech) with nothing
+    # heard, the session closes its socket WITHOUT a session_expired notice -
+    # the app treats that as a drop and reconnects within seconds, with the
+    # resume handle keeping the conversation. Quiet nudges, not the flowing-
+    # audio cap: music keeps the gate open and must never trip this. 0
+    # disables.
+    stuck_reconnect_after_nudges: int = Field(default=3)
+    # The client's mic gate holds silence back, so the provider's detector
+    # never SEES the quiet after a sentence - it only sees the next burst.
+    # Indoors on 2026-09-11 four "How are you?"s went unheard for 27 s until
+    # the next burst happened to land right (nudges alone did not help).
+    # When the gate has gone quiet for `after_ms`, the session sends this many
+    # seconds of true silence itself so end-of-speech can be decided at once.
+    # 0 disables. Filler bytes are never metered, dumped or refined.
+    vad_silence_filler_seconds: float = Field(default=0.0)
+    vad_silence_filler_after_ms: int = Field(default=300)
+    # The FIRST utterance of a session was the one most often missed
+    # (2026-09-11: 15:34, 18:59, 19:19, 19:59 - 8-20 s each, even with start
+    # sensitivity high). This sends that many seconds of silence right after
+    # the provider connects, so its detector has heard the "room" before the
+    # user's first words arrive. 0 disables.
+    vad_warmup_seconds: float = Field(default=0.0)
+
     affective_dialog_enabled: bool = Field(default=True)
     # Bound runaway sessions. On reaching a limit the server sends a JSON
     # `session_expired` event and closes; the app reconnects fresh (cheap,

@@ -17,6 +17,8 @@ harness's flush timing rather than the meter.
 
 from __future__ import annotations
 
+import asyncio
+
 from datetime import datetime, timezone
 
 import pytest
@@ -265,9 +267,15 @@ class TestAFailingDatabaseIsNotHammered:
 
         monkeypatch.setattr(repo, "bump_daily_usage", _boom)
 
-        # 60 seconds of audio: four flush thresholds' worth.
+        # 60 seconds of audio: four flush thresholds' worth. The flush now
+        # runs as a background task, so yield between frames (as the event
+        # loop would between real frames) and wait for the last one.
         for _ in range(60):
             await s._meter_translate(_MIC_BYTES_PER_SECOND)
+            await asyncio.sleep(0)
+        task = getattr(s, "_translate_flush_task", None)
+        if task is not None:
+            await task
 
         assert attempts == 1, (
             f"{attempts} database round-trips for one outage — the backoff is "
