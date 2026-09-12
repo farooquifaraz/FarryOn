@@ -1,9 +1,12 @@
 package com.farryon.farryon.glasses
 
 import android.app.Application
+import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothHeadset
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
@@ -153,7 +156,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         /** Extra time the glasses get to leave call state after the link drops. */
         private const val VIDEO_SCO_SETTLE_MS = 2_000L
         /** A start refused with err=255 is retried this many times, 1 s apart. */
-        private const val VIDEO_BUSY_RETRIES = 4
+        private const val VIDEO_BUSY_RETRIES = 0 // see the err=0xff note in sendVideoToggle
         private const val VIDEO_BUSY_RETRY_MS = 1_000L
         private const val CALL_MIC_CHUNK_BYTES = 1280 // 40 ms of 16 kHz mono PCM16
         private const val HFP_RECORD_DURATION_MS = 10_000L
@@ -335,6 +338,65 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         app.getSharedPreferences("glasses_lab", Context.MODE_PRIVATE)
             .getString("last_mac", null)
             ?.takeIf { it.isNotEmpty() }
+
+    /**
+     * The L80x the phone's own Bluetooth is connected to right now (classic
+     * link up: the unit that is powered on and paired), or null. Faraz's
+     * rule (2026-09-12): "jab glasses phone bluetooth per connect ho to app
+     * per bhi auto connect hona chahiye" — the phone already knows which
+     * pair is on his face; the app follows it instead of the last-used MAC.
+     */
+    private fun presentGlassesMac(): String? = try {
+        bondedGlasses().firstOrNull { it["connected"] == true }?.get("mac") as? String
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun isGlassesName(name: String?): Boolean =
+        !name.isNullOrEmpty() && name.replace(" ", "").uppercase().startsWith("L80")
+
+    /**
+     * Follow the phone's Bluetooth: when a paired L80x comes up on A2DP/HFP
+     * (the user switched the glasses on, or switched units), connect the BLE
+     * link to THAT unit without a tap — unless the user explicitly
+     * disconnected, or we are already on it. Runs from the profile receiver
+     * and from boot.
+     */
+    private fun followPhoneAudio(mac: String, why: String) {
+        if (!autoReconnectEnabled || userDisconnected || !bluetoothEnabled()) return
+        if (lastConnectionState == "connected" && pendingMac == mac) return
+        if (isConnecting && pendingMac == mac) return
+        Log.i(TAG, "follow phone audio ($why) → $mac")
+        emit("deviceEvent", mapOf("hex" to "glasses on phone Bluetooth → connecting $mac"))
+        pendingMac = mac
+        connectAttempt = 1
+        try {
+            BleOperateManager.getInstance().setReConnectMac(mac)
+        } catch (e: Throwable) {
+            Log.i(TAG, "setReConnectMac(follow): $e")
+        }
+        cleanSlateConnect(mac)
+    }
+
+    private val profileReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action ?: return
+            if (action != BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED &&
+                action != BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED
+            ) return
+            val state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1)
+            if (state != BluetoothProfile.STATE_CONNECTED) return
+            @Suppress("DEPRECATION")
+            val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                ?: return
+            val name = try { device.name } catch (e: SecurityException) { null }
+            if (!isGlassesName(name)) return
+            // The radio is busy finishing the classic link; give it a moment
+            // before the BLE connect (same reason as BT_ON_RECONNECT_DELAY_MS).
+            val mac = device.address
+            main.postDelayed({ followPhoneAudio(mac, "$name on ${if (action == BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED) "A2DP" else "HFP"}") }, BT_ON_RECONNECT_DELAY_MS)
+        }
+    }
 
     /**
      * Glasses already paired in Android's Bluetooth settings (classic-BT, for
@@ -2166,6 +2228,30 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             main.post {
                 if (videoRequestId != requestId) return@post
                 if (rsp.dataType != 1) return@post
+                // err=0xff WITH a work type is the vendor's normal answer, not a
+                // refusal: the sample app checks `errorCode == 0 || == 0xff` and
+                // then reads workTypeIng (2 = now recording). Device-seen
+                // 2026-09-12 11:37: a start answered 255/255, the retry a
+                // second later 255/2 — the glasses WERE recording, and calling
+                // that "failed" re-opened the call-mode mic on top of it.
+                // ...and err=0xff with workTypeIng=0xff is the neutral "command
+                // sent" ack in headset-linked sessions — the twin of the
+                // err=-1/workType=0 ack the recorder has always trusted. Proven
+                // the hard way 2026-09-12 11:45: retrying that "busy" reply a
+                // second later TOGGLED the recording off again (the retry's
+                // reply reported workTypeIng=2, the state it had just ended),
+                // and the media count stayed at zero. So: trust the intent, no
+                // retry, and let the recording that follows prove it.
+                if (rsp.errorCode == 0xff) {
+                    val known = rsp.workTypeIng != 0xff
+                    Log.i(TAG, "videoToggle: err=255 workTypeIng=${rsp.workTypeIng} — accepted (${if (known) "state known" else "neutral ack, trusting the intent"})")
+                    onVideoAccepted(
+                        requestId, seconds, starting, correcting,
+                        workTypeKnown = known,
+                        workTypeIng = rsp.workTypeIng,
+                    )
+                    return@post
+                }
                 if (rsp.errorCode > 0) {
                     val why = "refused err=${rsp.errorCode} ${describeWorkType(rsp.workTypeIng)}"
                     // err=0xff with no work type is how the glasses answer a
@@ -3110,6 +3196,20 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         } else {
             app.registerReceiver(btStateReceiver, btFilter)
         }
+        // Follow the phone's Bluetooth (see followPhoneAudio).
+        val profileFilter = IntentFilter().apply {
+            addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+            addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                app.registerReceiver(profileReceiver, profileFilter, Context.RECEIVER_EXPORTED)
+            } else {
+                app.registerReceiver(profileReceiver, profileFilter)
+            }
+        } catch (e: Exception) {
+            Log.i(TAG, "profile receiver: $e")
+        }
         // Guide §2.3: the notify listener (slot 100) registers AFTER
         // onServiceDiscovered, not here. Battery callback is a passive map
         // entry — safe to add up front. Remove-before-add keeps it single
@@ -3142,7 +3242,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         // HeyCyan-style: if we have a remembered device and auto-reconnect is on,
         // start connecting on boot (no scan, no user tap). Delayed so the BLE
         // stack and receivers are fully up first.
-        val boot = savedMac()
+        val present = presentGlassesMac()
+        val boot = present ?: savedMac()
+        if (present != null && present != savedMac()) {
+            Log.i(TAG, "boot: phone is on $present (saved ${savedMac()}) — following the phone")
+        }
         if (autoReconnectEnabled && boot != null) {
             main.postDelayed({
                 if (!userDisconnected && lastConnectionState != "connected" &&
@@ -3176,6 +3280,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         tts = null
         try {
             app.unregisterReceiver(btStateReceiver)
+            try {
+                app.unregisterReceiver(profileReceiver)
+            } catch (e: Exception) {
+                // never registered / already gone
+            }
         } catch (e: Exception) {
             Log.i(TAG, "unregister btStateReceiver: $e")
         }
