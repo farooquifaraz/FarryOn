@@ -151,6 +151,44 @@ class _ToolCard extends StatelessWidget {
           Icons.zoom_in,
           (a) => 'Zoom to ${a['level'] ?? '?'}x',
         );
+      case 'read_emails':
+        return _ToolSpec('Reading inbox', Icons.inbox, (a) {
+          final parts = [a['category'], a['range'], a['query']]
+              .where((v) => v != null && v.toString().isNotEmpty)
+              .join(' · ');
+          return parts.isEmpty ? 'Latest emails' : parts;
+        });
+      case 'inbox_summary':
+        return _ToolSpec(
+          'Inbox summary',
+          Icons.summarize,
+          (a) => (a['range'] ?? 'today').toString(),
+        );
+      case 'read_email':
+        return _ToolSpec(
+          'Reading email',
+          Icons.mark_email_unread,
+          (a) => (a['query'] ?? (a['uid'] != null ? 'uid ${a['uid']}' : ''))
+              .toString(),
+        );
+      case 'send_email':
+        return _ToolSpec('Sending email', Icons.outgoing_mail, (a) {
+          final reply = a['reply_to_uid'] != null ? 'Reply to ' : 'To ';
+          final cc = a['cc'] != null ? ' (cc ${a['cc']})' : '';
+          return '$reply${a['to'] ?? '?'}$cc: ${a['subject'] ?? ''}';
+        });
+      case 'forward_email':
+        return _ToolSpec(
+          'Forwarding email',
+          Icons.forward_to_inbox,
+          (a) => 'To ${a['to'] ?? '?'}',
+        );
+      case 'mark_email_read':
+        return _ToolSpec(
+          'Updating email',
+          Icons.mark_email_read,
+          (a) => a['unread'] == true ? 'Mark as unread' : 'Mark as read',
+        );
       default:
         return _ToolSpec(name, Icons.build, (a) => a.toString());
     }

@@ -108,6 +108,13 @@ class ToolContext:
     #: and write it (``app.tools.email_accounts``) so "check my mail" is asked
     #: about once, not on every turn. ``None`` outside a live session.
     email_selection: dict[str, Any] | None = None
+    #: Threading headers of the emails read this session (Message-ID,
+    #: References, Subject, From), keyed by ``address:uid`` and by Message-ID.
+    #: Filled by the read tools, read by ``send_email(reply_to_uid=…)`` so a
+    #: reply lands in the right conversation without the model ever carrying
+    #: a Message-ID. Shared (same dict) across every ToolContext of a session,
+    #: like ``email_selection``; ``None`` outside a live session.
+    email_threads: dict[str, Any] | None = None
 
 
 class Tool(abc.ABC):

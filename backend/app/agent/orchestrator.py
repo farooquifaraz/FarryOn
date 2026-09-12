@@ -93,6 +93,9 @@ class Orchestrator:
         #: Which mailbox the user settled on this session (see
         #: ``ToolContext.email_selection``). One dict, shared by reference.
         self._email_selection: dict[str, Any] = {}
+        #: Threading headers of the emails read this session (see
+        #: ``ToolContext.email_threads``). One dict, shared by reference.
+        self._email_threads: dict[str, Any] = {}
         #: Mutable — updated in place when the client sends a ``location_update``.
         self.location = location
         #: Mutable — set to the latest INPUT_VIDEO JPEG by the session so the
@@ -341,6 +344,7 @@ class Orchestrator:
                 email=self._email,
                 emails=self._emails,
                 email_selection=self._email_selection,
+                email_threads=self._email_threads,
                 location=self.location,
                 last_frame=self.last_frame,
                 last_frame_at=self.last_frame_at,
