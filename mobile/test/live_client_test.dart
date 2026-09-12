@@ -145,6 +145,99 @@ void main() {
     });
   });
 
+  group('one socket per phone', () {
+    test('a config move closes the old socket before opening the new one',
+        () async {
+      final created = <FakeChannel>[];
+      final client = WebSocketLiveClient(
+        config: _config(),
+        platform: 'android',
+        deviceInfoProvider: _device,
+        channelFactory: (_) {
+          final c = FakeChannel();
+          created.add(c);
+          return c;
+        },
+      );
+      addTearDown(client.dispose);
+
+      client.start();
+      await Future<void>.delayed(Duration.zero);
+      expect(created.length, 1);
+
+      client.updateConfig(
+          const AppConfig(host: 'other.example', port: 8000, secure: false));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(created.length, 2, reason: 'exactly one replacement socket');
+      expect(created[0].closed, isTrue, reason: 'the old socket is closed');
+      expect(created[1].closed, isFalse);
+      // The replacement handshakes like a first connect.
+      final hello = jsonDecode(created[1].sentLog.first as String);
+      expect(hello['type'], 'hello');
+    });
+
+    test('endedByServer: the close that follows does not reconnect',
+        () async {
+      final created = <FakeChannel>[];
+      final client = WebSocketLiveClient(
+        config: _config(),
+        platform: 'android',
+        deviceInfoProvider: _device,
+        channelFactory: (_) {
+          final c = FakeChannel();
+          created.add(c);
+          return c;
+        },
+      );
+      addTearDown(client.dispose);
+
+      client.start();
+      await Future<void>.delayed(Duration.zero);
+      created.single.pushJson({
+        'type': 'ready',
+        'sessionId': 's1',
+        'protocolVersion': 1,
+        'model': 'm',
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(client.currentStatus, ConnectionStatus.connected);
+
+      // The server said `session_expired` and is about to close the socket.
+      client.endedByServer();
+      created.single.drop();
+      // Longer than the first backoff (≤ 500 ms): a reconnect would have fired.
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+
+      expect(created.length, 1, reason: 'no second socket');
+      expect(client.currentStatus, ConnectionStatus.disconnected);
+    });
+
+    test('a drop while started opens exactly one replacement socket',
+        () async {
+      final created = <FakeChannel>[];
+      final client = WebSocketLiveClient(
+        config: _config(),
+        platform: 'android',
+        deviceInfoProvider: _device,
+        channelFactory: (_) {
+          final c = FakeChannel();
+          created.add(c);
+          return c;
+        },
+      );
+      addTearDown(client.dispose);
+
+      client.start();
+      await Future<void>.delayed(Duration.zero);
+      created.single.drop();
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+
+      expect(created.length, 2);
+      expect(created[0].closed, isTrue);
+    });
+  });
+
   group('media frames', () {
     test('sendAudio emits a 0x01 frame, sendVideo a 0x02 frame', () async {
       final fake = FakeChannel();

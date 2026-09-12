@@ -1501,6 +1501,32 @@ class Session:
             unheard_s=round(limit, 1),
         )
 
+    async def supersede(self) -> None:
+        """A newer connection from the same account is taking over.
+
+        Tell this client WHY (``session_expired`` / ``superseded``, which the
+        app treats as a deliberate end and does not auto-reconnect) and close
+        the socket so :meth:`run` unwinds and the gateway is released. One
+        account, one live session: until 2026-09-13 every reconnect, retry or
+        second device simply stacked another session on top of the running
+        one, and each of them streamed the mic to the model and answered.
+        """
+        if self._closing:
+            return
+        await self._expire_session("superseded")
+        ws = getattr(self, "_ws", None)
+        if ws is None:
+            return
+        try:
+            if ws.application_state == WebSocketState.CONNECTED:
+                await ws.close(code=1000)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "session.supersede_close_failed",
+                session_id=self.session_id,
+                error=repr(exc),
+            )
+
     async def _close_for_reconnect(self) -> None:
         """Close the client socket so the app reconnects (see stuck_reconnect)."""
         ws = getattr(self, "_ws", None)

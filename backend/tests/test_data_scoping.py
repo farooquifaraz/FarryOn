@@ -147,6 +147,43 @@ def test_ws_session_belongs_to_the_token_holder() -> None:
         assert asyncio.run(_owner_of_session()) == alice_id
 
 
+def test_ws_second_connection_for_the_same_user_supersedes_the_first() -> None:
+    """One account, one live session.
+
+    The app reconnects on every drop and retries a slow handshake, and until
+    2026-09-13 each of those STACKED a new session on the running one — three
+    sessions from one phone, all streaming the mic, all answering, all billed.
+    The newer connection now wins: the older one is told `session_expired`
+    with reason `superseded` (which the app treats as a deliberate end, so it
+    does not reconnect) and its socket is closed.
+    """
+    from app.ws.live import active_session_for
+
+    with _client() as client:
+        token = _sign_up(client, "wsdouble@example.com")
+        user_id = _user_id(client, token)
+
+        with client.websocket_connect(f"/ws/live?token={token}") as first:
+            first_ready = _handshake(first)
+            assert active_session_for(user_id).session_id == first_ready["sessionId"]
+
+            with client.websocket_connect(f"/ws/live?token={token}") as second:
+                second_ready = _handshake(second)
+                assert second_ready["sessionId"] != first_ready["sessionId"]
+                # The registry now names the newcomer …
+                assert (
+                    active_session_for(user_id).session_id
+                    == second_ready["sessionId"]
+                )
+                # … and the first socket was told why it is going away.
+                msg = first.receive_json()
+                while msg.get("type") != "session_expired":
+                    msg = first.receive_json()
+                assert msg["reason"] == "superseded"
+
+        assert active_session_for(user_id) is None
+
+
 def test_ws_session_without_a_token_falls_back_to_anonymous(
     dev_auth_mode: None,
 ) -> None:

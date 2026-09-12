@@ -124,7 +124,13 @@ class WebSocketLiveClient {
   static const Duration _maxBackoff = Duration(seconds: 8);
   // If the socket opens but the server never sends `ready`, recover instead of
   // hanging in `connecting` forever (half-open LB, stuck worker, TLS proxy).
-  static const Duration _readyTimeout = Duration(seconds: 10);
+  //
+  // 20 s, not 10: `ready` only comes after the backend has connected to the
+  // model, and a slow model connect (or its fallback probing) takes longer
+  // than 10 s. With 10 s the app dropped a socket whose server session was
+  // ALIVE and opened a second one — the server then ran both, both got the
+  // mic, both answered (live log 2026-09-13, "double session").
+  static const Duration _readyTimeout = Duration(seconds: 20);
 
   final _events = StreamController<ServerMessage>.broadcast();
   final _frames = StreamController<DecodedFrame>.broadcast();
@@ -166,6 +172,18 @@ class WebSocketLiveClient {
   bool _started = false; // user wants to be connected
   bool _disposed = false;
 
+  /// A connect is being set up right now (socket created, handshake going
+  /// out). [_connect] refuses to run again while this is set or while
+  /// [_channel] is non-null: every re-entry used to overwrite the fields and
+  /// orphan a live socket whose subscription kept feeding events — the app
+  /// then had two server sessions listening and answering at once.
+  bool _connecting = false;
+
+  /// Bumped on every socket we open. Callbacks from an older socket (a late
+  /// `onDone` after a teardown) compare their generation and stand down
+  /// instead of tearing down the socket that replaced them.
+  int _generation = 0;
+
   /// Update the backend target. If currently started, and the **endpoint**
   /// actually moved, this forces a clean reconnect against the new one.
   ///
@@ -181,9 +199,28 @@ class WebSocketLiveClient {
     _config = config;
     if (_started && !_disposed && moved) {
       _log.info('config updated → reconnecting to ${config.liveUri}');
-      _teardownSocket();
-      _connect();
+      unawaited(_reconnectNow());
     }
+  }
+
+  /// Close the current socket and only THEN open the next one. The old
+  /// fire-and-forget teardown left the previous socket closing while the new
+  /// one already had a server session — two billed sessions for one phone.
+  Future<void> _reconnectNow() async {
+    await _teardownSocket(closeCode: ws_status.normalClosure);
+    _connect();
+  }
+
+  /// The server ended this session on purpose (`session_expired`: idle, the
+  /// max-session cap, or a newer connection from the same account taking
+  /// over). The socket close that follows must NOT look like a network drop:
+  /// the reconnect that used to fire here opened a fresh server session
+  /// (and started billing) while the app was still tearing the old one down.
+  /// Synchronous on purpose — it has to land before the close arrives.
+  void endedByServer() {
+    _started = false;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
   }
 
   /// The live URI with the token removed — everything a reconnect would be for.
@@ -247,6 +284,16 @@ class WebSocketLiveClient {
 
   void _connect() {
     if (_disposed || !_started) return;
+    if (_connecting || _channel != null) {
+      // One socket at a time. Whoever wants a NEW one closes this one first
+      // (see _reconnectNow / _handleDrop); a second connect on top of a live
+      // socket is the double-session bug, never a legitimate request.
+      _log.info(
+          'connect ignored: a socket is already '
+          '${_channel != null ? "open" : "being opened"}');
+      return;
+    }
+    _connecting = true;
     _reconnectTimer?.cancel();
     _setStatus(ConnectionStatus.connecting);
 
@@ -257,18 +304,27 @@ class WebSocketLiveClient {
     try {
       channel = _channelFactory(uri);
     } catch (e, st) {
+      _connecting = false;
       _log.error('connect failed synchronously', e, st);
       _scheduleReconnect();
       return;
     }
+    final gen = ++_generation;
     _channel = channel;
 
     _socketSub = channel.stream.listen(
       _onSocketData,
-      onError: _onSocketError,
-      onDone: _onSocketDone,
+      onError: (Object error, StackTrace st) {
+        if (gen != _generation) return; // a replaced socket: not ours to act on
+        _onSocketError(error, st);
+      },
+      onDone: () {
+        if (gen != _generation) return;
+        _onSocketDone();
+      },
       cancelOnError: false,
     );
+    _connecting = false;
 
     // Handshake immediately; the server replies with `ready` (§6).
     _sendHandshake();
@@ -433,9 +489,13 @@ class WebSocketLiveClient {
 
   void _handleDrop() {
     if (_disposed) return;
-    _teardownSocket();
+    final teardown = _teardownSocket();
     if (_started) {
-      _scheduleReconnect();
+      // The next socket waits for this one to finish closing. Scheduling the
+      // reconnect while the close was still in flight is how one phone ended
+      // up with two server sessions (2026-09-13).
+      _setStatus(ConnectionStatus.reconnecting);
+      unawaited(teardown.then((_) => _scheduleReconnect()));
     } else {
       _setStatus(ConnectionStatus.disconnected);
     }

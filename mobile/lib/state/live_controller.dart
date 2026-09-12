@@ -1329,9 +1329,36 @@ class LiveController {
 
   // ---- Lifecycle ---------------------------------------------------------
 
+  /// A [connect] is running (permissions, engines, socket). A second call in
+  /// that window — the "Start session" button tapped twice, a screen remount
+  /// re-running its post-frame connect — used to run the whole sequence
+  /// again on top of the first and open a second server session.
+  bool _connectInFlight = false;
+
   /// Acquire permissions, prepare the audio engine + capture device, and open
   /// the socket. Returns the permission outcome so the UI can show rationale.
+  ///
+  /// Idempotent: while a session is connecting, connected, or waiting to
+  /// reconnect, another call is a no-op — one phone, one session.
   Future<PermissionOutcome> connect() async {
+    if (_connectInFlight) {
+      _log.info('connect ignored: already in flight');
+      return PermissionOutcome.granted;
+    }
+    final status = _client.currentStatus;
+    if (status != ConnectionStatus.disconnected) {
+      _log.info('connect ignored: session already ${status.name}');
+      return PermissionOutcome.granted;
+    }
+    _connectInFlight = true;
+    try {
+      return await _connectImpl();
+    } finally {
+      _connectInFlight = false;
+    }
+  }
+
+  Future<PermissionOutcome> _connectImpl() async {
     final outcome = await _permissions.requestMicAndCamera();
     _emit(_state.copyWith(
       permissionsGranted: outcome == PermissionOutcome.granted,
@@ -1636,15 +1663,24 @@ class LiveController {
           // resume handle per user, so the next session picks up the context.
           final reason = (msg.raw['reason'] as String?) ?? 'idle';
           _log.info('session ended by server (reason: $reason)');
+          // Before anything async: the server closes the socket right after
+          // this message, and the client's drop handler must already know
+          // the close is deliberate — or it reconnects into a fresh (billed)
+          // session while disconnect() is still stopping the mic.
+          _client.endedByServer();
           _emit(_state.copyWith(transcripts: [
             ..._state.transcripts,
             TranscriptEntry(
               role: 'notice',
-              text: reason == 'idle'
-                  ? 'Session paused — kuch der se koi baat nahi hui. '
-                      'Start dabate hi wahin se continue hoga.'
-                  : 'Session ki time limit poori ho gayi. '
-                      'Start dabate hi wahin se continue hoga.',
+              text: switch (reason) {
+                'idle' => 'Session paused — kuch der se koi baat nahi hui. '
+                    'Start dabate hi wahin se continue hoga.',
+                'superseded' =>
+                  'Ye session band ho gayi: isi account se ek nayi session '
+                      'shuru hui hai (doosra device ya app dobara khuli).',
+                _ => 'Session ki time limit poori ho gayi. '
+                    'Start dabate hi wahin se continue hoga.',
+              },
               isFinal: true,
             ),
           ]));
