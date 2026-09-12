@@ -484,8 +484,9 @@ class ForwardEmailTool(Tool):
             },
             "range": {
                 "type": "string",
-                "enum": ["today", "yesterday", "week", "month"],
-                "description": "Search window when using query (default week).",
+                "enum": email_read._RANGES,
+                "description": "Search window when using query (default the "
+                "last month; 'all' = the whole mailbox).",
             },
             "note": {
                 "type": "string",
@@ -535,7 +536,7 @@ class ForwardEmailTool(Tool):
             found = await asyncio.to_thread(
                 email_read.fetch_raw_message, imap_host, imap_address,
                 imap_password, uid=uid, query=query,
-                range_=kwargs.get("range") or "week",
+                range_=kwargs.get("range") or "month",
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("forward_email.fetch_failed", error=str(exc))

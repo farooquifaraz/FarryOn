@@ -101,6 +101,8 @@ _RANGE_GMAIL = {
     "month": "newer_than:30d",
 }
 _RANGE_DAYS = {"today": 1, "yesterday": 2, "week": 7, "month": 30}
+#: The windows a tool accepts; ``all`` is the whole mailbox (searches only).
+_RANGES = ["today", "yesterday", "week", "month", "all"]
 
 
 class MailPage(list):
@@ -220,17 +222,32 @@ def _imap_quote(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _default_range(category: str | None, text: str | None) -> str:
+    """The window when the caller named none.
+
+    A SEARCH ("find the email from Faraz") looks back a month — the user is
+    hunting for something, and "nothing today" is the wrong answer when it
+    arrived on Tuesday. A category browse gets a week so there is something
+    to show; a plain "what's new" is just today.
+    """
+    if text:
+        return "month"
+    return "week" if category else "today"
+
+
 def _gmail_query(category: str | None, range_: str | None, text: str | None) -> str:
-    """Build a Gmail search string from category + range + free text."""
+    """Build a Gmail search string from category + range + free text.
+
+    ``range_="all"`` drops the time fragment: the whole mailbox. ``text`` is
+    passed through verbatim, so Gmail's own search syntax works (``from:ali``,
+    ``subject:invoice``, ``has:attachment``, ``older_than:1y``).
+    """
     parts: list[str] = []
     if category and category in _CATEGORY_GMAIL:
         parts.append(_CATEGORY_GMAIL[category])
-    if range_ and range_ in _RANGE_GMAIL:
+    range_ = range_ or _default_range(category, text)
+    if range_ in _RANGE_GMAIL:
         parts.append(_RANGE_GMAIL[range_])
-    elif not range_:
-        # Default window: a week when a category is set (so there's something to
-        # show), otherwise just today.
-        parts.append("newer_than:7d" if category else "newer_than:1d")
     if text:
         parts.append(text.strip())
     return " ".join(parts) or "newer_than:1d"
@@ -239,11 +256,13 @@ def _gmail_query(category: str | None, range_: str | None, text: str | None) -> 
 def _imap_search_args(category: str | None, range_: str | None,
                       text: str | None) -> list[str]:
     """Standard-IMAP fallback search (non-Gmail) for category/range/text."""
-    days = _RANGE_DAYS.get(range_ or "today", 1)
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
-        "%d-%b-%Y"
-    )
-    args: list[str] = ["SINCE", since]
+    args: list[str] = []
+    range_ = range_ or _default_range(category, text)
+    if range_ in _RANGE_DAYS:
+        since = (
+            datetime.now(timezone.utc) - timedelta(days=_RANGE_DAYS[range_])
+        ).strftime("%d-%b-%Y")
+        args += ["SINCE", since]
     if category == "unread":
         args.insert(0, "UNSEEN")
     elif category == "starred" or category == "important":
@@ -251,7 +270,8 @@ def _imap_search_args(category: str | None, range_: str | None,
     if text:
         # Quoted, or a multi-word keyword is split into bogus search keys.
         args += ["TEXT", _imap_quote(text.strip())]
-    return args
+    # IMAP SEARCH needs at least one key; "all" with no filter is the mailbox.
+    return args or ["ALL"]
 
 
 # ---------------------------------------------------------------------------
@@ -559,7 +579,7 @@ def fetch_thread_headers(host: str, address: str, password: str, uid: str
 
 def fetch_raw_message(
     host: str, address: str, password: str, *, uid: str | None = None,
-    query: str | None = None, range_: str | None = "week",
+    query: str | None = None, range_: str | None = "month",
 ) -> dict[str, Any] | None:
     """The complete raw message (for forwarding), by ``uid`` or by search.
 
@@ -615,7 +635,7 @@ def set_seen(
         if uid:
             uids = [str(uid).encode()]
         else:
-            uids = _search_uids(imap, _is_gmail(host), category, range_ or "week", query)
+            uids = _search_uids(imap, _is_gmail(host), category, range_ or "month", query)
             if not uids:
                 return {"count": 0, "uids": []}
             uids = uids[-_MAX_STORE:] if all_matching else uids[-1:]
@@ -745,10 +765,13 @@ class ReadEmailsTool(Tool):
         "Read the user's emails (sender, subject, snippet, uid, unread, and an "
         "importance tag with reasons). Filter by category (promotions, social, "
         "updates, important, unread, starred, primary) and/or a time range "
-        "(today, yesterday, week, month). The result's `total` is how many "
-        "emails MATCHED — when `has_more` is true, more arrived than are "
-        "listed, so say 'more than N'. Use for any question about their "
-        "inbox / mail."
+        "(today, yesterday, week, month, all). To FIND someone's emails pass "
+        "`query` = their name or address (on Gmail the Gmail search syntax "
+        "works too: from:ali, subject:invoice, has:attachment); a query "
+        "searches the last month unless a range is given. The result's `total` "
+        "is how many emails MATCHED — when `has_more` is true, more arrived "
+        "than are listed, so say 'more than N'. Use for any question about "
+        "their inbox / mail."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -763,12 +786,15 @@ class ReadEmailsTool(Tool):
             },
             "range": {
                 "type": "string",
-                "enum": ["today", "yesterday", "week", "month"],
-                "description": "Time window (default today).",
+                "enum": _RANGES,
+                "description": "Time window: default today, or the last month "
+                "when a query is given; 'all' = the whole mailbox.",
             },
             "query": {
                 "type": "string",
-                "description": "Optional sender or keyword to filter by.",
+                "description": "Sender name / address or a keyword to search "
+                "for (e.g. 'Faraz', 'faraz@gmail.com', 'invoice', or on Gmail "
+                "'from:faraz has:attachment').",
             },
             "limit": {
                 "type": "integer",
@@ -933,8 +959,9 @@ class ReadEmailTool(Tool):
             },
             "range": {
                 "type": "string",
-                "enum": ["today", "yesterday", "week", "month"],
-                "description": "Time window to search (default week).",
+                "enum": _RANGES,
+                "description": "Time window to search (default the last "
+                "month; 'all' = the whole mailbox).",
             },
             "account": {
                 "type": "string",
@@ -953,7 +980,7 @@ class ReadEmailTool(Tool):
         host, address, password, label = _imap_creds(account)
         uid = str(kwargs.get("uid") or "").strip() or None
         query = (kwargs.get("query") or None)
-        range_ = (kwargs.get("range") or "week")
+        range_ = (kwargs.get("range") or "month")
         try:
             if uid:
                 emails = await asyncio.to_thread(

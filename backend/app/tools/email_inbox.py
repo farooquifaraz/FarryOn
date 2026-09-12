@@ -256,8 +256,9 @@ class MarkEmailReadTool(Tool):
             },
             "range": {
                 "type": "string",
-                "enum": _RANGES,
-                "description": "Search window (default week).",
+                "enum": email_read._RANGES,
+                "description": "Search window (default the last month for a "
+                "query, the week for all=true; 'all' = the whole mailbox).",
             },
             "unread": {
                 "type": "boolean",
@@ -285,7 +286,7 @@ class MarkEmailReadTool(Tool):
         uid = str(kwargs.get("uid") or "").strip() or None
         query = (kwargs.get("query") or "").strip() or None
         category = kwargs.get("category") or None
-        range_ = kwargs.get("range") or "week"
+        range_ = kwargs.get("range") or ("month" if query else "week")
         seen = not bool(kwargs.get("unread"))
         all_matching = bool(kwargs.get("all"))
         if not uid and not query and not (all_matching and (category or range_)):

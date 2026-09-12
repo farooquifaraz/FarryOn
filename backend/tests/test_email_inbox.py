@@ -221,7 +221,7 @@ async def test_mark_unread_by_query(db_session, monkeypatch) -> None:
     )
     assert result["marked"] == "unread"
     assert seen["query"] == "amazon" and seen["seen"] is False
-    assert seen["range_"] == "week"
+    assert seen["range_"] == "month"  # a search looks back a month
 
 
 async def test_mark_all_promotions_read(db_session, monkeypatch) -> None:
