@@ -50,7 +50,7 @@ liye keywords section 13 me hain.
 | E1.2 | Galat app password se Test connection | Honest error ("Login rejected…" / AUTHENTICATIONFAILED), app hang na ho | — | ✗ skipped 2026-09-12 (user choice) |
 | E1.3 | Doosra mailbox (Hostinger) add karo, Test connection | Connected | — | ☑ 2026-09-12 (label "Work") |
 | E1.4 | Nayi session start karo, bolo: **"meri email check karo"** | Farry poochta hai: "Both email accounts are registered. Your registered accounts are: Primary: '<a>' and Secondary: '<b>'. Please let me know which account…" — **bina pooche koi mailbox nahi padhta** | Log me `read_emails` result `needs_selection` | ☑ 2026-09-12 (exact wording, both addresses right) |
-| E1.5 | Jawab do: **"primary"** | Ab primary ki mails padhta hai, original request yaad rakhta hai (dobara nahi poochta "kya karun") | — | ☐ |
+| E1.5 | Jawab do: **"primary"** | Ab primary ki mails padhta hai, original request yaad rakhta hai (dobara nahi poochta "kya karun") | — | ✗ 2026-09-12 — Farry: "primary email me 10 email hain" (old behaviour); backend most likely still on `main`, redo after deploying this branch (see EMAIL_TEST_AGENT_PROMPT.md step 0) |
 | E1.6 | Usi session me bolo: **"koi zaroori mail hai?"** | **Dobara account nahi poochta**, primary use karta hai | — | ☐ |
 | E1.7 | Bolo: **"secondary account ki mail padho"** | Ab Hostinger wali padhta hai, aur aage se wahi yaad rakhta hai | — | ☐ |
 | E1.8 | Sirf **ek** mailbox rakh kar nayi session: "meri email check karo" | "Only one email account is registered: '<address>'. Should I continue with this account?" → "yes" ke baad padhta hai | — | ☐ |
