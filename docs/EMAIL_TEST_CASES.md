@@ -46,7 +46,7 @@ liye keywords section 13 me hain.
 
 | ID | Bolo / karo | Expected | Verify | Result |
 |---|---|---|---|---|
-| E1.1 | Settings → Email inbox → Gmail add karo → **Test connection** | "Connected · inbox reachable" | — | ☐ |
+| E1.1 | Settings → Email inbox → Gmail add karo → **Test connection** | "Connected · inbox reachable" | — | ☑ 2026-09-12 (3 s) |
 | E1.2 | Galat app password se Test connection | Honest error ("Login rejected…" / AUTHENTICATIONFAILED), app hang na ho | — | ☐ |
 | E1.3 | Doosra mailbox (Hostinger) add karo, Test connection | Connected | — | ☐ |
 | E1.4 | Nayi session start karo, bolo: **"meri email check karo"** | Farry poochta hai: "Both email accounts are registered. Your registered accounts are: Primary: '<a>' and Secondary: '<b>'. Please let me know which account…" — **bina pooche koi mailbox nahi padhta** | Log me `read_emails` result `needs_selection` | ☐ |
