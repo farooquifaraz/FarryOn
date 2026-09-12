@@ -49,7 +49,7 @@ class AuthLogo extends StatelessWidget {
               ],
             ),
             child: Image.asset(
-              'assets/logo/embossed-mark-1024.png',
+              'assets/icon/farryon_icon.png',
               fit: BoxFit.contain,
               // A missing asset must not leave a blank screen where the brand
               // should be — fall back to a glyph in the same colour.

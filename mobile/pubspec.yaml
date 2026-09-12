@@ -83,9 +83,8 @@ flutter:
   uses-material-design: true
 
   assets:
-    # The brand mark, shown on the auth screens.
-    - assets/logo/embossed-mark-1024.png
-    # The winged-orb emblem, shown at the centre of the live-screen orb.
+    # The FarryOn mark (2026-09-12): auth screens, the live-screen orb, and
+    # the launcher-icon source — one file so the brand cannot drift.
     - assets/icon/farryon_icon.png
 
 # App icon — the FARRYON winged-orb emblem. Source lives at the path below;
@@ -95,7 +94,9 @@ flutter_launcher_icons:
   ios: false
   image_path: "assets/icon/farryon_icon.png"
   min_sdk_android: 21
-  # Adaptive icon: background matches the emblem's own dark-teal backdrop so the
-  # masked foreground blends seamlessly.
-  adaptive_icon_background: "#0E242B"
+  # Adaptive icon (2026-09-12 logo): the generator insets the foreground 16 %
+  # on every side, which lands the full-bleed rounded-square mark exactly in
+  # the 66 % safe zone, on the logo's own dark-navy interior — every launcher
+  # mask (circle, squircle, rounded square) keeps the whole F.
+  adaptive_icon_background: "#07093E"
   adaptive_icon_foreground: "assets/icon/farryon_icon.png"
