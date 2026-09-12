@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import imaplib
+from datetime import datetime, timezone
 
 import pytest
 
@@ -461,3 +462,61 @@ async def test_read_email_by_uid_returns_a_reply_hint(db_session, monkeypatch) -
     assert "Body of URGENT" in result["body"]
     assert ctx.email_threads["me@gmail.com:102"]["message_id"] == "<m102@x.com>"
     assert "takeaways" in result["_instruction"] or "summary" in result["_instruction"]
+
+
+# ---- searching for someone's mail -------------------------------------------------
+
+def test_a_search_looks_back_a_month_by_default() -> None:
+    """'Find the email from Faraz' must not mean 'from Faraz, today'."""
+    assert email_read._gmail_query(None, None, "Faraz") == "newer_than:30d Faraz"
+    assert email_read._gmail_query(None, None, "from:faraz has:attachment") == (
+        "newer_than:30d from:faraz has:attachment"
+    )
+    args = email_read._imap_search_args(None, None, "Faraz")
+    assert args[0] == "SINCE" and args[2:] == ["TEXT", '"Faraz"']
+    since = datetime.strptime(args[1], "%d-%b-%Y").replace(tzinfo=timezone.utc)
+    assert 29 <= (datetime.now(timezone.utc) - since).days <= 31
+    # Browsing (no query) keeps its short windows.
+    assert email_read._gmail_query(None, None, None) == "newer_than:1d"
+    assert email_read._gmail_query("promotions", None, None) == "category:promotions newer_than:7d"
+
+
+def test_range_all_searches_the_whole_mailbox() -> None:
+    assert email_read._gmail_query(None, "all", "Faraz") == "Faraz"
+    assert email_read._gmail_query("unread", "all", None) == "is:unread"
+    assert email_read._imap_search_args(None, "all", "Faraz") == ["TEXT", '"Faraz"']
+    assert email_read._imap_search_args(None, "all", None) == ["ALL"]
+    assert email_read._imap_search_args("unread", "all", None) == ["UNSEEN"]
+
+
+async def test_read_emails_query_is_passed_through(db_session, monkeypatch) -> None:
+    seen: dict = {}
+
+    def fake_fetch(host, address, password, limit, query, category, range_,
+                   full_body=False):
+        seen.update(query=query, range_=range_)
+        return []
+
+    monkeypatch.setattr(email_read, "_fetch_emails", fake_fetch)
+    ctx = ToolContext(
+        session=db_session, email={"address": "me@gmail.com", "appPassword": "pw"},
+    )
+    await ReadEmailsTool().run(ctx, account="primary", query="Faraz", range="all")
+    assert seen == {"query": "Faraz", "range_": "all"}
+
+
+async def test_read_email_by_query_defaults_to_a_month(db_session, monkeypatch) -> None:
+    seen: dict = {}
+
+    def fake_fetch(host, address, password, limit, query, category, range_,
+                   full_body=False):
+        seen.update(query=query, range_=range_, full_body=full_body, limit=limit)
+        return []
+
+    monkeypatch.setattr(email_read, "_fetch_emails", fake_fetch)
+    ctx = ToolContext(
+        session=db_session, email={"address": "me@gmail.com", "appPassword": "pw"},
+    )
+    result = await email_read.ReadEmailTool().run(ctx, account="primary", query="Faraz")
+    assert result["ok"] is False and "no matching" in result["message"].lower()
+    assert seen == {"query": "Faraz", "range_": "month", "full_body": True, "limit": 1}

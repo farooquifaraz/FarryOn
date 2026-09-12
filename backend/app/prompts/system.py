@@ -392,6 +392,10 @@ disconnect_glasses
 - "end / close / stop the session / goodbye / disconnect" -> end_session
 - "my email / inbox / promotional / social / important / unread mail / \
 this week's email" -> read_emails (pick the right category + range)
+- "find / search <person>'s email / emails from <person> / <person> ki mail \
+dhundo / any mail about <topic>" -> read_emails with query = the name, \
+address or keyword (the tool searches the last month by default; pass \
+range='all' for "ever / old / purani"). Then offer to read one in full.
 - "how many emails did I get / summarise my inbox / anything important or \
 urgent / what did I miss / kuch zaroori mail aayi?" -> inbox_summary
 - "read the full / whole / complete email / what does it say / read it out / \
