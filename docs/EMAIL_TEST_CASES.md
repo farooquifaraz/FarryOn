@@ -65,11 +65,11 @@ Precondition: aaj Primary me **12 se zyada** mails aayi hon (S1–S6 se ho jaaye
 
 | ID | Bolo | Expected | Verify | Result |
 |---|---|---|---|---|
-| E2.1 | **"aaj kitni emails aayi?"** | Exact number ("aaj 14 mails aayi") ya "10 se zyada" — **"10 emails" kabhi nahi** | Gmail me `newer_than:1d` search karke ginti milao | ☐ |
-| E2.2 | **"meri mail padho"** (bina count pooche) | List 10 tak sunata hai, lekin agar zyada hain to "aur bhi hain / 10+" bolta hai | Log: `read_emails` result me `total`, `has_more: true` | ☐ |
-| E2.3 | **"kitni unread mails hain?"** | Poore inbox ka unread count (Gmail ke unread badge se match) | Gmail inbox unread number | ☐ |
-| E2.4 | **"is hafte kitni mails aayi?"** | Week ka total, sirf list ki length nahi | Gmail `newer_than:7d` | ☐ |
-| E2.5 | **"dono accounts ki aaj ki mails"** | Dono ka merged total; agar ek down ho to naam le kar batata hai "X mailbox nahi padh paya" | — | ☐ |
+| E2.1 | **"aaj kitni emails aayi?"** | Exact number ("aaj 14 mails aayi") ya "10 se zyada" — **"10 emails" kabhi nahi** | Gmail me `newer_than:1d` search karke ginti milao | ☑ 2026-09-12 (typed) — "आज 45 ईमेल आई हैं", exact total from row 390 (`total: 45`); Gmail `newer_than:1d` cross-check pending (user) |
+| E2.2 | **"meri mail padho"** (bina count pooche) | List 10 tak sunata hai, lekin agar zyada hain to "aur bhi hain / 10+" bolta hai | Log: `read_emails` result me `total`, `has_more: true` | ☑ 2026-09-12 (typed) — row 392 `read_emails` `total: 46, has_more: true, count: 5`; Farry: "आज 46 ईमेल आई हैं, जिनमें से 5 सबसे नई हैं…" (never "5 emails") — note: the bare "meri mail padho" first got "कौन से अकाउंट… primary या secondary?" from the model without a tool call (both mailboxes had been used in the session) |
+| E2.3 | **"kitni unread mails hain?"** | Poore inbox ka unread count (Gmail ke unread badge se match) | Gmail inbox unread number | ✗ 2026-09-12 (typed) — no tool call; Farry: "आज 42 अपठित ईमेल हैं" = today's unread from the cached summary, not the inbox unread (`inbox_unread: 1402` was in the same result). Model ignored the field → prompt hardening: for "kitni unread" say `inbox_unread` |
+| E2.4 | **"is hafte kitni mails aayi?"** | Week ka total, sirf list ki length nahi | Gmail `newer_than:7d` | ☑ 2026-09-12 (typed) — "इस हफ़्ते कुल 73 ईमेल", the week total from row 386 (`total: 73`), not the list length; Gmail `newer_than:7d` cross-check pending (user) |
+| E2.5 | **"dono accounts ki aaj ki mails"** | Dono ka merged total; agar ek down ho to naam le kar batata hai "X mailbox nahi padh paya" | — | ☑ 2026-09-12 (typed) — "primary में आज 46 ईमेल और secondary में 7", both correct (rows 392/391); answered from cached per-account results, the `account: all` merge path was not exercised |
 
 ---
 
