@@ -291,6 +291,18 @@ zero FATALs across ~20 connect cycles. Still open: EA9 (reboot), EA10
 | F3 | "Read email from my work account" | Reads the **named** mailbox | ☐ |
 | F4 | Send from a named mailbox | Sends from the right address | ☐ |
 | F5 | Wrong app password | Graceful message, no hang | ☐ |
+| F6 | "How many emails today" with >10 in the inbox | The true total or "more than ten" — never "ten" | ☐ |
+| F7 | "Anything important?" with a seeded `URGENT:` mail + a shouting promo | The mail is critical with a reason; the promo is not | ☐ |
+| F8 | "Find Sara's emails" for a mail older than today | Found (a search looks back a month) | ☐ |
+| F9 | Reply to a read mail, "yes" | Lands in the same Gmail thread (`In-Reply-To`), `Re:` subject | ☐ |
+| F10 | Send with "cc my boss" | Cc read back in the confirmation, present in the header | ☐ |
+| F11 | "Forward this to X" on a mail with a PDF | `Fwd:` + quoted original + the PDF attached; confirmed first | ☐ |
+| F12 | "Mark it as read" / "mark all promotions read" | Done without confirmation; Gmail agrees | ☐ |
+| F13 | Reading a mail | Leaves it unread in Gmail (BODY.PEEK) | ☐ |
+| F14 | Gmail's own Important marker on a mail | Summary names it with "Gmail marked it important" | ☐ |
+
+F6–F14 in full, with seed mails and the log lines to watch:
+**[EMAIL_TEST_CASES.md](EMAIL_TEST_CASES.md)**.
 
 ### G. Cost + quota
 
