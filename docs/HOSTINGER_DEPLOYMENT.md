@@ -210,8 +210,14 @@ log in with `FIRST_SUPER_ADMIN_EMAIL` / `FIRST_SUPER_ADMIN_PASSWORD`.
 The Flutter app connects to the backend over `wss://`:
 
 1. Build the APK: GitHub Actions →
-   [`build-apk.yml`](../.github/workflows/build-apk.yml) (or locally:
-   `cd mobile && flutter build apk --release`).
+   [`build-apk.yml`](../.github/workflows/build-apk.yml), or locally with the
+   **same build number formula** so a website build always installs over a
+   local one and vice versa (versionCode = 2000 + commit count; the arm64
+   split adds 2000 more):
+
+   ```bash
+   cd mobile && flutter build apk --release --split-per-abi      --build-number=$((2000 + $(git rev-list --count HEAD)))      --dart-define=GOOGLE_SERVER_CLIENT_ID=<web OAuth client id>
+   ```
 2. In the app's **Settings → Server**, set the server address to
    `https://app.farryon.example` (the app derives `wss://…/ws/live` from it).
 3. Because `JWT_SECRET` is set, `/ws/live` requires a valid token — sign in

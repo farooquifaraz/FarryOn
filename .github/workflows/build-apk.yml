@@ -35,6 +35,10 @@ jobs:
         working-directory: mobile
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The build number is derived from the commit count (see below), so
+          # the full history is needed — a depth-1 checkout counts 1.
+          fetch-depth: 0
 
       - uses: actions/setup-java@v4
         with:
@@ -131,9 +135,18 @@ jobs:
       # GOOGLE_SERVER_CLIENT_ID is the PUBLIC web client id — without the
       # dart-define the Google sign-in button silently vanishes from the app
       # (bit the website builds until 2026-09-04).
+      # versionCode = 2000 + commits on this branch (the arm64 split adds its
+      # own 2000 on top). Until 2026-09-12 CI shipped versionCode 1 (2001 for
+      # arm64) while every local build carried a hand-typed number in the
+      # 2000s, so the website APK could never be installed over a local one.
+      # Local builds use the same formula (docs/HOSTINGER_DEPLOYMENT.md).
+      - name: Compute build number
+        run: echo "BUILD_NUMBER=$((2000 + $(git rev-list --count HEAD)))" >> "$GITHUB_ENV"
+
       - name: Build release APKs (split per ABI)
         run: >
           flutter build apk --release --split-per-abi
+          --build-number="$BUILD_NUMBER"
           --dart-define=GOOGLE_SERVER_CLIENT_ID=${{ vars.GOOGLE_SERVER_CLIENT_ID
           || '408799948813-oi20fbubb8igugkokolpqf2h7b68omjk.apps.googleusercontent.com' }}
 
