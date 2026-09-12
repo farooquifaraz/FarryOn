@@ -891,6 +891,8 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         main.postDelayed({ finish() }, timeoutMs)
     }
 
+    override val presentMac: String? get() = presentGlassesMac()
+
     override val connectedMac: String?
         get() = if (BleOperateManager.getInstance().isConnected &&
             lastConnectionState == "connected"

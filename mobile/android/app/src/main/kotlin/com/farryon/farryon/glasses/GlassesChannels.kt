@@ -413,7 +413,15 @@ class GlassesChannels private constructor(
                         mapOf(
                             "implementation" to sdk.implementationName,
                             "sdkVersion" to sdk.sdkVersion,
-                            "lastMac" to prefs?.getString("last_mac", null),
+                            // The unit the phone's Bluetooth is on beats the
+                            // last-used one: the Dart auto-connect reads this
+                            // and would otherwise chase a switched-off pair
+                            // (device-seen 2026-09-12 15:09: native chose the
+                            // L802 the phone was on, Dart re-connected the
+                            // saved L801 half a second later and looped).
+                            "lastMac" to (sdk.presentMac
+                                ?: prefs?.getString("last_mac", null)),
+                            "presentMac" to sdk.presentMac,
                             "lastName" to prefs?.getString("last_name", null),
                             // Live state, not history: lets the caller skip a
                             // connect that would land on an already-open link

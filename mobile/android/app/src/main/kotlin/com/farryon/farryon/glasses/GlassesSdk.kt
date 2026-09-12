@@ -58,6 +58,10 @@ interface GlassesSdk {
      */
     val connectedMac: String? get() = null
 
+    /** The paired L80x the PHONE's Bluetooth (A2DP/HFP) is on right now, or
+     *  null. The app follows it in preference to the last-used device. */
+    val presentMac: String? get() = null
+
     /** All device data flows through this single listener as (type, data). */
     fun setListener(listener: GlassesSdkListener?)
 
