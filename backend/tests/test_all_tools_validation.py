@@ -229,6 +229,17 @@ async def test_every_registered_tool_dispatches(db_session) -> None:
     ok("read_email(no-cfg)", r.get("ok") is False, "graceful")
     r = await run("send_email", {"to": "a@b.com", "body": "hi"})
     ok("send_email(no-cfg)", r.get("ok") is False, "graceful")
+    r = await run("inbox_summary", {"range": "today"})
+    ok("inbox_summary(no-cfg)", r.get("ok") is False and "message" in r, "graceful")
+    r = await run("mark_email_read", {"uid": "1"})
+    ok("mark_email_read(no-cfg)", r.get("ok") is False, "graceful")
+    r = await run("forward_email", {"to": "a@b.com", "uid": "1"})
+    ok("forward_email(no-cfg)", r.get("ok") is False, "graceful")
+    r = await run(
+        "send_email",
+        {"to": "a@b.com", "body": "hi", "cc": "c@d.com", "reply_to_uid": "1"},
+    )
+    ok("send_email(cc+reply,no-cfg)", r.get("ok") is False, "graceful")
 
     # ---- report ----------------------------------------------------------
     width = max(len(n) for n, _, _ in report)

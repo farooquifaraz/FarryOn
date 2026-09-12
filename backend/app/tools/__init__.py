@@ -22,8 +22,9 @@ from app.tools.device import (
     SetCameraTool,
     StopRecordingTool,
 )
+from app.tools.email_inbox import InboxSummaryTool, MarkEmailReadTool
 from app.tools.email_read import ReadEmailsTool, ReadEmailTool
-from app.tools.email_send import SendEmailTool
+from app.tools.email_send import ForwardEmailTool, SendEmailTool
 from app.tools.identify import IdentifyImageTool
 from app.tools.location import GetLocationTool
 from app.tools.messaging import SendMessageTool
@@ -57,11 +58,14 @@ __all__ = [
     "DeleteTaskTool",
     "EnableBluetoothTool",
     "EndSessionTool",
+    "ForwardEmailTool",
     "IdentifyImageTool",
+    "InboxSummaryTool",
     "ListNotesTool",
     "ListSentMessagesTool",
     "ListTasksTool",
     "MakeCallTool",
+    "MarkEmailReadTool",
     "GetLocationTool",
     "MuteMicTool",
     "PlayMusicTool",
@@ -117,7 +121,10 @@ def build_default_tools() -> list[Tool]:
         EndSessionTool(),
         ReadEmailsTool(),
         ReadEmailTool(),
+        InboxSummaryTool(),
+        MarkEmailReadTool(),
         SendEmailTool(),
+        ForwardEmailTool(),
         GetLocationTool(),
         IdentifyImageTool(),
         SendWhatsAppTool(),

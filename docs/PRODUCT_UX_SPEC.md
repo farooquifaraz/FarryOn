@@ -385,17 +385,38 @@ alarm) · ⚠️ `update_task` `assert` can crash on a race · ⚠️ first-matc
 
 ---
 
-### 2.7 Email — `read_emails`, `read_email`, `send_email`
+### 2.7 Email — `read_emails`, `read_email`, `inbox_summary`, `mark_email_read`, `send_email`, `forward_email`
 
-**Trigger:** "any new email", "read the email from Faraz", "reply saying…",
-"email Ali that I'll be late".
+**Trigger:** "any new email", "how many emails did I get", "anything important?",
+"read the email from Faraz", "what are the takeaways", "reply saying…", "cc my
+boss", "forward it to Ali", "mark it as read", "email Ali that I'll be late".
 
 **Journey:**
 - **Read:** summarize briefly out loud (sender + subject + snippet); no
-  confirmation. Best-implemented tool today (clean error handling).
-- **Send:** draft → read back **recipient address + subject + body** → "yes" →
-  send → *"Sent."* Replies must use the original `from_email` exactly — never
-  guess an address.
+  confirmation. Every message carries a stable IMAP `uid`, `unread`, and an
+  `importance` tag (critical / high / low) with the reasons the scorer found
+  (`app/tools/email_triage.py`: Gmail Important label, star, urgency words in
+  English and Hinglish, direct-to-user, bulk-mail headers pull it down).
+- **Counts are honest:** `total` is how many matched the search, `count` how
+  many were listed; when `has_more` the assistant says *"more than ten"* or the
+  exact total — never "you got ten" for a capped list. `inbox_unread` is the
+  mailbox's own unread count.
+- **Summary / triage:** `inbox_summary` → true totals, unread, the critical and
+  important mails with *why*, top senders, newsletter count; spoken as ≤3
+  points. Empty today widens to the week and says so.
+- **One email:** `read_email(uid | query)` → full body, attachments named,
+  `reply_hint` (to / Re: subject / `reply_to_uid`). Takeaways are 3–4 short
+  spoken sentences; a drafted reply matches the sender's tone and is read back.
+- **Send:** draft → read back **recipient address (+cc/bcc) + subject + body**
+  → "yes" → send → *"Sent."* Replies pass `reply_to_uid` so the tool sets
+  `In-Reply-To` / `References` and the `Re:` subject — the reply lands in the
+  conversation, not as a stray mail. The original `from_email` is used exactly —
+  never a guessed address.
+- **Forward:** `forward_email(to, uid | query, note?)` → the original quoted
+  under a *Fwd:* subject with its attachments re-attached (20 MB budget; the
+  rest are named as skipped). Confirmed like any send.
+- **Mark read / unread:** `mark_email_read(uid | query | all + filters)` — the
+  one reversible write, so no confirmation, but only on request.
 
 **Edge cases:** unsure of address → ask, don't send · auth failure → *"I couldn't
 sign in to your mail — check the app password."* · IMAP slow → "one sec".
