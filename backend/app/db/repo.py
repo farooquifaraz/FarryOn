@@ -9,7 +9,7 @@ session scope (see :func:`app.db.base.get_session`).
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -212,6 +212,39 @@ async def add_task(
     session.add(task)
     await session.flush()
     return task
+
+
+async def find_recent_duplicate_task(
+    session: AsyncSession,
+    *,
+    title: str,
+    due_date: str | None,
+    user_id: int | None,
+    within_seconds: int = 120,
+) -> Task | None:
+    """An open task with the same title and due date created moments ago.
+
+    The model sometimes asks for the same task twice — once when it creates
+    it and says nothing, again when the user, hearing nothing, repeats the
+    request (device 2026-09-13: five prayer reminders became eleven rows in
+    ten seconds). Title match is case-insensitive after trimming; the window
+    is short so a genuine "remind me again tomorrow" is never swallowed.
+    """
+    since = datetime.now(timezone.utc) - timedelta(seconds=within_seconds)
+    stmt = (
+        _live(select(Task), Task)
+        .where(func.lower(Task.title) == title.strip().lower())
+        .where(Task.done.is_(False))
+        .where(Task.created_at >= since.replace(tzinfo=None))
+        .order_by(Task.created_at.desc())
+        .limit(5)
+    )
+    if user_id is not None:
+        stmt = stmt.where(Task.user_id == user_id)
+    for row in (await session.execute(stmt)).scalars().all():
+        if (row.due_date or None) == (due_date or None):
+            return row
+    return None
 
 
 async def list_notes(

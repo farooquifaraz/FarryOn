@@ -105,6 +105,10 @@ _AUDIO_DUMP_QUEUE_MAX = 200
 class AudioBackpressureError(RuntimeError):
     """The upstream audio connection cannot keep up with real-time speech."""
 
+#: After a resumed connect, an `end_session` with no user turn heard is
+#: refused for this long (see Orchestrator.resume_guard_until).
+_RESUME_GUARD_S = 30.0
+
 #: When the operator was last mailed about a provider outage (monotonic).
 #: One mail per _OUTAGE_ALERT_INTERVAL_S per process, whatever the traffic —
 #: every failed connect in an outage looks the same.
@@ -455,6 +459,10 @@ class Session:
             # device 2026-08-27: end_session fired 20s into a resumed session
             # with no turn heard). Silent: turn_complete=False never speaks.
             if getattr(self, "_resumed_from_handle", False):
+                if self._orchestrator is not None:
+                    self._orchestrator.resume_guard_until = (
+                        time.monotonic() + _RESUME_GUARD_S
+                    )
                 note_fn = getattr(self._gateway, "send_silent_note", None)
                 if note_fn is not None:
                     await note_fn(
@@ -1053,6 +1061,8 @@ class Session:
                     now = time.monotonic()
                     if self._t_user_first == 0.0:
                         self._t_user_first = now
+                        if self._orchestrator is not None:
+                            self._orchestrator.user_turns_heard += 1
                     self._t_user_last = now
                 await self._send_state("thinking")
                 # A typed turn has no audio VAD, so give the model the current

@@ -219,6 +219,36 @@ async def test_create_task_persists_with_due_date(db_session) -> None:
     assert rows[0].done is False
 
 
+async def test_create_task_twice_in_a_row_is_one_task(db_session) -> None:
+    """The same reminder asked for again moments later is not a second row.
+
+    Device 2026-09-13: the model created five prayer reminders, said
+    nothing, the user repeated himself, and eleven rows existed ten seconds
+    later — each of which the phone would have rung for.
+    """
+    ctx = ToolContext(session=db_session)
+    first = await CreateTaskTool().run(
+        ctx, title="Fajr prayer", due_date="2026-09-14T04:30:00+04:00"
+    )
+    again = await CreateTaskTool().run(
+        ctx, title="fajr prayer ", due_date="2026-09-14T04:30:00+04:00"
+    )
+    await db_session.commit()
+
+    assert again["id"] == first["id"]
+    assert again.get("duplicate") is True
+    rows = (await db_session.execute(select(Task))).scalars().all()
+    assert len(rows) == 1
+
+    # A different time is a different task.
+    other = await CreateTaskTool().run(
+        ctx, title="Fajr prayer", due_date="2026-09-15T04:30:00+04:00"
+    )
+    await db_session.commit()
+    assert other["id"] != first["id"]
+    assert "duplicate" not in other
+
+
 async def test_create_task_without_due_date(db_session) -> None:
     ctx = ToolContext(session=db_session)
     result = await CreateTaskTool().run(ctx, title="No due date")

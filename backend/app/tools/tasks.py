@@ -81,6 +81,22 @@ class CreateTaskTool(Tool):
                 ),
             }
         due_date = resolve_due_date(due_in, kwargs.get("remind_in_seconds"))
+        # The same task asked for twice within two minutes is one task. The
+        # model re-calls this after a silent first batch (device 2026-09-13:
+        # 11 rows for 5 reminders); the phone would then ring for each copy.
+        existing = await repo.find_recent_duplicate_task(
+            ctx.session, title=title, due_date=due_date, user_id=ctx.user_id
+        )
+        if existing is not None:
+            return {
+                "id": existing.id,
+                "title": existing.title,
+                "due_date": existing.due_date,
+                "done": existing.done,
+                "createdAt": existing.created_at.isoformat(),
+                "duplicate": True,
+                "message": "That task already exists — not created again.",
+            }
         task = await repo.add_task(
             ctx.session,
             title=title,

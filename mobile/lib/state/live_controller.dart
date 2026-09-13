@@ -2834,9 +2834,16 @@ class LiveController {
     if (foreign == _foreignMusic) return;
     _foreignMusic = foreign;
     if (foreign) {
+      // On the glasses the song comes back in through the mic at speech
+      // level (SCO, no echo canceller): raise the bar for as long as it
+      // plays. The phone mic has the platform canceller and keeps its bar.
+      if (_registry.audioKind == CaptureDeviceKind.glasses) {
+        _micGate.musicBoost = 1.6;
+      }
       _log.info('music is playing on the phone (gate floor '
           '${_micGate.noiseFloor.round()}, bar ${_micGate.threshold.round()})');
     } else {
+      _micGate.musicBoost = 1.0;
       _log.info('music stopped - re-learning the room (floor was '
           '${_micGate.noiseFloor.round()})');
       _micGate.resetFloor();

@@ -164,6 +164,17 @@ class MicGate {
   /// True while the gate is passing audio (speech + hangover). Diagnostics.
   bool get isOpen => _open;
 
+  /// Extra factor on the bar while something steady and loud that is NOT
+  /// the user is playing (music). 1.0 = off.
+  ///
+  /// On the glasses the music goes out over the same SCO link the mic comes
+  /// in on, with no echo canceller in between, so the mic hears the song at
+  /// speech level and the gate opened once a second (device 2026-09-13
+  /// 14:56). The floor cap keeps the bar from following the music up; this
+  /// lifts it deliberately while music is on, low enough that a voice
+  /// raised over the song still clears it.
+  double musicBoost = 1.0;
+
   /// Measured background level in PCM16 RMS units. Diagnostics.
   double get noiseFloor => _noiseFloor;
 
@@ -172,7 +183,8 @@ class MicGate {
   /// The bar a chunk must clear right now to count as speech. Exposed so the
   /// caller can measure audio it is about to DROP against the same bar the
   /// gate would have used, instead of a second guess of its own.
-  double get threshold => math.max(absoluteFloor, _noiseFloor * noiseMultiplier);
+  double get threshold =>
+      math.max(absoluteFloor, _noiseFloor * noiseMultiplier) * musicBoost;
 
   /// RMS level of a chunk in PCM16 units; 0 for anything unmeasurable.
   double levelOf(Uint8List pcm16) {
@@ -229,7 +241,8 @@ class MicGate {
           : (_noiseFloor * 0.995) + (rms * 0.005);
       if (_noiseFloor > maxNoiseFloor) _noiseFloor = maxNoiseFloor;
     }
-    final threshold = math.max(absoluteFloor, _noiseFloor * noiseMultiplier);
+    final threshold =
+        math.max(absoluteFloor, _noiseFloor * noiseMultiplier) * musicBoost;
 
     if (rms > threshold) {
       _lastSpeechAt = now;

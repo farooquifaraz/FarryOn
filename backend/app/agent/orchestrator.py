@@ -16,6 +16,7 @@ which:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 import uuid
@@ -93,6 +94,16 @@ class Orchestrator:
         #: Which mailbox the user settled on this session (see
         #: ``ToolContext.email_selection``). One dict, shared by reference.
         self._email_selection: dict[str, Any] = {}
+        #: Set by the session owner right after a resumed connect: until
+        #: this many seconds have passed, an `end_session` the model fires
+        #: WITHOUT a heard user turn is the tail of the previous conversation
+        #: being re-executed, not a request (device 2026-09-13 15:02: two
+        #: fresh sessions ended themselves 10 s in; the user could not say
+        #: whether he had asked). The silent resume note asks the model not
+        #: to; this makes sure.
+        self.resume_guard_until: float = 0.0
+        #: Bumped by the owner whenever a user turn was actually heard.
+        self.user_turns_heard: int = 0
         #: Mutable — updated in place when the client sends a ``location_update``.
         self.location = location
         #: Mutable — set to the latest INPUT_VIDEO JPEG by the session so the
@@ -318,6 +329,32 @@ class Orchestrator:
             call_id=event.id,
             session_id=self._session_id,
         )
+        if (
+            event.name == "end_session"
+            and self.user_turns_heard == 0
+            and time.monotonic() < self.resume_guard_until
+        ):
+            logger.warning(
+                "tool_call.stale_after_resume",
+                tool=event.name,
+                call_id=event.id,
+                session_id=self._session_id,
+            )
+            result = ToolResult(
+                name=event.name,
+                ok=False,
+                result=None,
+                error=(
+                    "ignored: this session just resumed and the user has not "
+                    "asked for anything yet — do not end it."
+                ),
+                duration_ms=0,
+            )
+            with contextlib.suppress(Exception):
+                await self._gateway.send_tool_result(
+                    event.id, event.name, result.error, ok=False
+                )
+            return result
 
         # 1. Notify client that a tool call started.
         needs_permission = False

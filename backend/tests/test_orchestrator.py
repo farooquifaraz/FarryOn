@@ -115,3 +115,41 @@ async def test_resolve_timeout_degrades(monkeypatch):
     orch = _orchestrator(notify)
     result = await orch.request_contact_resolution("X", "whatsapp")
     assert result["status"] == "index_unavailable"
+
+
+async def test_end_session_right_after_a_resume_is_refused():
+    """A resumed session must not end itself on the previous conversation's tail.
+
+    Device 2026-09-13 15:02: two fresh sessions fired end_session ten seconds
+    in, before any user turn; the user could not say he had asked. Until a
+    turn is heard, an end_session inside the resume guard window is refused
+    and the model is told why — nothing is dispatched.
+    """
+    import time
+
+    from app.ai.events import ToolCallEvent
+
+    told: list[tuple] = []
+
+    class _Gateway:
+        async def send_tool_result(self, call_id, name, result, ok=True):
+            told.append((call_id, name, ok))
+
+    orch = _orchestrator(lambda msg: asyncio.sleep(0))
+    orch._gateway = _Gateway()  # type: ignore[assignment]
+    orch.resume_guard_until = time.monotonic() + 30
+    orch.user_turns_heard = 0
+
+    result = await orch.handle_tool_call(
+        ToolCallEvent(id="c1", name="end_session", args={})
+    )
+    assert result.ok is False
+    assert "resumed" in (result.error or "")
+    assert told == [("c1", "end_session", False)]
+
+    # Once the user has been heard, the guard no longer applies (the call
+    # then goes to the real engine, which this test does not wire up).
+    orch.user_turns_heard = 1
+    assert not (
+        orch.user_turns_heard == 0 and time.monotonic() < orch.resume_guard_until
+    )

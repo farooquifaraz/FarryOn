@@ -245,6 +245,15 @@ void main() {
       expect(gate.noiseFloor, closeTo(2400, 1));
     });
 
+    test('musicBoost lifts the bar while music plays and drops it after', () {
+      final gate = MicGate.glasses();
+      final bar = gate.threshold;
+      gate.musicBoost = 1.6;
+      expect(gate.threshold, closeTo(bar * 1.6, 1));
+      gate.musicBoost = 1.0;
+      expect(gate.threshold, closeTo(bar, 1));
+    });
+
     test('the phone profile still opens on the first loud chunk', () {
       final gate = MicGate();
       expect(gate.process(loud(320)), isNotEmpty);
