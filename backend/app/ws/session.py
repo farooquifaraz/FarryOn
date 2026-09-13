@@ -114,6 +114,39 @@ class AudioBackpressureError(RuntimeError):
 _RESUME_HANDLES: dict[int, tuple[str, float]] = {}
 _RESUME_TTL_S = 30 * 60.0
 
+#: The email tools' per-conversation memory (which mailbox the user settled
+#: on, and the threading headers of the mails read), per authed user, with the
+#: time it was last handed to a session. Lives alongside the resume handle for
+#: the same reason: when a connection drops and the next one RESUMES the
+#: conversation, the model still remembers the user said "primary" — the tool
+#: must too, or the resumed session asks again and discards the answer
+#: (device-seen 2026-09-12: a stuck_reconnect mid-flow, then "primary" was
+#: refused by the asked-this-session gate). A fresh conversation (no resume
+#: handle applied) starts empty, as the spec wants.
+_EMAIL_MEMORY: dict[int, tuple[dict[str, Any], dict[str, Any], float]] = {}
+
+
+def email_memory_for(
+    uid: int | None, *, resumed: bool, now: float | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``(email_selection, email_threads)`` dicts for a new orchestrator.
+
+    A session that resumed its conversation within the TTL gets the SAME dict
+    objects its predecessor used; anything else gets fresh ones. Either way the
+    dicts are registered for this user so the next resume can inherit them.
+    """
+    now = time.monotonic() if now is None else now
+    if uid is not None and resumed:
+        entry = _EMAIL_MEMORY.get(uid)
+        if entry is not None and now - entry[2] < _RESUME_TTL_S:
+            selection, threads = entry[0], entry[1]
+            _EMAIL_MEMORY[uid] = (selection, threads, now)
+            return selection, threads
+    selection, threads = {}, {}
+    if uid is not None:
+        _EMAIL_MEMORY[uid] = (selection, threads, now)
+    return selection, threads
+
 
 class Session:
     """Owns the lifecycle and concurrency for a single live connection."""
@@ -487,6 +520,12 @@ class Session:
                 # batching adapter (OpenAI) keeps a slow glasses still instead of
                 # dropping it. No-op for streaming adapters (Gemini).
                 self._gateway.set_camera_kind(device_kind)
+                # The email tools' memory follows the CONVERSATION: a resumed
+                # one keeps the mailbox the user already chose.
+                email_selection, email_threads = email_memory_for(
+                    self._authed_user_id,
+                    resumed=bool(getattr(self, "_resumed_from_handle", False)),
+                )
                 self._orchestrator = Orchestrator(
                     engine=self._engine,
                     gateway=self._gateway,
@@ -503,6 +542,8 @@ class Session:
                     else None,
                     location=location if isinstance(location, dict) else None,
                     frame_wait_seconds=frame_wait_seconds,
+                    email_selection=email_selection,
+                    email_threads=email_threads,
                 )
 
             # Start these only after the gateway is connected.  The read pump

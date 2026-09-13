@@ -65,6 +65,8 @@ class Orchestrator:
         emails: list[dict[str, Any]] | None = None,
         location: dict[str, Any] | None = None,
         frame_wait_seconds: float | None = None,
+        email_selection: dict[str, Any] | None = None,
+        email_threads: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -80,6 +82,13 @@ class Orchestrator:
                 Chosen by the session from the device kind (glasses need a
                 longer budget than a streaming phone camera). ``None`` falls
                 back to the server settings' phone-camera value.
+            email_selection: The mailbox memory to share with every
+                ToolContext (see ``ToolContext.email_selection``). The session
+                passes the previous connection's dict when it RESUMES a
+                conversation, so the user's "primary" survives a reconnect;
+                ``None`` starts empty.
+            email_threads: Likewise for the threading headers of mails read
+                (``ToolContext.email_threads``).
         """
         self._engine = engine
         self._gateway = gateway
@@ -92,10 +101,10 @@ class Orchestrator:
         self._emails = emails
         #: Which mailbox the user settled on this session (see
         #: ``ToolContext.email_selection``). One dict, shared by reference.
-        self._email_selection: dict[str, Any] = {}
+        self._email_selection: dict[str, Any] = {} if email_selection is None else email_selection
         #: Threading headers of the emails read this session (see
         #: ``ToolContext.email_threads``). One dict, shared by reference.
-        self._email_threads: dict[str, Any] = {}
+        self._email_threads: dict[str, Any] = {} if email_threads is None else email_threads
         #: Mutable — updated in place when the client sends a ``location_update``.
         self.location = location
         #: Mutable — set to the latest INPUT_VIDEO JPEG by the session so the

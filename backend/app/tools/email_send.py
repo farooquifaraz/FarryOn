@@ -21,6 +21,7 @@ import asyncio
 import email as emaillib
 import hashlib
 import re
+import secrets
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -54,6 +55,42 @@ _MAX_FORWARD_ATTACH_BYTES = 20 * 1024 * 1024
 
 _RE_PREFIX = re.compile(r"^\s*(re|aw|sv|antw)\s*:", re.I)
 _FWD_PREFIX = re.compile(r"^\s*(fwd?|wg|tr)\s*:", re.I)
+
+#: Per-process salt for draft tokens. The token is a hash of the draft the
+#: model must echo back after the user's yes; the salt means it can only be
+#: obtained from the tool's own "read this back" result, never guessed or
+#: carried over from another server.
+_TOKEN_SALT = secrets.token_hex(8)
+
+#: Tool-result status for "here is the draft, not sent yet".
+CONFIRM_SEND = "confirm_send"
+
+
+def draft_token(kind: str, *parts: Any) -> str:
+    """The confirmation token for one exact draft.
+
+    Device-seen 2026-09-12: asked to cc "ali at gmail", the model completed
+    the address to ``ali@gmail.com`` and called ``send_email`` at once — no
+    draft read back, no yes — and a stranger got the mail. The prompt alone
+    cannot prevent that, so the tool now refuses to send unless the call
+    carries the token it handed out for THIS draft. Any change to recipient,
+    copies, subject or text changes the token, so what goes out is exactly
+    what the user heard.
+    """
+    raw = "\x1f".join([kind, *(str(p or "").strip() for p in parts)])
+    return "ok-" + hashlib.sha1((_TOKEN_SALT + raw).encode("utf-8")).hexdigest()[:10]
+
+
+_CONFIRM_INSTRUCTIONS = (
+    "NOT SENT. Read this draft to the user now: the recipient address — spell "
+    "it out letter by letter if the user did not say it in full — any cc or "
+    "bcc, the subject, and the text. Then WAIT for their explicit yes. Only "
+    "after a clear yes, call this tool again with exactly the same arguments "
+    "plus confirm='{token}'. If they change anything, call again WITHOUT "
+    "confirm to get a new token. Never call with confirm in the same turn as "
+    "this result, and never guess or complete an address the user did not say "
+    "in full — ask them to spell it."
+)
 
 
 def _smtp_creds(account: dict[str, Any]) -> tuple[str, int, str, str, str]:
@@ -168,6 +205,12 @@ async def _thread_headers(
         except Exception as exc:  # noqa: BLE001 — threading is best-effort
             logger.warning("send_email.thread_lookup_failed", error=str(exc))
             found = None
+        if found and ctx.email_threads is not None:
+            # Remember it: the confirmed call a moment later must not pay
+            # for a second IMAP round trip.
+            ctx.email_threads[email_read.thread_key(address, reply_to_uid)] = found
+            if found.get("message_id"):
+                ctx.email_threads[found["message_id"]] = found
     if found is None and in_reply_to:
         # Nothing cached, but the model gave us a Message-ID: honour it.
         found = {"message_id": in_reply_to.strip(), "references": "", "subject": ""}
@@ -237,17 +280,19 @@ class SendEmailTool(Tool):
 
     name = "send_email"
     description = (
-        "Send an email from the user's account. IMPORTANT: only call this "
-        "AFTER reading the recipient, subject and body back to the user and "
-        "getting their explicit confirmation — never send without a clear yes. "
-        "To REPLY to an email the user heard, pass its `reply_to_uid` (the "
-        "uid from read_emails / read_email) so the reply lands in the same "
-        "conversation; the tool sets the Re: subject and threading headers. "
-        "Optional `cc` / `bcc` take one or more addresses separated by commas. "
-        "The sending account is never assumed either: omit 'account' the first "
-        "time and the tool tells you which accounts exist and what to ask; "
-        "then pass what the user said ('primary', 'secondary', a label or an "
-        "address)."
+        "Send an email from the user's account — in TWO calls. The first call "
+        "(no `confirm`) sends nothing: it returns the draft and a confirm "
+        "token. Read the draft to the user (address, cc, subject, text), wait "
+        "for their explicit yes, then call again with the same arguments plus "
+        "`confirm`=that token. To REPLY to an email the user heard, pass its "
+        "`reply_to_uid` (the uid from read_emails / read_email) so the reply "
+        "lands in the same conversation; the tool sets the Re: subject and "
+        "threading headers. Optional `cc` / `bcc` take one or more addresses "
+        "separated by commas. Never invent or complete an address the user "
+        "did not say in full. The sending account is never assumed either: "
+        "omit 'account' the first time and the tool tells you which accounts "
+        "exist and what to ask; then pass what the user said ('primary', "
+        "'secondary', a label or an address)."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -257,7 +302,17 @@ class SendEmailTool(Tool):
                 "description": "Recipient email address (several: comma-separated).",
             },
             "subject": {"type": "string"},
-            "body": {"type": "string"},
+            "body": {
+                "type": "string",
+                "description": "The full text of the email — the exact draft "
+                "you read to the user. Always pass it on BOTH calls.",
+            },
+            "confirm": {
+                "type": "string",
+                "description": "The confirm token from this tool's previous "
+                "result for this exact draft. Pass it ONLY after the user "
+                "said yes. Omit it on the first call.",
+            },
             "cc": {
                 "type": "string",
                 "description": "CC address(es), comma-separated. Only when the "
@@ -287,7 +342,12 @@ class SendEmailTool(Tool):
                 "the tool tells you what to ask (never assume one).",
             },
         },
-        "required": ["to", "body"],
+        # `body` is not schema-required on purpose: a call without it must
+        # reach the tool and come back as "pass the draft text", not as an
+        # engine validation error the model cannot act on (device-seen
+        # 2026-09-12: the confirmed send was called without body and nothing
+        # went out, silently).
+        "required": ["to"],
     }
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
@@ -299,6 +359,17 @@ class SendEmailTool(Tool):
         if ask:
             return ask
         host, port, address, password, label = _smtp_creds(account)
+        if not (kwargs.get("body") or "").strip():
+            return {
+                "ok": False,
+                "status": "needs_body",
+                "message": "No email text was given.",
+                "instructions": (
+                    "Pass the text of the email — the draft you read to the "
+                    "user — as `body`, with the same to/subject (and the same "
+                    "confirm token if you already have one), and call again."
+                ),
+            }
 
         # CHANGED (UX Spec §3.1): real email validation instead of `"@" in to`,
         # which accepted "@", "a@" and "a@b" (no TLD).
@@ -334,6 +405,34 @@ class SendEmailTool(Tool):
                 headers = _reply_headers(thread)
             subject = _reply_subject(subject, thread)
         subject = subject or "(no subject)"
+
+        # The gate: nothing goes out until the call carries the token minted
+        # for THIS draft. The first call is the read-back; the yes comes from
+        # the user, not from the model's optimism.
+        token = draft_token(
+            "send", address, to, ",".join(cc_list), ",".join(bcc_list),
+            subject, body, reply_to_uid or in_reply_to or "",
+        )
+        if (kwargs.get("confirm") or "").strip() != token:
+            draft: dict[str, Any] = {
+                "from": address, "account": label, "to": to,
+                "subject": subject, "body": body,
+            }
+            if cc_list:
+                draft["cc"] = cc_list
+            if bcc_list:
+                draft["bcc"] = bcc_list
+            if reply_to_uid:
+                draft["reply_to_uid"] = reply_to_uid
+            return {
+                "ok": False,
+                "status": CONFIRM_SEND,
+                "sent": False,
+                "draft": draft,
+                "confirm_token": token,
+                "message": "Draft ready — not sent. Read it back and get a yes.",
+                "instructions": _CONFIRM_INSTRUCTIONS.format(token=token),
+            }
 
         # CHANGED (UX Spec §3.4): idempotency. Email is a REAL outward send, so a
         # retried turn (model re-issuing the send, or a reconnect replay) could
@@ -460,11 +559,15 @@ class ForwardEmailTool(Tool):
 
     name = "forward_email"
     description = (
-        "Forward an existing email (with its attachments) to someone. Pick "
-        "the email by its uid (from read_emails / read_email / inbox_summary) "
-        "or by a sender / subject keyword; `note` is the user's own message "
-        "on top. IMPORTANT: only call this AFTER reading back who it goes to "
-        "and which email it is, and getting the user's explicit yes."
+        "Forward an existing email (with its attachments) to someone — in "
+        "TWO calls. The first call (no `confirm`) sends nothing: it returns "
+        "which email it found (subject, sender, attachments), who it goes to, "
+        "and a confirm token. Read that back, wait for the user's explicit "
+        "yes, then call again with the same arguments plus `confirm`=that "
+        "token. Pick the email by its uid (from read_emails / read_email / "
+        "inbox_summary) or by a sender / subject keyword; `note` is the "
+        "user's own message on top. Never invent or complete an address the "
+        "user did not say in full."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -472,6 +575,12 @@ class ForwardEmailTool(Tool):
             "to": {
                 "type": "string",
                 "description": "Recipient email address (several: comma-separated).",
+            },
+            "confirm": {
+                "type": "string",
+                "description": "The confirm token from this tool's previous "
+                "result for this exact forward. Pass it ONLY after the user "
+                "said yes. Omit it on the first call.",
             },
             "uid": {
                 "type": "string",
@@ -549,6 +658,41 @@ class ForwardEmailTool(Tool):
             note=note, with_attachments=not found.get("truncated"),
         )
         to = ", ".join(to_list)
+
+        # The gate, as for send_email: the first call only says what WOULD go
+        # out; the token ties the confirmed call to that exact forward.
+        token = draft_token(
+            "forward", address, to, ",".join(cc_list), ",".join(bcc_list),
+            found["uid"], note,
+        )
+        if (kwargs.get("confirm") or "").strip() != token:
+            draft: dict[str, Any] = {
+                "from": address, "account": label, "to": to,
+                "uid": found["uid"], "subject": info["subject"],
+                "original_from": info["original_from"],
+                "attachments": info["attachments"],
+            }
+            if cc_list:
+                draft["cc"] = cc_list
+            if bcc_list:
+                draft["bcc"] = bcc_list
+            if note.strip():
+                draft["note"] = note.strip()
+            return {
+                "ok": False,
+                "status": CONFIRM_SEND,
+                "sent": False,
+                "draft": draft,
+                "confirm_token": token,
+                "message": "Forward ready — not sent. Read it back and get a yes.",
+                "instructions": (
+                    _CONFIRM_INSTRUCTIONS.format(token=token)
+                    + " Name the email being forwarded (its subject and sender) "
+                    "and any attachments. On the confirmed call pass "
+                    f"uid='{found['uid']}' so the same email is forwarded."
+                ),
+            }
+
         fingerprint = f"fwd:{address}->{to}:{found['uid']}:" + hashlib.sha1(
             note.encode("utf-8")
         ).hexdigest()

@@ -407,8 +407,11 @@ boss", "forward it to Ali", "mark it as read", "email Ali that I'll be late".
 - **One email:** `read_email(uid | query)` → full body, attachments named,
   `reply_hint` (to / Re: subject / `reply_to_uid`). Takeaways are 3–4 short
   spoken sentences; a drafted reply matches the sender's tone and is read back.
-- **Send:** draft → read back **recipient address (+cc/bcc) + subject + body**
-  → "yes" → send → *"Sent."* Replies pass `reply_to_uid` so the tool sets
+- **Send:** enforced by the tool, not just the prompt — the first
+  `send_email` call (no `confirm`) sends nothing and returns the draft plus a
+  token tied to it; the assistant reads back **recipient address (+cc/bcc) +
+  subject + body**, gets the "yes", and calls again with `confirm` → *"Sent."*
+  Any change to the draft changes the token. `forward_email` works the same way. Replies pass `reply_to_uid` so the tool sets
   `In-Reply-To` / `References` and the `Re:` subject — the reply lands in the
   conversation, not as a stray mail. The original `from_email` is used exactly —
   never a guessed address.

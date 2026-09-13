@@ -9,7 +9,17 @@ import pytest
 
 from app.tools import email_send
 from app.tools.base import ToolContext
-from app.tools.email_send import ForwardEmailTool, _build_forward
+from app.tools.email_send import CONFIRM_SEND, ForwardEmailTool, _build_forward
+
+
+async def forward_confirmed(ctx, **kw):
+    """The real two-call flow: the draft call, then the same call with its
+    token (and the uid it resolved). Refusals before the gate come back as-is."""
+    first = await ForwardEmailTool().run(ctx, **kw)
+    if first.get("status") != CONFIRM_SEND:
+        return first
+    assert first["ok"] is False and first["sent"] is False
+    return await ForwardEmailTool().run(ctx, confirm=first["confirm_token"], **kw)
 
 
 
@@ -88,7 +98,7 @@ async def test_forward_needs_an_account_first(db_session, monkeypatch) -> None:
     delivered = {"n": 0}
     monkeypatch.setattr(email_send, "_deliver", lambda *a, **k: delivered.__setitem__("n", 1))
     ctx = ToolContext(session=db_session, email=None)
-    result = await ForwardEmailTool().run(ctx, to="a@b.com", uid="1")
+    result = await forward_confirmed(ctx, to="a@b.com", uid="1")
     assert result["ok"] is False and result["status"] == "no_account"
     assert delivered["n"] == 0
 
@@ -108,7 +118,7 @@ async def test_forward_by_uid_sends_with_attachment(db_session, monkeypatch) -> 
 
     monkeypatch.setattr(email_send, "_deliver", fake_deliver)
     monkeypatch.setattr(email_send.email_read, "fetch_raw_message", fake_raw)
-    result = await ForwardEmailTool().run(
+    result = await forward_confirmed(
         _ctx(db_session), account="primary", to="faraz@y.com", uid="31",
         note="Have a look", cc="boss@x.com",
     )
@@ -129,7 +139,7 @@ async def test_forward_by_query_when_nothing_matches(db_session, monkeypatch) ->
     monkeypatch.setattr(
         email_send.email_read, "fetch_raw_message", lambda *a, **k: None,
     )
-    result = await ForwardEmailTool().run(
+    result = await forward_confirmed(
         _ctx(db_session), account="primary", to="a@b.com", query="unicorn",
     )
     assert result["ok"] is False
@@ -139,7 +149,7 @@ async def test_forward_by_query_when_nothing_matches(db_session, monkeypatch) ->
 @pytest.mark.asyncio
 async def test_forward_without_uid_or_query_asks(db_session, monkeypatch) -> None:
     monkeypatch.setattr(email_send, "_deliver", lambda *a, **k: None)
-    result = await ForwardEmailTool().run(_ctx(db_session), account="primary", to="a@b.com")
+    result = await forward_confirmed(_ctx(db_session), account="primary", to="a@b.com")
     assert result["ok"] is False
     assert "which email" in result["message"].lower()
 
@@ -152,7 +162,7 @@ async def test_forward_bad_recipient_is_refused_before_any_imap(db_session, monk
         touched["n"] += 1
 
     monkeypatch.setattr(email_send.email_read, "fetch_raw_message", raw)
-    result = await ForwardEmailTool().run(
+    result = await forward_confirmed(
         _ctx(db_session), account="primary", to="nope", uid="1",
     )
     assert result["ok"] is False and touched["n"] == 0
@@ -170,7 +180,7 @@ async def test_forward_of_a_huge_mail_drops_attachments_and_says_so(
         email_send.email_read, "fetch_raw_message",
         lambda *a, **k: {"uid": "9", "raw": _original(), "size": 10**9, "truncated": True},
     )
-    result = await ForwardEmailTool().run(
+    result = await forward_confirmed(
         _ctx(db_session), account="primary", to="a@b.com", uid="9",
     )
     assert result["ok"] is True
@@ -187,8 +197,8 @@ async def test_forward_is_idempotent(db_session, monkeypatch) -> None:
         lambda *a, **k: {"uid": "555", "raw": _original(), "size": 1, "truncated": False},
     )
     ctx = _ctx(db_session)
-    first = await ForwardEmailTool().run(ctx, account="primary", to="idem@b.com", uid="555")
-    again = await ForwardEmailTool().run(ctx, account="primary", to="idem@b.com", uid="555")
+    first = await forward_confirmed(ctx, account="primary", to="idem@b.com", uid="555")
+    again = await forward_confirmed(ctx, account="primary", to="idem@b.com", uid="555")
     assert first["ok"] and again.get("deduped") is True
     assert n["sent"] == 1
 
@@ -205,7 +215,7 @@ async def test_forward_smtp_auth_failure_is_graceful(db_session, monkeypatch) ->
         email_send.email_read, "fetch_raw_message",
         lambda *a, **k: {"uid": "1", "raw": _original(), "size": 1, "truncated": False},
     )
-    result = await ForwardEmailTool().run(
+    result = await forward_confirmed(
         _ctx(db_session), account="primary", to="auth@b.com", uid="1",
     )
     assert result["ok"] is False and "sign in" in result["message"].lower()
@@ -221,3 +231,40 @@ def test_forwarded_message_parses_back_cleanly() -> None:
     assert parsed.is_multipart()
     assert parsed["Subject"] == "Fwd: Q3 report"
     assert parsed["Message-ID"]
+
+
+@pytest.mark.asyncio
+async def test_forward_first_call_describes_the_mail_and_sends_nothing(
+    db_session, monkeypatch
+) -> None:
+    delivered = {"n": 0}
+    monkeypatch.setattr(email_send, "_deliver", lambda *a, **k: delivered.__setitem__("n", 1))
+    monkeypatch.setattr(
+        email_send.email_read, "fetch_raw_message",
+        lambda *a, **k: {"uid": "31", "raw": _original(), "size": 2048, "truncated": False},
+    )
+    first = await ForwardEmailTool().run(
+        _ctx(db_session), account="primary", to="faraz@y.com", query="Q3",
+        note="please review", cc="boss@x.com",
+    )
+    assert first["ok"] is False and first["sent"] is False
+    assert first["status"] == CONFIRM_SEND
+    assert first["draft"] == {
+        "from": "me@gmail.com", "account": "me@gmail.com", "to": "faraz@y.com",
+        "uid": "31", "subject": "Fwd: Q3 report", "original_from": "Ali <ali@x.com>",
+        "attachments": ["report.pdf"], "cc": ["boss@x.com"], "note": "please review",
+    }
+    assert "uid='31'" in first["instructions"]
+    assert delivered["n"] == 0
+    # A different recipient with the old token: still nothing.
+    other = await ForwardEmailTool().run(
+        _ctx(db_session), account="primary", to="stranger@y.com", uid="31",
+        note="please review", cc="boss@x.com", confirm=first["confirm_token"],
+    )
+    assert other["status"] == CONFIRM_SEND and delivered["n"] == 0
+    # The same forward by uid with the token goes out.
+    done = await ForwardEmailTool().run(
+        _ctx(db_session), account="primary", to="faraz@y.com", uid="31",
+        note="please review", cc="boss@x.com", confirm=first["confirm_token"],
+    )
+    assert done["ok"] is True and done["sent"] is True and delivered["n"] == 1
