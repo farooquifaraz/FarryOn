@@ -30,13 +30,12 @@ class MakeCallTool(Tool):
 
     name = "make_call"
     description = (
-        "Call someone on the phone. Give the recipient: a phone number if the "
-        "user said one, OTHERWISE just the person's NAME as contact_name — the "
-        "phone looks the number up in the user's own contacts, so do NOT ask "
-        "for a number you weren't given. Use for 'call X', 'phone X', 'ring "
-        "X', 'dial this number'. The phone DIALS — so ALWAYS confirm who you "
-        "are about to call and get a clear yes first. Say you are calling; "
-        "never claim the other person has answered or that you can hear them."
+        "Call someone ('call X', 'phone X', 'ring X', 'X ko call karo', 'dial "
+        "this number'). Call this with a phone_number the user gave, a "
+        "contact_id from resolve_contact, or a saved contact_name — do not ask "
+        "for a number you weren't given. The phone DIALS for real, so only "
+        "after a clear yes. Say you are calling; never claim it rang, connected "
+        "or was answered."
     )
     parameters: dict[str, Any] = {
         "type": "object",

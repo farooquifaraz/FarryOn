@@ -28,13 +28,11 @@ class SendMessageTool(Tool):
 
     name = "send_message"
     description = (
-        "Send a normal SMS text message to someone. Provide the text and the "
-        "recipient: a phone number if the user gave one, OTHERWISE just pass "
-        "the person's NAME as contact_name — the phone looks the number up in "
-        "the user's own contacts automatically, so do NOT ask for a number you "
-        "weren't given. Use for 'text X', 'send an SMS', 'message X' when no "
-        "app (WhatsApp/Telegram) is named. Opens the Messages app with the text "
-        "ready; the user taps Send. ALWAYS confirm the recipient and text first."
+        "Send a plain SMS ('text X', 'send an SMS', 'message X' with no app "
+        "named). Call this with a phone_number the user gave, a contact_id from "
+        "resolve_contact, or a saved contact_name — do not ask for a number you "
+        "weren't given. Opens the Messages app with the text ready; the user "
+        "taps Send."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -47,8 +45,7 @@ class SendMessageTool(Tool):
             },
             "contact_id": {
                 "type": "string",
-                "description": "Opaque id from a resolve_contact match (device "
-                "contact). The phone opens Messages using its local number.",
+                "description": "contact_id from a resolve_contact match.",
             },
             "contact_name": {
                 "type": "string",

@@ -57,12 +57,11 @@ class SendTelegramTool(Tool):
 
     name = "send_telegram"
     description = (
-        "Send a Telegram message. Provide the message and a recipient: a "
-        "@username, a phone number, or a contact_name (saved, or one you just "
-        "resolved with resolve_contact). With the user's Telegram account set "
-        "up it DELIVERS to anyone (no /start needed); otherwise it sends via the "
-        "bot (if they started it) or opens the chat. Use for 'Telegram karo', "
-        "'TG bhejo'. ALWAYS confirm the recipient and message first."
+        "Send a Telegram message ('Telegram karo', 'TG bhejo') to a @username, "
+        "phone number, saved/resolved contact_name or contact_id, or to a group "
+        "/ channel. Delivers directly when the user's Telegram account is set "
+        "up; otherwise via the bot, or it opens the chat. Call this only for a "
+        "confirmed recipient + message."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -82,16 +81,13 @@ class SendTelegramTool(Tool):
             },
             "contact_id": {
                 "type": "string",
-                "description": "The contact_id of the match the user picked from "
-                "a resolve_contact result (e.g. one option out of an ambiguous "
-                "list). Pass this whenever the recipient came from that list — "
-                "no @username is needed.",
+                "description": "contact_id from a resolve_contact match (also "
+                "one picked from an ambiguous list); no @username needed then.",
             },
             "group": {
                 "type": "string",
-                "description": "Name or @username of a Telegram GROUP or CHANNEL "
-                "to post to (the user must be a member). Use this instead of a "
-                "person when the user says 'group' or 'channel'.",
+                "description": "Telegram GROUP or CHANNEL name/@username to post "
+                "to (user must be a member) — instead of a person.",
             },
             "confirm_sensitive": {
                 "type": "boolean",

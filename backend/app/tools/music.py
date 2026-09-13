@@ -68,13 +68,13 @@ class PlayMusicTool(Tool):
 
     name = "play_music"
     description = (
-        "Play or control music on the phone. Use command='play' with a query "
-        "for 'play <song/artist/playlist>' — the query is what the user asked "
-        "for, e.g. 'Arijit Singh', 'lo-fi beats', 'Bohemian Rhapsody'. Use "
-        "pause / resume / next / previous / stop to control whatever is "
-        "already playing. Name an app only if the user did. This asks the "
-        "phone's music app to act and gets NO confirmation back, so say you've "
-        "asked for it — never announce which song is now playing."
+        "Play or control music on the phone ('gaana bajao', 'music chalao', "
+        "pause / next / stop). Your ONLY way to play anything: any play/pause/"
+        "resume/skip/stop request MUST call it, no confirmation needed. Pass "
+        "query for 'play <song/artist/playlist>'; the other commands control "
+        "what is already playing; app only if the user named one. It gets NO "
+        "confirmation back — say you've asked for it, never announce which "
+        "song is playing."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -82,8 +82,7 @@ class PlayMusicTool(Tool):
             "command": {
                 "type": "string",
                 "enum": list(_COMMANDS),
-                "description": "What to do. Omit it to play — pass one of the "
-                "others only to control what is already playing.",
+                "description": "Omit to play; others control what is playing.",
             },
             "query": {
                 "type": "string",
@@ -93,8 +92,7 @@ class PlayMusicTool(Tool):
             "app": {
                 "type": "string",
                 "enum": list(_APPS),
-                "description": "Player to use. Leave out unless the user named "
-                "one — 'default' lets the phone choose.",
+                "description": "Only if the user named a player.",
             },
         },
         # Nothing is required: "play some Arijit Singh" is a query and an

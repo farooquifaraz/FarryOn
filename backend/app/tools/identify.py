@@ -39,18 +39,13 @@ class IdentifyImageTool(Tool):
 
     name = "identify_image"
     description = (
-        "Capture the current camera view and identify what it shows — a "
-        "landmark/place, a product, or any ordinary object. Use whenever the "
-        "user wants to know what they are looking at: 'what is this', 'what's "
-        "in front of me', 'take a photo and tell me what it is', 'click a pic', "
-        "'scan this', 'identify/describe this'. No tap is needed.\n"
-        "IMPORTANT: if the user asks to READ or ANSWER something about the view "
-        "— the TIME on a clock, text on a label/sign, a number, how many of "
-        "something, or any specific question — pass that as 'question' (e.g. "
-        "question='what time does the clock show?'). That reads the image to "
-        "answer, instead of trying to identify it as a product to shop for. "
-        "Use 'kind' only for pure what-is-this: 'landmark', 'product', or "
-        "'auto' (default)."
+        "Capture the current camera view and look at it. Call this for 'what "
+        "is this', 'what's in front of me', 'click a pic', 'scan/identify/"
+        "describe this' (kind: landmark | product | auto), AND for reading or "
+        "answering a specific thing about the view — clock time, label/sign "
+        "text, a number, a count ('ghadi mein kya time hai') — by passing it as "
+        "'question', which reads the image instead of identifying a product. "
+        "No tap is needed."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -62,10 +57,8 @@ class IdentifyImageTool(Tool):
             },
             "question": {
                 "type": "string",
-                "description": "A specific question to READ/answer from the view "
-                "(time on a clock, text on a label, a count, etc.). When set, "
-                "the image is read to answer this instead of product/landmark "
-                "identification.",
+                "description": "Specific question to read/answer from the view "
+                "(clock time, label text, a count). Overrides identification.",
             },
         },
     }

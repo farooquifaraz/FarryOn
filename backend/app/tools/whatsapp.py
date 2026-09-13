@@ -64,13 +64,10 @@ class SendWhatsAppTool(Tool):
 
     name = "send_whatsapp"
     description = (
-        "Send a WhatsApp message — call this ONLY after you have a confirmed "
-        "recipient. Pass: a phone_number if the user gave one; OR a contact_id "
-        "from a previous resolve_contact result; OR a contact_name that the "
-        "user has saved. If the user names a person you have NOT resolved yet, "
-        "call resolve_contact FIRST (do not call this with an unknown name). "
-        "Opens WhatsApp with the message ready; the user taps Send. ALWAYS "
-        "confirm the recipient + message before calling."
+        "Send a WhatsApp message ('WhatsApp karo', 'WA bhejo'). Call this only "
+        "for a confirmed recipient: a phone_number the user gave, a contact_id "
+        "from resolve_contact, or a saved contact_name — never an unresolved "
+        "name. Opens WhatsApp with the message ready; the user taps Send."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -83,8 +80,7 @@ class SendWhatsAppTool(Tool):
             },
             "contact_id": {
                 "type": "string",
-                "description": "Opaque id from a resolve_contact match (device "
-                "contact). The phone opens WhatsApp using its local number.",
+                "description": "contact_id from a resolve_contact match.",
             },
             "contact_name": {
                 "type": "string",

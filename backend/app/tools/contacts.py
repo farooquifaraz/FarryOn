@@ -60,15 +60,14 @@ class ResolveContactTool(Tool):
 
     name = "resolve_contact"
     description = (
-        "Look a person up in the user's own phone contacts. Read-only, NO "
-        "confirmation needed — call it immediately. This is the ONLY way you "
-        "can see those contacts, so you MUST call it before saying anyone is "
-        "or is not in there. Use it when the user names someone to message or "
-        "phone, AND when they simply ask you to search their contacts. Returns "
-        "status=found with a MASKED number (read it back to confirm) and a "
-        "contact_id to pass to send_whatsapp / make_call; or not_found / "
-        "ambiguous / no_number / permission_denied so you can ask the user. "
-        "NEVER say a message was sent based on this — it only looks someone up."
+        "Look a person up in the user's phone contacts — read-only, no "
+        "confirmation, call it immediately when the user names someone to "
+        "message or phone, or asks to search their contacts ('X ko contacts me "
+        "dhoondo'). It is the ONLY way to see the contacts: NEVER say someone "
+        "is or isn't in there without calling it. Returns status found (masked "
+        "number to read back + contact_id for the send/call tools), ambiguous, "
+        "not_found, no_number or permission_denied. It only looks someone up — "
+        "NEVER say a message was sent based on it."
     )
     parameters: dict[str, Any] = {
         "type": "object",

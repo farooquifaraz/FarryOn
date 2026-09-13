@@ -220,18 +220,14 @@ class RecordVideoTool(Tool):
 
     name = "record_video"
     description = (
-        "Start recording VIDEO — on the user's smart glasses when they are "
-        "connected, otherwise with the phone's camera. There is always a "
-        "camera, so recording is never unavailable: if you are unsure the user "
-        "meant it, ASK — do not refuse. Call this once the user has CLEARLY "
-        "asked to record a video ('video banao', 'video record karo', 'start "
-        "recording') AND confirmed — recording captures their surroundings, so "
-        "a garbled or half-heard phrase must NEVER start one, but a clear "
-        "request that you confirmed MUST. Only for video — a request for a "
-        "photo, or a question about what they are looking at, is capture_photo "
-        "instead. Nothing is recorded unless this is called, and nothing but "
-        "this can tell you whether a recording started. What to tell the user "
-        "comes back in the result."
+        "Start recording VIDEO — on the smart glasses when connected, else the "
+        "phone camera; there is always a camera, so it is never unavailable "
+        "(unsure? ASK, don't refuse). Call this once the user CLEARLY asked "
+        "('video banao', 'video record karo', 'start recording') and confirmed "
+        "— a garbled phrase must NEVER start one, a confirmed request MUST. "
+        "Video only (photos / 'what am I looking at' are capture_photo). "
+        "Nothing records unless called, and only the result says whether it "
+        "started; what to tell the user comes back in it."
     )
     parameters: dict[str, Any] = {
         "type": "object",
