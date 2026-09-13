@@ -32,6 +32,8 @@ class MicGate {
     this.absoluteFloor = 180.0,
     this.maxNoiseFloor = 450.0,
     this.onsetMs = 0,
+    this.floorFromWindow = false,
+    this.floorWindow = const Duration(seconds: 8),
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
 
@@ -45,12 +47,23 @@ class MicGate {
   /// transcripts). The floor may learn higher, the bar sits further above
   /// it, and speech must HOLD for [onsetMs] before the gate opens — a word
   /// fragment from across the room does not. The pre-roll keeps the onset.
+  ///
+  /// Measured on the audio the gate let through (2026-09-13 19:03-19:12,
+  /// L802 call-mode mic, TV on): the TV alone reached p90 3,300 / p98 6,800
+  /// RMS; the wearer's own speech sat at p80 8,200 / p90 11,200 / p98
+  /// 16,700. Replayed against that TV recording, a bar of 6,000 (floor
+  /// 2,400 x 2.5) held for 240 ms let ZERO TV bursts through while keeping
+  /// 12 of the 14 voice openings of the speech recording (the two lost were
+  /// sub-240 ms grunts); 5,000 / 160 ms still let one TV burst per 40 s in.
+  /// The window may raise the floor to 2,800 (bar 7,000) for a louder room,
+  /// never higher, so a raised voice always gets through.
   factory MicGate.glasses({DateTime Function()? clock}) => MicGate(
-        absoluteFloor: 600.0,
-        maxNoiseFloor: 1500.0,
+        absoluteFloor: 2400.0,
+        maxNoiseFloor: 2800.0,
         noiseMultiplier: 2.5,
-        onsetMs: 120,
+        onsetMs: 240,
         hangover: const Duration(milliseconds: 900),
+        floorFromWindow: true,
         clock: clock,
       );
 
@@ -60,6 +73,33 @@ class MicGate {
   /// on the first loud chunk, the phone behaviour). The chunks that make up
   /// the onset are kept and flushed with the pre-roll, so nothing is lost.
   final int onsetMs;
+
+  /// Learn the room from the quiet fifth of the last [floorWindow] of audio,
+  /// whether the gate is open or not — instead of only while it is closed.
+  ///
+  /// The closed-only rule cannot learn a room that never goes quiet: with a
+  /// TV on, the glasses gate opened on the very first chunk and from then on
+  /// never closed long enough to learn, so the floor sat at its minimum and
+  /// the TV made a "turn" every couple of seconds (device-seen 2026-09-13
+  /// 19:03: 14 empty turns in a minute, Thai and "<noise>" transcripts). A
+  /// low percentile of a sliding window sees through both speech and TV
+  /// dialogue — each has gaps — to whatever is steady underneath, so the bar
+  /// climbs above a continuous background and a voice on the face still
+  /// clears it. Off for the phone profile, whose behaviour is unchanged.
+  final bool floorFromWindow;
+  final Duration floorWindow;
+
+  /// With [floorFromWindow], the floor is frozen while the gate is open for
+  /// less than this — an utterance must not teach the gate that the wearer's
+  /// own voice is the room and then chop the end of a long sentence. A gate
+  /// held open longer than this is hearing a background, not a sentence, and
+  /// learning resumes.
+  static const Duration _longOpen = Duration(seconds: 15);
+
+  /// The window needs this many chunks before its percentile means anything;
+  /// until then the floor stays where it is (the first chunks of a stream
+  /// are as likely to be speech as room).
+  static const int _minWindowChunks = 50;
 
   /// Audio kept before speech is detected, flushed with the first speech chunk.
   final Duration preRoll;
@@ -101,6 +141,10 @@ class MicGate {
 
   /// Bytes of consecutive speech-loud audio seen while closed (the onset).
   int _loudBytes = 0;
+
+  /// Recent chunk levels for [floorFromWindow]: (arrival, rms).
+  final Queue<(DateTime, double)> _levels = Queue<(DateTime, double)>();
+  DateTime? _openSince;
 
   /// Called each time the gate opens, with the chunk's level and the bar it
   /// had to clear. If a user ever reports "she can't hear me", this is the
@@ -165,7 +209,21 @@ class MicGate {
     // the instant a session opened taught the gate that YOUR VOICE was the
     // room, and it then held back everything quieter — caught by the
     // controller test, which speaks on its very first chunk.
-    if (!_open) {
+    if (floorFromWindow) {
+      _levels.addLast((now, rms));
+      while (_levels.isNotEmpty &&
+          now.difference(_levels.first.$1) > floorWindow) {
+        _levels.removeFirst();
+      }
+      final openFor = _openSince == null ? Duration.zero : now.difference(_openSince!);
+      final mayLearn = !_open || openFor > _longOpen;
+      if (mayLearn && _levels.length >= _minWindowChunks) {
+        final sorted = _levels.map((e) => e.$2).toList()..sort();
+        final p20 =
+            sorted[(sorted.length * 0.2).floor().clamp(0, sorted.length - 1)];
+        _noiseFloor = p20.clamp(absoluteFloor, maxNoiseFloor);
+      }
+    } else if (!_open) {
       _noiseFloor = rms < _noiseFloor
           ? (_noiseFloor * 0.9) + (rms * 0.1)
           : (_noiseFloor * 0.995) + (rms * 0.005);
@@ -185,6 +243,7 @@ class MicGate {
         }
         _loudBytes = 0;
         _open = true;
+        _openSince = now;
         lastOpenRms = rms;
         lastOpenThreshold = threshold;
         onOpen?.call(rms, threshold);
@@ -205,6 +264,7 @@ class MicGate {
     }
     if (_open) {
       _open = false;
+      _openSince = null;
       onClose?.call();
     }
     _remember(pcm16);
@@ -216,6 +276,8 @@ class MicGate {
     _ring.clear();
     _ringBytes = 0;
     _loudBytes = 0;
+    _levels.clear();
+    _openSince = null;
     final wasOpen = _open;
     _open = false;
     _lastSpeechAt = null;
@@ -231,6 +293,7 @@ class MicGate {
   /// than decaying from the old level.
   void resetFloor() {
     _noiseFloor = absoluteFloor;
+    _levels.clear();
   }
 
   void _remember(Uint8List pcm16) {

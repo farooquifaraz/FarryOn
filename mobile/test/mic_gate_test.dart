@@ -166,27 +166,83 @@ void main() {
     test('the glasses profile needs speech to HOLD before it opens', () {
       var t = DateTime(2026, 1, 1);
       final gate = MicGate.glasses(clock: () => t);
-      // 40 ms chunks (640 samples at 16 kHz): one loud chunk is not an onset…
-      expect(gate.process(loud(640)), isEmpty);
-      expect(gate.isOpen, isFalse);
-      t = t.add(const Duration(milliseconds: 40));
-      expect(gate.process(loud(640)), isEmpty);
-      t = t.add(const Duration(milliseconds: 40));
-      // …the third (120 ms of speech) opens it and flushes what it held.
-      final out = gate.process(loud(640));
+      // 40 ms chunks (640 samples at 16 kHz) of voice-on-the-face level:
+      // five loud chunks are not yet an onset…
+      for (var i = 0; i < 5; i++) {
+        expect(gate.process(loud(640, 9000)), isEmpty);
+        expect(gate.isOpen, isFalse);
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      // …the sixth (240 ms of speech) opens it and flushes what it held.
+      final out = gate.process(loud(640, 9000));
       expect(gate.isOpen, isTrue);
-      expect(out.length, 3, reason: 'nothing of the onset is lost');
+      expect(out.length, 6, reason: 'nothing of the onset is lost');
     });
 
     test('a loud blip that does not hold never opens the gate', () {
       var t = DateTime(2026, 1, 1);
       final gate = MicGate.glasses(clock: () => t);
-      expect(gate.process(loud(640)), isEmpty);
+      expect(gate.process(loud(640, 9000)), isEmpty);
       t = t.add(const Duration(milliseconds: 40));
       expect(gate.process(quiet(640)), isEmpty); // the blip ended
       t = t.add(const Duration(milliseconds: 40));
-      expect(gate.process(loud(640)), isEmpty, reason: 'the count restarts');
+      expect(gate.process(loud(640, 9000)), isEmpty,
+          reason: 'the count restarts');
       expect(gate.isOpen, isFalse);
+    });
+
+    test('a TV that never stops raises the glasses bar above itself', () {
+      // Continuous background at 1200 RMS: above the phone-style minimum bar
+      // (600 x 2.5 = 1500? no — 1200 < 1500, so use 1800 to be sure it is
+      // loud enough to open at first) …
+      var t = DateTime(2026, 1, 1);
+      final gate = MicGate.glasses(clock: () => t);
+      var opens = 0;
+      gate.onOpen = (_, __) => opens++;
+      // 20 s of a very loud, steady 6500-RMS TV (40 ms chunks). It opens
+      // the gate at first (the floor starts at 2400, bar 6000) …
+      for (var i = 0; i < 500; i++) {
+        gate.process(loud(640, 6500));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(opens, greaterThan(0));
+      // … but a gate held open that long is hearing a background: learning
+      // resumed, the floor sits at its cap (2800) and the bar (7000) above
+      // the TV, so the TV alone no longer holds the gate open.
+      expect(gate.noiseFloor, closeTo(2800, 1));
+      expect(gate.threshold, greaterThan(6500));
+      // Let the hangover run out on more TV, then count new opens.
+      for (var i = 0; i < 50; i++) {
+        gate.process(loud(640, 6500));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(gate.isOpen, isFalse, reason: 'steady TV is the room now');
+      final before = opens;
+      // The wearer's own voice (9000 RMS, 320 ms) still gets through.
+      for (var i = 0; i < 8; i++) {
+        gate.process(loud(640, 9000));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(opens, before + 1);
+      expect(gate.isOpen, isTrue);
+    });
+
+    test('a long sentence does not teach the glasses gate that speech is the room', () {
+      var t = DateTime(2026, 1, 1);
+      final gate = MicGate.glasses(clock: () => t);
+      // 3 s of quiet room first (so the window is trusted) …
+      for (var i = 0; i < 75; i++) {
+        gate.process(quiet(640));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      // … then 10 s of continuous speech at 8000 RMS: the floor must stay
+      // put and the gate stay open for the whole sentence.
+      for (var i = 0; i < 250; i++) {
+        gate.process(loud(640, 8000));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(gate.isOpen, isTrue);
+      expect(gate.noiseFloor, closeTo(2400, 1));
     });
 
     test('the phone profile still opens on the first loud chunk', () {

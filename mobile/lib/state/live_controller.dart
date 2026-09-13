@@ -2708,6 +2708,12 @@ class LiveController {
     // stalled here.
     unawaited(_audioSub?.cancel());
     _audioSub = null;
+    // The mic is going away: an utterance the gate was still passing ends
+    // NOW (reset fires onClose → speech_end), or the backend's manual
+    // activity window never closes and the model never answers
+    // (device-seen 2026-09-13 18:52: mic closed 2 s after speech_start,
+    // no speech_end, no reply).
+    _micGate.reset();
     await _audioSource.stopAudio();
     _setHearing(false);
   }

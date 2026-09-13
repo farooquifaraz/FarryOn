@@ -158,6 +158,8 @@ class Session:
         #: client's speech_start/speech_end drive the model's turn window.
         #: Decided from hello, applied to the gateway before connect.
         self._manual_vad = False
+        #: A manual activity window is open (activityStart sent, no end yet).
+        self._activity_open = False
         #: Mic frames dropped because the upstream sender fell behind
         #: (oldest-first). Logged, never fatal — see _queue_audio.
         self._audio_dropped = 0
@@ -1025,6 +1027,11 @@ class Session:
             # Mic (un)muted — automatic VAD on the provider handles turn-taking.
             await self._send_state("listening")
         elif mtype == "audio_stop":
+            # The mic closed. If a manual activity window is still open the
+            # client could not close it (its gate never saw the silence), so
+            # close it here — otherwise the model waits forever.
+            if self._manual_vad and self._activity_open:
+                await self._handle_speech_marker(False)
             await self._send_state("idle")
         elif mtype in ("speech_start", "speech_end"):
             await self._handle_speech_marker(mtype == "speech_start")
@@ -1604,11 +1611,16 @@ class Session:
             self._last_activity = time.monotonic()
         if not self._manual_vad or self._gateway is None:
             return
+        # Strictly alternating: a second start while a window is open would
+        # confuse the model, and an end with nothing open is a no-op.
+        if start == self._activity_open:
+            return
         try:
             if start:
                 await self._gateway.send_activity_start()
             else:
                 await self._gateway.send_activity_end()
+            self._activity_open = start
         except Exception as exc:  # noqa: BLE001 - a marker must never end a session
             logger.warning(
                 "vad.marker_failed",
