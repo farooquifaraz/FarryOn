@@ -13,6 +13,7 @@ import '../../data/email_probe.dart';
 import '../../data/live_client.dart';
 import '../../state/auth.dart';
 import '../../state/providers.dart';
+import '../accessibility/accessibility_screen.dart';
 import '../data/conversations_screen.dart';
 import '../data/notes_screen.dart';
 import '../data/reminders_screen.dart';
@@ -86,8 +87,7 @@ class SettingsScreen extends ConsumerWidget {
         : emailAccts.length == 1
             ? emailAccts.first.address
             : '${emailAccts.length} mailboxes';
-    final serverSub =
-        _isCloud(cfg) ? 'Cloud' : '${cfg.host}:${cfg.port}';
+    final serverSub = _isCloud(cfg) ? 'Cloud' : '${cfg.host}:${cfg.port}';
 
     return Scaffold(
       backgroundColor: Aurora.base,
@@ -97,7 +97,6 @@ class SettingsScreen extends ConsumerWidget {
         children: [
           _Hero(connection: live.connection, target: serverSub),
           const SizedBox(height: 22),
-
           const SectionLabel('Assistant'),
           SettingsGroup(children: [
             SettingsRow(
@@ -126,7 +125,18 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ]),
           const SizedBox(height: 20),
-
+          const SectionLabel('Accessibility'),
+          SettingsGroup(children: [
+            SettingsRow(
+              icon: Icons.accessibility_new_rounded,
+              gradient: Aurora.gradCoral,
+              title: 'People of determination',
+              subtitle: 'Live captions · Speak for me · Guide',
+              onTap: () => AccessibilityScreen.open(context),
+              showDivider: false,
+            ),
+          ]),
+          const SizedBox(height: 20),
           const SectionLabel('Devices'),
           SettingsGroup(children: [
             SettingsRow(
@@ -187,7 +197,6 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ]),
           const SizedBox(height: 20),
-
           const SectionLabel('Connections'),
           SettingsGroup(children: [
             SettingsRow(
@@ -214,7 +223,6 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ]),
           const SizedBox(height: 20),
-
           const SectionLabel('Your stuff'),
           SettingsGroup(children: [
             SettingsRow(
@@ -241,7 +249,6 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ]),
           const SizedBox(height: 20),
-
           const SectionLabel('Account'),
           SettingsGroup(children: [
             SettingsRow(
@@ -303,7 +310,6 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ]),
           const SizedBox(height: 20),
-
           const SectionLabel('About'),
           SettingsGroup(children: [
             SettingsRow(
@@ -617,8 +623,8 @@ class _GlassesVolumeRowState extends ConsumerState<_GlassesVolumeRow> {
                     SliderTheme(
                       data: SliderTheme.of(context).copyWith(
                         trackHeight: 3,
-                        thumbShape: const RoundSliderThumbShape(
-                            enabledThumbRadius: 7),
+                        thumbShape:
+                            const RoundSliderThumbShape(enabledThumbRadius: 7),
                         overlayShape:
                             const RoundSliderOverlayShape(overlayRadius: 14),
                       ),
@@ -940,10 +946,7 @@ class _VideoRecordingPage extends ConsumerWidget {
   ];
 
   static String label(int seconds) =>
-      options
-          .where((o) => o.$2 == seconds)
-          .map((o) => o.$1)
-          .firstOrNull ??
+      options.where((o) => o.$2 == seconds).map((o) => o.$1).firstOrNull ??
       '$seconds seconds';
 
   static String describe(AppConfig cfg) => cfg.autoMediaSync
@@ -1206,13 +1209,22 @@ class _ServerPageState extends ConsumerState<_ServerPage> {
   Widget _connectionStatus() {
     final status = ref.watch(liveProvider.select((s) => s.connection));
     final (color, icon, label) = switch (status) {
-      ConnectionStatus.connected =>
-        (Aurora.teal, Icons.check_circle, 'Connected'),
+      ConnectionStatus.connected => (
+          Aurora.teal,
+          Icons.check_circle,
+          'Connected'
+        ),
       ConnectionStatus.connecting => (Aurora.amber, Icons.sync, 'Connecting…'),
-      ConnectionStatus.reconnecting =>
-        (Aurora.amber, Icons.sync, 'Reconnecting…'),
-      ConnectionStatus.disconnected =>
-        (Aurora.danger, Icons.error_outline, 'Offline'),
+      ConnectionStatus.reconnecting => (
+          Aurora.amber,
+          Icons.sync,
+          'Reconnecting…'
+        ),
+      ConnectionStatus.disconnected => (
+          Aurora.danger,
+          Icons.error_outline,
+          'Offline'
+        ),
     };
     final scheme = _secure ? 'https' : 'http';
     final target = '$scheme://${_hostCtl.text.trim()}:${_portCtl.text.trim()}';
@@ -1274,13 +1286,11 @@ class _ServerPageState extends ConsumerState<_ServerPage> {
             Row(
               children: [
                 Icon(icon,
-                    size: 18,
-                    color: selected ? Aurora.teal : Aurora.textMuted),
+                    size: 18, color: selected ? Aurora.teal : Aurora.textMuted),
                 const SizedBox(width: 8),
                 Text(label,
                     style: TextStyle(
-                        color:
-                            selected ? Aurora.textPrimary : Aurora.textMuted,
+                        color: selected ? Aurora.textPrimary : Aurora.textMuted,
                         fontWeight: FontWeight.w600)),
                 if (selected) ...[
                   const Spacer(),
@@ -1352,7 +1362,8 @@ class _EmailPage extends ConsumerWidget {
           child: const Text(
             'When sending, if you don\'t name an account Farry asks which one '
             'to send from — so a reply never leaves the wrong address.',
-            style: TextStyle(color: Aurora.textMuted, fontSize: 12, height: 1.5),
+            style:
+                TextStyle(color: Aurora.textMuted, fontSize: 12, height: 1.5),
           ),
         ),
       ],
@@ -1498,8 +1509,7 @@ class _AccountCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right_rounded,
-                  color: Aurora.textMuted),
+              const Icon(Icons.chevron_right_rounded, color: Aurora.textMuted),
             ],
           ),
         ),
@@ -1554,19 +1564,13 @@ class _EmailAccountEditPage extends ConsumerStatefulWidget {
       _EmailAccountEditPageState();
 }
 
-class _EmailAccountEditPageState
-    extends ConsumerState<_EmailAccountEditPage> {
+class _EmailAccountEditPageState extends ConsumerState<_EmailAccountEditPage> {
   late final EmailAccount? _existing = widget.account;
-  late final _labelCtl =
-      TextEditingController(text: _existing?.label ?? '');
-  late final _emailCtl =
-      TextEditingController(text: _existing?.address ?? '');
-  late final _pwCtl =
-      TextEditingController(text: _existing?.appPassword ?? '');
-  late final _imapCtl =
-      TextEditingController(text: _existing?.imapHost ?? '');
-  late final _smtpCtl =
-      TextEditingController(text: _existing?.smtpHost ?? '');
+  late final _labelCtl = TextEditingController(text: _existing?.label ?? '');
+  late final _emailCtl = TextEditingController(text: _existing?.address ?? '');
+  late final _pwCtl = TextEditingController(text: _existing?.appPassword ?? '');
+  late final _imapCtl = TextEditingController(text: _existing?.imapHost ?? '');
+  late final _smtpCtl = TextEditingController(text: _existing?.smtpHost ?? '');
   late final _smtpPortCtl =
       TextEditingController(text: (_existing?.smtpPort ?? 587).toString());
   late String _provider = _existing?.provider ?? 'gmail';
@@ -1649,8 +1653,7 @@ class _EmailAccountEditPageState
 
   void _delete() {
     final cfg = ref.read(configProvider);
-    final list =
-        cfg.emailAccounts.where((a) => a.id != _existing!.id).toList();
+    final list = cfg.emailAccounts.where((a) => a.id != _existing!.id).toList();
     ref.read(configProvider.notifier).state = cfg.copyWith(
       emailAccounts: _normalizePrimary(list),
     );
@@ -1843,9 +1846,8 @@ class _EmailAccountEditPageState
           ),
           child: SwitchListTile(
             value: _primary || _isOnlyAccount,
-            onChanged: _isOnlyAccount
-                ? null
-                : (v) => setState(() => _primary = v),
+            onChanged:
+                _isOnlyAccount ? null : (v) => setState(() => _primary = v),
             activeThumbColor: Aurora.mint,
             title: const Text('Set as primary',
                 style: TextStyle(

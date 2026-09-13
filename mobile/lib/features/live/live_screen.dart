@@ -13,6 +13,7 @@ import '../../state/auth.dart';
 import '../../state/live_state.dart';
 import '../../state/permissions.dart';
 import '../../state/providers.dart';
+import '../accessibility/accessibility_screen.dart';
 import '../data/your_stuff_screen.dart';
 import '../finder/finder_result_view.dart';
 import '../finder/finder_screen.dart';
@@ -63,8 +64,8 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
       // (device-proven 2026-07-11). Screen-off users get the spoken answer;
       // the sheet is a bonus for when they're looking.
       _finderSub = ref.read(liveControllerProvider).finderEvents.listen((d) {
-        final visible = WidgetsBinding.instance.lifecycleState ==
-            AppLifecycleState.resumed;
+        final visible =
+            WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
         if (mounted && visible) _presentFinder(detection: d);
       });
     });
@@ -172,7 +173,8 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
     }
   }
 
-  Future<void> _startUpgrade(BuildContext context, LiveNotifier notifier) async {
+  Future<void> _startUpgrade(
+      BuildContext context, LiveNotifier notifier) async {
     // Default the upgrade to Plus — the cheapest paid tier that lifts the cap.
     // A plan picker can come later; the point at the cap is to get them moving.
     final problem = await notifier.startUpgrade('plus');
@@ -245,177 +247,183 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
           child: ClipRRect(
             borderRadius: BorderRadius.circular(24),
             child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // 1. Camera fills the whole frame.
-          CameraPreviewView(
-            source: notifier.activeSource,
-            enabled: state.cameraOn,
-            portrait: state.cameraPortrait,
-          ),
-          // 2. Pinch-to-zoom anywhere on the camera (below the overlays, so
-          //    taps on controls still win).
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onScaleStart: (_) => _zoomBase = state.cameraZoom,
-              onScaleUpdate: (d) {
-                if (d.pointerCount < 2) return;
-                final z = (_zoomBase * d.scale).clamp(1.0, 8.0).toDouble();
-                if ((z - state.cameraZoom).abs() > 0.05) {
-                  notifier.setCameraZoom(z);
-                }
-              },
-            ),
-          ),
-          // 3. Voice orb focal point.
-          Center(
-            child: IgnorePointer(child: AuroraOrb(state: state.liveState)),
-          ),
-          // 4. Top overlay: status + zoom read-out + actions.
-          SafeArea(
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: _TopOverlay(
-                state: state,
-                onSettings: _showSettingsSheet,
-                chatOn: _showChat,
-                onToggleChat: () => setState(() => _showChat = !_showChat),
-                onFinder: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const FinderScreen(),
+              fit: StackFit.expand,
+              children: [
+                // 1. Camera fills the whole frame.
+                CameraPreviewView(
+                  source: notifier.activeSource,
+                  enabled: state.cameraOn,
+                  portrait: state.cameraPortrait,
+                ),
+                // 2. Pinch-to-zoom anywhere on the camera (below the overlays, so
+                //    taps on controls still win).
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onScaleStart: (_) => _zoomBase = state.cameraZoom,
+                    onScaleUpdate: (d) {
+                      if (d.pointerCount < 2) return;
+                      final z =
+                          (_zoomBase * d.scale).clamp(1.0, 8.0).toDouble();
+                      if ((z - state.cameraZoom).abs() > 0.05) {
+                        notifier.setCameraZoom(z);
+                      }
+                    },
                   ),
                 ),
-                onNotes: () => YourStuffScreen.open(context),
-                onTranslate: () => TranslateScreen.open(context),
-              ),
-            ),
-          ),
-          // 5. Zoom presets on the right edge.
-          SafeArea(
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: _ZoomPresets(
-                current: state.cameraZoom,
-                onPick: notifier.setCameraZoom,
-              ),
-            ),
-          ),
-          // 5b. Compact status row below the top bar — mic-device chip and a
-          //     small glasses pill (icon + battery), side by side so they
-          //     never overlap each other or the transcript.
-          SafeArea(
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: Padding(
-                padding: const EdgeInsets.only(top: 58),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _MicChip(state: state),
-                    const SizedBox(width: 8),
-                    _CamChip(state: state),
-                    const SizedBox(width: 8),
-                    // HeyCyan-style: the glasses card is ALWAYS on the
-                    // dashboard — an honest Disconnected when they're off,
-                    // and tapping it connects (with a chooser when several
-                    // pairs are found) / disconnects.
-                    _GlassesPill(
-                      state: state,
-                      onConnect: () async =>
-                          runGlassesConnectFlow(context, ref),
-                      onDisconnect: notifier.disconnectGlasses,
-                    ),
-                  ],
+                // 3. Voice orb focal point.
+                Center(
+                  child:
+                      IgnorePointer(child: AuroraOrb(state: state.liveState)),
                 ),
-              ),
-            ),
-          ),
-          // 6. Bottom overlay: tool activity + transcript + controls.
-          SafeArea(
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: SizedBox(
-                width: double.infinity,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                  // The result card + transcript can grow taller than the space
-                  // left when the keyboard is open (a rich product/landmark card
-                  // plus the typed-message field). Wrap them in a bottom-anchored
-                  // scroll view so they scroll instead of overflowing ("BOTTOM
-                  // OVERFLOWED BY … PIXELS"); the controls stay pinned below.
-                  Flexible(
-                    child: SingleChildScrollView(
-                      reverse: true,
-                      child: Column(
+                // 4. Top overlay: status + zoom read-out + actions.
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: _TopOverlay(
+                      state: state,
+                      onSettings: _showSettingsSheet,
+                      chatOn: _showChat,
+                      onToggleChat: () =>
+                          setState(() => _showChat = !_showChat),
+                      onFinder: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const FinderScreen(),
+                        ),
+                      ),
+                      onNotes: () => YourStuffScreen.open(context),
+                      onTranslate: () => TranslateScreen.open(context),
+                      onAccessibility: () => AccessibilityScreen.open(context),
+                    ),
+                  ),
+                ),
+                // 5. Zoom presets on the right edge.
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: _ZoomPresets(
+                      current: state.cameraZoom,
+                      onPick: notifier.setCameraZoom,
+                    ),
+                  ),
+                ),
+                // 5b. Compact status row below the top bar — mic-device chip and a
+                //     small glasses pill (icon + battery), side by side so they
+                //     never overlap each other or the transcript.
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 58),
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          if (state.tools.isNotEmpty)
-                            ToolActivityView(
-                              tools: state.tools,
-                              onPermission: notifier.respondToolPermission,
-                            ),
-                          // Chat is hidden until the user taps the chat toggle
-                          // (recording continues regardless).
-                          if (_showChat)
-                            _TranscriptOverlay(entries: state.transcripts),
-                          // Just above the controls (never over the header): the
-                          // last glasses photo, so the user sees exactly what
-                          // was captured.
-                          if (state.lastCapturedPhoto != null)
-                            _CapturedPhotoPreview(
-                              photo: state.lastCapturedPhoto!,
-                              at: state.lastCapturedAt,
-                              label: state.videoKind == 'glasses'
-                                  ? 'Glasses captured'
-                                  : 'Image sent to AI',
-                            ),
+                          _MicChip(state: state),
+                          const SizedBox(width: 8),
+                          _CamChip(state: state),
+                          const SizedBox(width: 8),
+                          // HeyCyan-style: the glasses card is ALWAYS on the
+                          // dashboard — an honest Disconnected when they're off,
+                          // and tapping it connects (with a chooser when several
+                          // pairs are found) / disconnects.
+                          _GlassesPill(
+                            state: state,
+                            onConnect: () async =>
+                                runGlassesConnectFlow(context, ref),
+                            onDisconnect: notifier.disconnectGlasses,
+                          ),
                         ],
                       ),
                     ),
                   ),
-                  _Controls(
-                    state: state,
-                    textController: _textController,
-                    onMicToggle: notifier.toggleMic,
-                    onInterrupt: notifier.interrupt,
-                    onSendText: (text) {
-                      notifier.sendText(text);
-                      _textController.clear();
-                    },
-                    onToggleCamera: () =>
-                        notifier.setCameraEnabled(!state.cameraOn),
-                    onFlipCamera: () =>
-                        notifier.setCameraFront(!state.cameraFront),
-                    onScan: _scanCurrentView,
-                    onCapturePhoto: notifier.captureGlassesPhoto,
-                    onToggleRecording: () => state.recording == null
-                        ? notifier.startGlassesRecording()
-                        : notifier.stopGlassesRecording(),
-                    onSyncNow: notifier.syncGlassesNow,
-                  ),
-                  ],
                 ),
-              ),
-            ),
-          ),
-          // 7. Reconnect overlay — shown after the session ends or drops.
-          if (state.connection == ConnectionStatus.disconnected)
-            Positioned.fill(
-              child: ReconnectOverlay(
-                onReconnect: notifier.connect,
-                capReached: state.capReached,
-                onUpgrade: () => _startUpgrade(context, notifier),
-              ),
-            ),
-        ],
-      ),
+                // 6. Bottom overlay: tool activity + transcript + controls.
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // The result card + transcript can grow taller than the space
+                          // left when the keyboard is open (a rich product/landmark card
+                          // plus the typed-message field). Wrap them in a bottom-anchored
+                          // scroll view so they scroll instead of overflowing ("BOTTOM
+                          // OVERFLOWED BY … PIXELS"); the controls stay pinned below.
+                          Flexible(
+                            child: SingleChildScrollView(
+                              reverse: true,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  if (state.tools.isNotEmpty)
+                                    ToolActivityView(
+                                      tools: state.tools,
+                                      onPermission:
+                                          notifier.respondToolPermission,
+                                    ),
+                                  // Chat is hidden until the user taps the chat toggle
+                                  // (recording continues regardless).
+                                  if (_showChat)
+                                    _TranscriptOverlay(
+                                        entries: state.transcripts),
+                                  // Just above the controls (never over the header): the
+                                  // last glasses photo, so the user sees exactly what
+                                  // was captured.
+                                  if (state.lastCapturedPhoto != null)
+                                    _CapturedPhotoPreview(
+                                      photo: state.lastCapturedPhoto!,
+                                      at: state.lastCapturedAt,
+                                      label: state.videoKind == 'glasses'
+                                          ? 'Glasses captured'
+                                          : 'Image sent to AI',
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          _Controls(
+                            state: state,
+                            textController: _textController,
+                            onMicToggle: notifier.toggleMic,
+                            onInterrupt: notifier.interrupt,
+                            onSendText: (text) {
+                              notifier.sendText(text);
+                              _textController.clear();
+                            },
+                            onToggleCamera: () =>
+                                notifier.setCameraEnabled(!state.cameraOn),
+                            onFlipCamera: () =>
+                                notifier.setCameraFront(!state.cameraFront),
+                            onScan: _scanCurrentView,
+                            onCapturePhoto: notifier.captureGlassesPhoto,
+                            onToggleRecording: () => state.recording == null
+                                ? notifier.startGlassesRecording()
+                                : notifier.stopGlassesRecording(),
+                            onSyncNow: notifier.syncGlassesNow,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                // 7. Reconnect overlay — shown after the session ends or drops.
+                if (state.connection == ConnectionStatus.disconnected)
+                  Positioned.fill(
+                    child: ReconnectOverlay(
+                      onReconnect: notifier.connect,
+                      capReached: state.capReached,
+                      onUpgrade: () => _startUpgrade(context, notifier),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
+      ),
     );
   }
 
@@ -583,8 +591,8 @@ class _GlassesPillState extends State<_GlassesPill> {
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Disconnect glasses?'),
-          content:
-              const Text('They will stay disconnected until you connect again.'),
+          content: const Text(
+              'They will stay disconnected until you connect again.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -691,9 +699,7 @@ class _GlassesPillState extends State<_GlassesPill> {
               const SizedBox(width: 6),
               Text(connecting ? 'Connecting…' : 'Disconnected',
                   style: TextStyle(
-                      color: color,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600)),
+                      color: color, fontSize: 12, fontWeight: FontWeight.w600)),
             ],
           ],
         ),
@@ -763,89 +769,90 @@ class _Controls extends StatelessWidget {
           FittedBox(
             fit: BoxFit.scaleDown,
             child: Row(
-            mainAxisSize: MainAxisSize.min,
-            spacing: 10,
-            children: [
-              _CircleButton(
-                icon: state.cameraOn ? Icons.videocam : Icons.videocam_off,
-                tooltip: state.cameraOn ? 'Turn camera off' : 'Turn camera on',
-                gradient: Aurora.gradBlue,
-                onPressed: onToggleCamera,
-              ),
-              // Front/back lens flip — only for the phone camera (glasses have a
-              // single fixed lens). Enabled while the camera is on.
-              if (state.videoKind != 'glasses')
+              mainAxisSize: MainAxisSize.min,
+              spacing: 10,
+              children: [
                 _CircleButton(
-                  icon: Icons.flip_camera_ios,
-                  tooltip: state.cameraFront
-                      ? 'Switch to back camera'
-                      : 'Switch to front camera',
-                  gradient: Aurora.gradTeal,
-                  onPressed: state.cameraOn ? onFlipCamera : null,
+                  icon: state.cameraOn ? Icons.videocam : Icons.videocam_off,
+                  tooltip:
+                      state.cameraOn ? 'Turn camera off' : 'Turn camera on',
+                  gradient: Aurora.gradBlue,
+                  onPressed: onToggleCamera,
                 ),
-              // B3: glasses shutter — take a still through the glasses camera
-              // and let Farry look at it. Only shown when the glasses are the
-              // vision source (the phone camera streams continuously, so it
-              // doesn't need a shutter).
-              if (state.videoKind == 'glasses')
+                // Front/back lens flip — only for the phone camera (glasses have a
+                // single fixed lens). Enabled while the camera is on.
+                if (state.videoKind != 'glasses')
+                  _CircleButton(
+                    icon: Icons.flip_camera_ios,
+                    tooltip: state.cameraFront
+                        ? 'Switch to back camera'
+                        : 'Switch to front camera',
+                    gradient: Aurora.gradTeal,
+                    onPressed: state.cameraOn ? onFlipCamera : null,
+                  ),
+                // B3: glasses shutter — take a still through the glasses camera
+                // and let Farry look at it. Only shown when the glasses are the
+                // vision source (the phone camera streams continuously, so it
+                // doesn't need a shutter).
+                if (state.videoKind == 'glasses')
+                  _CircleButton(
+                    icon: Icons.photo_camera,
+                    tooltip: 'Take a photo through the glasses',
+                    gradient: Aurora.gradGreen,
+                    // A still can't be taken mid-recording — the glasses are in
+                    // video work mode — so grey it out rather than fail on tap.
+                    onPressed: state.glassesConnected && recording == null
+                        ? onCapturePhoto
+                        : null,
+                  ),
+                // Video recording on the glasses. Same button starts and stops;
+                // the red state plus the clock above make it obvious which.
+                if (state.videoKind == 'glasses')
+                  _CircleButton(
+                    icon: recording == null
+                        ? Icons.fiber_manual_record
+                        : Icons.stop_circle,
+                    tooltip: recording == null
+                        ? 'Record video on the glasses'
+                        : 'Stop recording',
+                    gradient: Aurora.gradCoral,
+                    danger: recording != null,
+                    // Start and stop are the SAME command on the glasses, and
+                    // the device takes a second or two to answer. A second tap
+                    // in that window silently stopped the recording that was
+                    // just starting (device-seen 2026-08-08 — three
+                    // "already_recording" reports in a row). Disable the button
+                    // until the device has spoken.
+                    onPressed: state.glassesConnected && !state.recordingBusy
+                        ? onToggleRecording
+                        : null,
+                  ),
                 _CircleButton(
-                  icon: Icons.photo_camera,
-                  tooltip: 'Take a photo through the glasses',
-                  gradient: Aurora.gradGreen,
-                  // A still can't be taken mid-recording — the glasses are in
-                  // video work mode — so grey it out rather than fail on tap.
-                  onPressed: state.glassesConnected && recording == null
-                      ? onCapturePhoto
-                      : null,
+                  icon: Icons.center_focus_strong,
+                  tooltip: 'Identify what the camera sees',
+                  gradient: Aurora.gradPurple,
+                  // Live whether or not the camera is on. It used to be greyed
+                  // out without one, which made sense when the camera opened
+                  // with the session — "off" meant the user had turned it off.
+                  // Now off is the resting state, so greying this out left the
+                  // button dead on a phone whose camera is perfectly fine, with
+                  // nothing on screen to explain it. `grabFrame` turns the
+                  // camera on and waits for the first frame, so the tap that
+                  // used to be refused is now the thing that starts it.
+                  onPressed: onScan,
                 ),
-              // Video recording on the glasses. Same button starts and stops;
-              // the red state plus the clock above make it obvious which.
-              if (state.videoKind == 'glasses')
+                _MicButton(
+                  micOpen: state.micOpen,
+                  enabled: state.permissionsGranted,
+                  onPressed: onMicToggle,
+                ),
                 _CircleButton(
-                  icon: recording == null
-                      ? Icons.fiber_manual_record
-                      : Icons.stop_circle,
-                  tooltip: recording == null
-                      ? 'Record video on the glasses'
-                      : 'Stop recording',
-                  gradient: Aurora.gradCoral,
-                  danger: recording != null,
-                  // Start and stop are the SAME command on the glasses, and
-                  // the device takes a second or two to answer. A second tap
-                  // in that window silently stopped the recording that was
-                  // just starting (device-seen 2026-08-08 — three
-                  // "already_recording" reports in a row). Disable the button
-                  // until the device has spoken.
-                  onPressed: state.glassesConnected && !state.recordingBusy
-                      ? onToggleRecording
-                      : null,
+                  icon: Icons.stop,
+                  tooltip: 'Interrupt',
+                  onPressed: speaking ? onInterrupt : null,
+                  danger: speaking,
                 ),
-              _CircleButton(
-                icon: Icons.center_focus_strong,
-                tooltip: 'Identify what the camera sees',
-                gradient: Aurora.gradPurple,
-                // Live whether or not the camera is on. It used to be greyed
-                // out without one, which made sense when the camera opened
-                // with the session — "off" meant the user had turned it off.
-                // Now off is the resting state, so greying this out left the
-                // button dead on a phone whose camera is perfectly fine, with
-                // nothing on screen to explain it. `grabFrame` turns the
-                // camera on and waits for the first frame, so the tap that
-                // used to be refused is now the thing that starts it.
-                onPressed: onScan,
-              ),
-              _MicButton(
-                micOpen: state.micOpen,
-                enabled: state.permissionsGranted,
-                onPressed: onMicToggle,
-              ),
-              _CircleButton(
-                icon: Icons.stop,
-                tooltip: 'Interrupt',
-                onPressed: speaking ? onInterrupt : null,
-                danger: speaking,
-              ),
-            ],
+              ],
             ),
           ),
           const SizedBox(height: 16),
@@ -1028,7 +1035,9 @@ class ReconnectOverlay extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            capReached ? Icons.hourglass_bottom_rounded : Icons.power_settings_new,
+            capReached
+                ? Icons.hourglass_bottom_rounded
+                : Icons.power_settings_new,
             size: 48,
             color: capReached ? Aurora.amber : Aurora.textMuted,
           ),
@@ -1096,6 +1105,7 @@ class _TopOverlay extends StatefulWidget {
     required this.onFinder,
     required this.onNotes,
     required this.onTranslate,
+    required this.onAccessibility,
     required this.chatOn,
     required this.onToggleChat,
   });
@@ -1105,6 +1115,7 @@ class _TopOverlay extends StatefulWidget {
   final VoidCallback onFinder;
   final VoidCallback onNotes;
   final VoidCallback onTranslate;
+  final VoidCallback onAccessibility;
 
   /// Whether the live transcript is currently shown (drives the chat icon).
   final bool chatOn;
@@ -1183,9 +1194,14 @@ class _TopOverlayState extends State<_TopOverlay> {
                   _BarIcon(Icons.image_search_rounded,
                       'Finder — identify a photo', widget.onFinder,
                       gradient: Aurora.gradBlue),
-                  _BarIcon(Icons.grid_view_rounded, 'Your stuff', widget.onNotes,
+                  _BarIcon(Icons.accessibility_new_rounded, 'Accessibility',
+                      widget.onAccessibility,
+                      gradient: Aurora.gradCoral),
+                  _BarIcon(
+                      Icons.grid_view_rounded, 'Your stuff', widget.onNotes,
                       gradient: Aurora.gradGreen),
-                  _BarIcon(Icons.settings_rounded, 'Settings', widget.onSettings,
+                  _BarIcon(
+                      Icons.settings_rounded, 'Settings', widget.onSettings,
                       gradient: Aurora.gradPurple),
                 ],
                 _BarIcon(
@@ -1447,7 +1463,9 @@ class _CapturedPhotoPreview extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      at == null ? 'tap to enlarge' : '${_stamp(at!)} · tap to enlarge',
+                      at == null
+                          ? 'tap to enlarge'
+                          : '${_stamp(at!)} · tap to enlarge',
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.6),
                         fontSize: 11,
@@ -1571,8 +1589,7 @@ class _IdentifyingAnimationState extends State<_IdentifyingAnimation>
               builder: (context, _) => Stack(
                 alignment: Alignment.center,
                 children: [
-                  for (var i = 0; i < 3; i++)
-                    _ring((_c.value + i / 3) % 1.0),
+                  for (var i = 0; i < 3; i++) _ring((_c.value + i / 3) % 1.0),
                   Container(
                     width: 60,
                     height: 60,
@@ -1838,8 +1855,7 @@ class _PendingMediaChip extends ConsumerWidget {
             borderRadius: BorderRadius.circular(20),
             onTap: onSync,
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
               decoration: BoxDecoration(
                 color: Aurora.glass,
                 borderRadius: BorderRadius.circular(20),

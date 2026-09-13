@@ -67,7 +67,10 @@ class ConfigStore {
   })? authSession() {
     final access = _accessCache;
     final refresh = _refreshCache;
-    if (access == null || access.isEmpty || refresh == null || refresh.isEmpty) {
+    if (access == null ||
+        access.isEmpty ||
+        refresh == null ||
+        refresh.isEmpty) {
       return null;
     }
     return (
@@ -150,6 +153,8 @@ class ConfigStore {
       micDevice: p.getString('cfg.micDevice'),
       translateTargetLanguage: p.getString('cfg.translate.target'),
       translateCaptionsOnly: p.getBool('cfg.translate.captionsOnly'),
+      speakLanguage: p.getString('cfg.speak.language'),
+      speakPhrases: p.getStringList('cfg.speak.phrases'),
     );
   }
 
@@ -216,6 +221,8 @@ class ConfigStore {
     await p.setString('cfg.micDevice', c.micDevice);
     await p.setString('cfg.translate.target', c.translateTargetLanguage);
     await p.setBool('cfg.translate.captionsOnly', c.translateCaptionsOnly);
+    await p.setString('cfg.speak.language', c.speakLanguage);
+    await p.setStringList('cfg.speak.phrases', c.speakPhrases);
   }
 
   // ---- Email accounts ----------------------------------------------------
@@ -227,8 +234,7 @@ class ConfigStore {
       final list = jsonDecode(raw) as List;
       return [
         for (final m in list)
-          _withSecret(EmailAccount.fromMap(
-              (m as Map).cast<String, Object?>())),
+          _withSecret(EmailAccount.fromMap((m as Map).cast<String, Object?>())),
       ];
     } catch (_) {
       return const [];

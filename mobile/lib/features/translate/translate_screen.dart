@@ -21,12 +21,20 @@ import 'translate_transcript.dart';
 /// That is not a limitation to hide — only one feature can own the microphone,
 /// and a user who is not told will read Farry's silence as a bug. So the
 /// consequence is stated before anything starts, and the return is confirmed.
+///
+/// Opened with [captions] it is the same screen as a **Live captions** preset
+/// for deaf and hard-of-hearing users: text only, larger type, no glasses
+/// required (nothing is played, so nothing can loop back into the mic), and
+/// the user's ordinary translate preference left untouched.
 class TranslateScreen extends ConsumerStatefulWidget {
-  const TranslateScreen({super.key});
+  const TranslateScreen({super.key, this.captions = false});
 
-  static Future<void> open(BuildContext context) =>
+  /// Open as the Live captions preset rather than the translator.
+  final bool captions;
+
+  static Future<void> open(BuildContext context, {bool captions = false}) =>
       Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) => const TranslateScreen(),
+        builder: (_) => TranslateScreen(captions: captions),
       ));
 
   @override
@@ -72,6 +80,12 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
           ref.read(configProvider),
           glassesConnected: live.glassesConnected,
         );
+    // The preset forces text only for THIS screen, in the controller only.
+    // The saved translate preference is the user's; opening captions must not
+    // silently switch their translator to text the next time they use it.
+    if (widget.captions) {
+      ref.read(translateControllerProvider).setCaptionsOnly(true);
+    }
   }
 
   @override
@@ -170,15 +184,16 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
     final s = ref.watch(translateProvider);
     // Watched, not read: plugging the glasses in should light the screen up
     // without the user having to back out and come in again.
-    final glassesOn =
-        ref.watch(liveProvider.select((l) => l.glassesConnected));
+    final glassesOn = ref.watch(liveProvider.select((l) => l.glassesConnected));
+    // Captions play nothing, so the glasses are welcome but not required.
+    final canStart = glassesOn || s.captionsOnly;
     return Scaffold(
       backgroundColor: Aurora.base,
       appBar: AppBar(
         backgroundColor: Aurora.base,
         elevation: 0,
-        title: const Text('Live translation',
-            style: TextStyle(color: Aurora.textPrimary, fontSize: 17)),
+        title: Text(widget.captions ? 'Live captions' : 'Live translation',
+            style: const TextStyle(color: Aurora.textPrimary, fontSize: 17)),
         iconTheme: const IconThemeData(color: Aurora.textPrimary),
         actions: [
           // Saving is deliberately a tap, never automatic. A translator is
@@ -215,20 +230,27 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            if (!glassesOn) const _GlassesRequiredPanel(),
-            if (glassesOn && !s.isRunning && s.turns.isEmpty)
+            if (!canStart) const _GlassesRequiredPanel(),
+            if (canStart && !s.isRunning && s.turns.isEmpty)
               const _FarryPausedNotice(),
             if (s.status == TranslateStatus.reconnecting) const _ReconnectBar(),
             if (s.error != null) _ErrorBar(s.error!),
             if (s.notice != null) _NoticeBar(s.notice!),
             Expanded(
               child: s.turns.isEmpty
-                  ? _EmptyState(running: s.isRunning)
-                  : _TurnList(turns: s.turns, target: s.targetLanguage),
+                  ? _EmptyState(running: s.isRunning, captions: widget.captions)
+                  : _TurnList(
+                      turns: s.turns,
+                      target: s.targetLanguage,
+                      large: widget.captions,
+                    ),
             ),
             _Controls(
               state: s,
-              enabled: glassesOn,
+              enabled: canStart,
+              // The preset IS text only; a switch to turn that off would put
+              // the loudspeaker loop back on a screen that exists to avoid it.
+              showCaptionsSwitch: !widget.captions,
               onToggle: _toggle,
               onCaptionsOnly: (v) {
                 _controller.setCaptionsOnly(v);
@@ -334,8 +356,9 @@ class _ErrorBar extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.running});
+  const _EmptyState({required this.running, this.captions = false});
   final bool running;
+  final bool captions;
 
   @override
   Widget build(BuildContext context) => Center(
@@ -344,9 +367,13 @@ class _EmptyState extends StatelessWidget {
           child: Text(
             running
                 ? 'Listening…'
-                : 'Point the microphone at whoever is speaking. Their language '
-                    'is detected on its own — you only pick the one you want '
-                    'to hear.',
+                : captions
+                    ? 'Everything said near the microphone appears here as '
+                        'text. Their language is detected on its own — you '
+                        'only pick the one you want to read.'
+                    : 'Point the microphone at whoever is speaking. Their '
+                        'language is detected on its own — you only pick the '
+                        'one you want to hear.',
             textAlign: TextAlign.center,
             style: const TextStyle(
                 color: Aurora.textMuted, fontSize: 13, height: 1.5),
@@ -356,9 +383,17 @@ class _EmptyState extends StatelessWidget {
 }
 
 class _TurnList extends StatelessWidget {
-  const _TurnList({required this.turns, required this.target});
+  const _TurnList({
+    required this.turns,
+    required this.target,
+    this.large = false,
+  });
   final List<TranslateTurn> turns;
   final String target;
+
+  /// Captions type: the text is the whole point, so it is set big enough to
+  /// read from across a table.
+  final bool large;
 
   @override
   Widget build(BuildContext context) => ListView.builder(
@@ -368,19 +403,30 @@ class _TurnList extends StatelessWidget {
         itemBuilder: (_, i) => _TurnTile(
           turn: turns[turns.length - 1 - i],
           target: target,
+          large: large,
         ),
       );
 }
 
 class _TurnTile extends StatelessWidget {
-  const _TurnTile({required this.turn, required this.target});
+  const _TurnTile({
+    required this.turn,
+    required this.target,
+    this.large = false,
+  });
   final TranslateTurn turn;
   final String target;
+  final bool large;
 
   @override
   Widget build(BuildContext context) {
     final heardRtl = isRtlLanguage(turn.heardLang);
     final targetRtl = isRtlLanguage(target);
+    // In captions the heard text is what the user reads, not a reference
+    // under the translation — so it is the bright, large line there.
+    final heardSize = large ? 20.0 : 14.0;
+    final translatedSize = large ? 20.0 : 15.5;
+    final heardColor = large ? Aurora.textPrimary : Aurora.purpleSoft;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -407,9 +453,9 @@ class _TurnTile extends StatelessWidget {
               // Dimmer still until the sentence is finalised, so "still
               // hearing this" and "this is settled" look different.
               color: turn.heardFinal
-                  ? Aurora.purpleSoft
-                  : Aurora.purpleSoft.withValues(alpha: 0.55),
-              fontSize: 14,
+                  ? heardColor
+                  : heardColor.withValues(alpha: 0.55),
+              fontSize: heardSize,
               height: 1.45,
             ),
           ),
@@ -422,8 +468,7 @@ class _TurnTile extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.only(left: 10),
               decoration: const BoxDecoration(
-                border: Border(
-                    left: BorderSide(color: Aurora.mint, width: 2)),
+                border: Border(left: BorderSide(color: Aurora.mint, width: 2)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -435,9 +480,9 @@ class _TurnTile extends StatelessWidget {
                   _DirectionalText(
                     turn.translated,
                     rtl: targetRtl,
-                    style: const TextStyle(
+                    style: TextStyle(
                         color: Aurora.textPrimary,
-                        fontSize: 15.5,
+                        fontSize: translatedSize,
                         height: 1.5),
                   ),
                 ],
@@ -475,8 +520,8 @@ class _SameLanguageNote extends StatelessWidget {
         child: Text(
           'Already in ${translateLanguageName(target)} — nothing to translate, '
           'so it was not spoken again.',
-          style: const TextStyle(
-              color: Aurora.amber, fontSize: 11.5, height: 1.4),
+          style:
+              const TextStyle(color: Aurora.amber, fontSize: 11.5, height: 1.4),
         ),
       );
 }
@@ -487,12 +532,14 @@ class _Controls extends StatelessWidget {
     required this.enabled,
     required this.onToggle,
     required this.onCaptionsOnly,
+    this.showCaptionsSwitch = true,
   });
 
   final TranslateState state;
   final bool enabled;
   final Future<void> Function() onToggle;
   final ValueChanged<bool> onCaptionsOnly;
+  final bool showCaptionsSwitch;
 
   @override
   Widget build(BuildContext context) {
@@ -554,23 +601,25 @@ class _Controls extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Text only, no voice',
-                  style: TextStyle(color: Aurora.textMuted, fontSize: 12),
+          if (showCaptionsSwitch) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Text only, no voice',
+                    style: TextStyle(color: Aurora.textMuted, fontSize: 12),
+                  ),
                 ),
-              ),
-              Switch(
-                value: state.captionsOnly,
-                activeThumbColor: Aurora.tealInk,
-                activeTrackColor: Aurora.teal,
-                onChanged: onCaptionsOnly,
-              ),
-            ],
-          ),
+                Switch(
+                  value: state.captionsOnly,
+                  activeThumbColor: Aurora.tealInk,
+                  activeTrackColor: Aurora.teal,
+                  onChanged: onCaptionsOnly,
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );

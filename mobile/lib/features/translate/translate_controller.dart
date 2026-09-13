@@ -64,7 +64,8 @@ class TranslateController {
     GlassesBridgeApi? glasses,
     DeviceVoice? deviceVoice,
     VoiceAudioMode? voiceAudioMode,
-    WebSocketLiveClient Function(AppConfig, TranslateSessionConfig, DeviceInfo Function())?
+    WebSocketLiveClient Function(
+            AppConfig, TranslateSessionConfig, DeviceInfo Function())?
         clientFactory,
     Duration? glassesGraceWindow,
   })  : _config = config,
@@ -235,12 +236,17 @@ class TranslateController {
   /// The same reasoning is visible in every product that does this: Google
   /// Translate's continuous Listening mode is headphones-only on iOS, and
   /// HeyCyan's own translator reads its audio off the glasses.
-  bool get glassesRequired => true;
+  ///
+  /// The one exception is captions-only. With nothing played there is nothing
+  /// to loop, and that is the mode a deaf or hard-of-hearing user lives in:
+  /// the phone on the table, the room's speech on the screen. Demanding
+  /// glasses there would lock out exactly the people who need it most.
+  bool get glassesRequired => !_state.captionsOnly;
 
   /// Begin translating. Returns false when it could not start.
   Future<bool> start() async {
     if (_disposed || _state.isRunning) return true;
-    if (!_glassesConnected) {
+    if (glassesRequired && !_glassesConnected) {
       _emit(_state.copyWith(
         status: TranslateStatus.idle,
         error: 'Connect your glasses first. The translation plays in your ear '
@@ -533,6 +539,14 @@ class TranslateController {
         _onGlassesReturned();
         return;
       }
+      // A captions session listening on the phone loses nothing when the
+      // glasses go: no microphone (it was never theirs) and no speaker
+      // (nothing plays). Holding it would blank the screen of a deaf user
+      // over a device that was not part of the conversation.
+      if (_state.captionsOnly &&
+          _registry.audioKind != CaptureDeviceKind.glasses) {
+        return;
+      }
       _onGlassesLost();
     });
   }
@@ -584,8 +598,6 @@ class TranslateController {
     ));
     unawaited(_startAudio());
   }
-
-
 
   // -- Server events --------------------------------------------------------
 
@@ -642,7 +654,8 @@ class TranslateController {
     if (spoke || _disposed) return;
     if (_state.notice != null) return; // something is already on screen
     _emit(_state.copyWith(
-      notice: 'This phone has no ${translateLanguageName(_state.targetLanguage)} '
+      notice:
+          'This phone has no ${translateLanguageName(_state.targetLanguage)} '
           'voice installed, so the translation is shown but not spoken. '
           'Android Settings → Text-to-speech can add it.',
     ));
@@ -662,20 +675,17 @@ class TranslateController {
       // Prefer the sentence's own number. The server re-sends a heard line once
       // its language is known, and that must land on the same card rather than
       // appearing as a duplicate.
-      var openIndex = utterance == null
-          ? -1
-          : turns.indexWhere((t) => t.id == utterance);
+      var openIndex =
+          utterance == null ? -1 : turns.indexWhere((t) => t.id == utterance);
       if (openIndex < 0) {
         // No number, or a sentence not seen yet: fall back to the open turn.
-        openIndex = turns.isNotEmpty && !turns.last.heardFinal
-            ? turns.length - 1
-            : -1;
+        openIndex =
+            turns.isNotEmpty && !turns.last.heardFinal ? turns.length - 1 : -1;
       }
       // The model stays silent on speech already in the target language, so
       // that verdict can be reached the moment the language is known — no
       // waiting to see whether a translation shows up.
-      final sameLanguage =
-          lang != null && lang == _state.targetLanguage;
+      final sameLanguage = lang != null && lang == _state.targetLanguage;
       final turn = TranslateTurn(
         heard: text,
         heardLang: lang ?? (openIndex >= 0 ? turns[openIndex].heardLang : null),

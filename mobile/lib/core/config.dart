@@ -39,6 +39,8 @@ class AppConfig {
     this.micDevice = 'phone',
     this.translateTargetLanguage = '',
     this.translateCaptionsOnly = false,
+    this.speakLanguage = '',
+    this.speakPhrases = const [],
   });
 
   /// Backend host (IP or DNS name), without scheme or port.
@@ -165,6 +167,19 @@ class AppConfig {
   /// or for reading along while listening to the original voice.
   final bool translateCaptionsOnly;
 
+  /// BCP-47 code the Speak-for-me screen says typed text in, e.g. `"ur"`.
+  ///
+  /// Empty means "not chosen": the screen then derives one from
+  /// [primaryLanguage], so a user who set up the app in Urdu is spoken for in
+  /// Urdu without a second question.
+  final String speakLanguage;
+
+  /// Phrases the user pinned on the Speak-for-me screen, oldest first.
+  ///
+  /// Only the user's own; the built-in starter phrases live in code so a
+  /// future edit to them reaches existing installs.
+  final List<String> speakPhrases;
+
   /// Build the initial config from `--dart-define` values, falling back to the
   /// LIVE backend.
   ///
@@ -241,6 +256,8 @@ class AppConfig {
     String? micDevice,
     String? translateTargetLanguage,
     bool? translateCaptionsOnly,
+    String? speakLanguage,
+    List<String>? speakPhrases,
   }) =>
       AppConfig(
         host: host ?? this.host,
@@ -259,8 +276,7 @@ class AppConfig {
         handsFree: handsFree ?? this.handsFree,
         saveCapturesToGallery:
             saveCapturesToGallery ?? this.saveCapturesToGallery,
-        glassesRetentionDays:
-            glassesRetentionDays ?? this.glassesRetentionDays,
+        glassesRetentionDays: glassesRetentionDays ?? this.glassesRetentionDays,
         primaryLanguage: primaryLanguage ?? this.primaryLanguage,
         secondaryLanguage: secondaryLanguage ?? this.secondaryLanguage,
         glassesVolume: glassesVolume ?? this.glassesVolume,
@@ -273,6 +289,8 @@ class AppConfig {
             translateTargetLanguage ?? this.translateTargetLanguage,
         translateCaptionsOnly:
             translateCaptionsOnly ?? this.translateCaptionsOnly,
+        speakLanguage: speakLanguage ?? this.speakLanguage,
+        speakPhrases: speakPhrases ?? this.speakPhrases,
       );
 
   @override
@@ -390,8 +408,7 @@ class EmailAccount {
 class EmailProviders {
   EmailProviders._();
 
-  static const Map<String,
-          ({String label, String imap, String smtp, int port})>
+  static const Map<String, ({String label, String imap, String smtp, int port})>
       presets = {
     'gmail': (
       label: 'Gmail',

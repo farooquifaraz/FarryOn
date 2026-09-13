@@ -49,8 +49,8 @@ class _FakeGlasses implements GlassesBridgeApi {
   Stream<GlassesLabEvent> events() => controller.stream;
 
   @override
-  dynamic noSuchMethod(Invocation invocation) =>
-      throw UnsupportedError('the translate session must not drive the glasses');
+  dynamic noSuchMethod(Invocation invocation) => throw UnsupportedError(
+      'the translate session must not drive the glasses');
 }
 
 /// Stands in for Android's text-to-speech.
@@ -215,8 +215,7 @@ void main() {
     await pump();
   }
 
-  void hear(String text,
-          {required String lang, bool isFinal = true}) =>
+  void hear(String text, {required String lang, bool isFinal = true}) =>
       fake.pushJson({
         'type': 'transcript',
         'role': 'user',
@@ -522,6 +521,70 @@ void main() {
       expect(fake.sentLog, isEmpty, reason: 'no socket should be opened');
     });
 
+    test('captions only starts without them — nothing plays, so nothing loops',
+        () async {
+      // The deaf and hard-of-hearing case: the phone on the table, the
+      // room's speech on the screen. The glasses gate exists to stop the
+      // loudspeaker feeding the microphone; with no audio out there is no
+      // loudspeaker in the story.
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: false,
+      );
+      controller.setCaptionsOnly(true);
+      expect(controller.glassesRequired, isFalse);
+
+      expect(await controller.start(), isTrue);
+      await pump();
+      expect(controller.state.isRunning, isTrue);
+      expect(controller.state.error, isNull);
+      expect(sentJson().where((m) => m['type'] == 'hello'), isNotEmpty,
+          reason: 'a session is opened');
+      fake.pushJson({
+        'type': 'ready',
+        'sessionId': 's1',
+        'protocolVersion': kProtocolVersion,
+        'model': 'mock-translate-1',
+        'mode': 'translate',
+        'targetLanguage': 'en',
+      });
+      await pump();
+      expect(source.audioStarted, isTrue, reason: 'the phone mic listens');
+    });
+
+    test('a captions session on the phone mic ignores the glasses dropping',
+        () async {
+      // They were never the microphone and nothing plays: the drop changes
+      // nothing, and holding the session would blank a deaf user's screen
+      // over a device that was not part of the conversation.
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: true,
+      );
+      controller.setCaptionsOnly(true);
+      await controller.setTargetLanguage('en');
+      await controller.start();
+      await pump();
+      fake.pushJson({
+        'type': 'ready',
+        'sessionId': 's1',
+        'protocolVersion': kProtocolVersion,
+        'model': 'mock-translate-1',
+        'mode': 'translate',
+        'targetLanguage': 'en',
+      });
+      await pump();
+      expect(controller.state.status, TranslateStatus.listening);
+
+      glasses.emit('connectionState', {'state': 'disconnected'});
+      await pump(5);
+
+      expect(controller.state.status, TranslateStatus.listening,
+          reason: 'not held: the phone mic is still listening');
+      expect(controller.state.notice, isNull);
+      expect(source.audioStarted, isTrue, reason: 'the mic is kept');
+    });
+
     test('connecting them mid-refusal makes it startable', () async {
       controller.primeFromConfig(
         const AppConfig(host: 'h', port: 8000, secure: false),
@@ -808,15 +871,37 @@ void main() {
     test('each translation lands under the words it came from', () async {
       await connect();
 
-      fake.pushJson({'type': 'transcript', 'role': 'user', 'text': 'first.',
-        'final': true, 'lang': 'ar', 'utterance': 0});
-      fake.pushJson({'type': 'transcript', 'role': 'user', 'text': 'second.',
-        'final': true, 'lang': 'ar', 'utterance': 1});
+      fake.pushJson({
+        'type': 'transcript',
+        'role': 'user',
+        'text': 'first.',
+        'final': true,
+        'lang': 'ar',
+        'utterance': 0
+      });
+      fake.pushJson({
+        'type': 'transcript',
+        'role': 'user',
+        'text': 'second.',
+        'final': true,
+        'lang': 'ar',
+        'utterance': 1
+      });
       // Now the translations come back — in the wrong order, as they do.
-      fake.pushJson({'type': 'transcript', 'role': 'assistant',
-        'text': 'दूसरा।', 'final': true, 'utterance': 1});
-      fake.pushJson({'type': 'transcript', 'role': 'assistant',
-        'text': 'पहला।', 'final': true, 'utterance': 0});
+      fake.pushJson({
+        'type': 'transcript',
+        'role': 'assistant',
+        'text': 'दूसरा।',
+        'final': true,
+        'utterance': 1
+      });
+      fake.pushJson({
+        'type': 'transcript',
+        'role': 'assistant',
+        'text': 'पहला।',
+        'final': true,
+        'utterance': 0
+      });
       await pump(5);
 
       final turns = controller.state.turns;
@@ -832,11 +917,22 @@ void main() {
       // The recogniser reports no language, so the server re-sends the heard
       // line once the translator has named it. That must not appear twice.
       return connect().then((_) async {
-        fake.pushJson({'type': 'transcript', 'role': 'user', 'text': 'مرحبا.',
-          'final': true, 'utterance': 0});
+        fake.pushJson({
+          'type': 'transcript',
+          'role': 'user',
+          'text': 'مرحبا.',
+          'final': true,
+          'utterance': 0
+        });
         await pump(3);
-        fake.pushJson({'type': 'transcript', 'role': 'user', 'text': 'مرحبا.',
-          'final': true, 'lang': 'ar', 'utterance': 0});
+        fake.pushJson({
+          'type': 'transcript',
+          'role': 'user',
+          'text': 'مرحبا.',
+          'final': true,
+          'lang': 'ar',
+          'utterance': 0
+        });
         await pump(3);
 
         expect(controller.state.turns.length, 1, reason: 'it was duplicated');
@@ -844,13 +940,24 @@ void main() {
       });
     });
 
-    test('a translation for a sentence that scrolled away is dropped', () async {
+    test('a translation for a sentence that scrolled away is dropped',
+        () async {
       // Rather than landing on an innocent bystander.
       await connect();
-      fake.pushJson({'type': 'transcript', 'role': 'user', 'text': 'here.',
-        'final': true, 'utterance': 7});
-      fake.pushJson({'type': 'transcript', 'role': 'assistant',
-        'text': 'ghost', 'final': true, 'utterance': 999});
+      fake.pushJson({
+        'type': 'transcript',
+        'role': 'user',
+        'text': 'here.',
+        'final': true,
+        'utterance': 7
+      });
+      fake.pushJson({
+        'type': 'transcript',
+        'role': 'assistant',
+        'text': 'ghost',
+        'final': true,
+        'utterance': 999
+      });
       await pump(5);
 
       expect(controller.state.turns.single.translated, isEmpty);
@@ -859,10 +966,19 @@ void main() {
     test('a server that sends no numbers still works', () async {
       // The old shape, and the mock, both omit it.
       await connect();
-      fake.pushJson({'type': 'transcript', 'role': 'user', 'text': 'hola.',
-        'final': true, 'lang': 'es'});
-      fake.pushJson({'type': 'transcript', 'role': 'assistant',
-        'text': 'नमस्ते।', 'final': true});
+      fake.pushJson({
+        'type': 'transcript',
+        'role': 'user',
+        'text': 'hola.',
+        'final': true,
+        'lang': 'es'
+      });
+      fake.pushJson({
+        'type': 'transcript',
+        'role': 'assistant',
+        'text': 'नमस्ते।',
+        'final': true
+      });
       await pump(5);
 
       expect(controller.state.turns.single.translated, 'नमस्ते।');
