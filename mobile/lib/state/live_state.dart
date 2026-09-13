@@ -128,6 +128,7 @@ class LiveSessionState {
     this.lastError,
     this.permissionsGranted = false,
     this.capReached = false,
+    this.serviceDown = false,
   });
 
   /// Socket-level status.
@@ -235,6 +236,13 @@ class LiveSessionState {
   /// Cleared when a new session starts.
   final bool capReached;
 
+  /// The session ended because the voice PROVIDER refused to start (the
+  /// operator's model account out of credit, or the model down) — nothing
+  /// the user can fix by retrying at once. The reconnect overlay says so and
+  /// offers a manual retry instead of the client looping into the same
+  /// failure. Cleared when a new session starts.
+  final bool serviceDown;
+
   bool get isConnected => connection == ConnectionStatus.connected;
 
   LiveSessionState copyWith({
@@ -270,6 +278,7 @@ class LiveSessionState {
     bool clearError = false,
     bool? permissionsGranted,
     bool? capReached,
+    bool? serviceDown,
   }) =>
       LiveSessionState(
         connection: connection ?? this.connection,
@@ -301,6 +310,7 @@ class LiveSessionState {
         lastError: clearError ? null : (lastError ?? this.lastError),
         permissionsGranted: permissionsGranted ?? this.permissionsGranted,
         capReached: capReached ?? this.capReached,
+        serviceDown: serviceDown ?? this.serviceDown,
       );
 }
 

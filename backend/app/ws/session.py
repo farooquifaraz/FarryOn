@@ -105,6 +105,48 @@ _AUDIO_DUMP_QUEUE_MAX = 200
 class AudioBackpressureError(RuntimeError):
     """The upstream audio connection cannot keep up with real-time speech."""
 
+#: When the operator was last mailed about a provider outage (monotonic).
+#: One mail per _OUTAGE_ALERT_INTERVAL_S per process, whatever the traffic —
+#: every failed connect in an outage looks the same.
+_OUTAGE_ALERTED_AT: float = 0.0
+_OUTAGE_ALERT_INTERVAL_S = 30 * 60
+
+#: Messages the app shows verbatim on the "service unavailable" overlay.
+_PROVIDER_CREDITS_MSG = (
+    "Farry's voice service is temporarily unavailable. Please try again in a "
+    "little while."
+)
+_PROVIDER_DOWN_MSG = (
+    "Farry's voice service could not start. Please try again in a moment."
+)
+
+
+def classify_provider_failure(exc: BaseException) -> tuple[str, str]:
+    """Turn a model-connect failure into an error code + a sentence for a person.
+
+    ``provider_credits`` — the operator's account is out of credit / over its
+    quota (Gemini says ``1011 … prepayment credits are depleted``, or 429 /
+    RESOURCE_EXHAUSTED). Nothing the user can do; the app must stop retrying
+    and say so. ``provider_unavailable`` — anything else that stopped the
+    connect. Until 2026-09-13 both reached the app as the raw exception repr
+    and the client kept reconnecting into the same failure, so a depleted
+    balance showed as a "connecting" spinner that never ended.
+    """
+    text = repr(exc).lower()
+    credit_markers = (
+        "credits are depleted",
+        "prepayment",
+        "1011",
+        "429",
+        "resource_exhausted",
+        "quota",
+        "billing",
+    )
+    if any(m in text for m in credit_markers):
+        return "provider_credits", _PROVIDER_CREDITS_MSG
+    return "provider_unavailable", _PROVIDER_DOWN_MSG
+
+
 #: Last Gemini session-resumption handle per authed user, with the monotonic
 #: time it was issued. A NEW session within the TTL re-attaches the previous
 #: conversation's context — so an idle-expired session or a network drop no
@@ -392,9 +434,7 @@ class Session:
                         self._apply_vad_mode()
                         await self._gateway.connect()
                     except Exception as exc2:  # noqa: BLE001
-                        await self._send_error(
-                            "provider_unavailable", repr(exc2), fatal=True
-                        )
+                        await self._report_provider_failure(exc2)
                         reason = "connect_failed"
                         return
                     # Non-fatal heads-up so the app can show which model is live.
@@ -405,9 +445,7 @@ class Session:
                         fatal=False,
                     )
                 else:
-                    await self._send_error(
-                        "provider_unavailable", repr(exc), fatal=True
-                    )
+                    await self._report_provider_failure(exc)
                     reason = "connect_failed"
                     return
             # Resume insurance: the resumed context's TAIL is the previous
@@ -1797,6 +1835,41 @@ class Session:
         """
         logger.info("state", session_id=self.session_id, value=value)
         await self._send_json({"type": "state", "value": value})
+
+    async def _report_provider_failure(self, exc: BaseException) -> None:
+        """The model would not connect: tell the app (fatal, in plain words),
+        log the real cause, and mail the operator (rate-limited)."""
+        global _OUTAGE_ALERTED_AT
+        code, message = classify_provider_failure(exc)
+        logger.error(
+            "provider.outage",
+            session_id=self.session_id,
+            code=code,
+            provider=getattr(self._gateway, "provider", None),
+            error=repr(exc)[:300],
+        )
+        await self._send_error(code, message, fatal=True)
+        to = getattr(self._settings, "first_super_admin_email", None)
+        now = time.monotonic()
+        if to and now - _OUTAGE_ALERTED_AT >= _OUTAGE_ALERT_INTERVAL_S:
+            _OUTAGE_ALERTED_AT = now
+            try:
+                from app.modules.auth.notifications import send_outage_alert
+
+                send_outage_alert(
+                    to_email=to,
+                    subject=f"FarryOn: voice provider down ({code})",
+                    text=(
+                        "A live session could not connect to the model.\n\n"
+                        f"code: {code}\nprovider: "
+                        f"{getattr(self._gateway, 'provider', None)}\n"
+                        f"error: {repr(exc)[:500]}\n\n"
+                        "If this is provider_credits, top up / enable "
+                        "auto-reload in Google AI Studio → Billing."
+                    ),
+                )
+            except Exception as mail_exc:  # noqa: BLE001 - alerting is best effort
+                logger.warning("provider.outage_alert_failed", error=repr(mail_exc))
 
     async def _send_error(
         self, code: str, message: str, *, fatal: bool = False

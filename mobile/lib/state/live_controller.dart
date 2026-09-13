@@ -1382,6 +1382,7 @@ class LiveController {
       // A new session starts fresh: a cap reached in the previous one no longer
       // applies to this attempt (the user may have upgraded, or it's a new day).
       capReached: false,
+      serviceDown: false,
     ));
     if (outcome != PermissionOutcome.granted) {
       _log.warn('permissions not granted: $outcome');
@@ -1656,6 +1657,24 @@ class LiveController {
               TranscriptEntry(role: 'notice', text: msg.message, isFinal: true),
             ],
           ));
+        } else if (msg.fatal &&
+            (msg.code == 'provider_credits' ||
+                msg.code == 'provider_unavailable')) {
+          // The voice provider refused to start — the operator's account is
+          // out of credit, or the model is down. The server closes the socket
+          // next; that close must NOT schedule a reconnect (it used to, so a
+          // depleted balance was a "connecting" spinner that never ended).
+          // Say what happened where the user is looking and let the overlay
+          // offer a manual retry.
+          _client.endedByServer();
+          _emit(_state.copyWith(
+            serviceDown: true,
+            transcripts: [
+              ..._state.transcripts,
+              TranscriptEntry(role: 'notice', text: msg.message, isFinal: true),
+            ],
+          ));
+          unawaited(disconnect());
         } else {
           _emit(_state.copyWith(lastError: msg.message));
         }

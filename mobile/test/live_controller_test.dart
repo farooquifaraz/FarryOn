@@ -304,6 +304,26 @@ void main() {
     expect(frame.payload, equals(Uint8List.fromList([1, 2, 3])));
   });
 
+  test('a provider outage ends the session with an explanation, no reconnect',
+      () async {
+    await controller.connect();
+    await tick();
+    fake.pushJson({
+      'type': 'error',
+      'code': 'provider_credits',
+      'message': 'Farry\'s voice service is temporarily unavailable.',
+      'fatal': true,
+    });
+    await tick();
+    fake.drop(); // the server closes the socket after a fatal error
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+
+    expect(controller.state.serviceDown, isTrue);
+    expect(controller.state.transcripts.last.role, 'notice');
+    expect(controller.state.connection, ConnectionStatus.disconnected,
+        reason: 'no reconnect loop into the same failure');
+  });
+
   test('the mic gate opening tells the server speech started', () async {
     // On a glasses mic the backend turns this into the model's activityStart
     // (manual detection); it must go out the moment the gate opens.

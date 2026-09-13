@@ -408,6 +408,7 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
               child: ReconnectOverlay(
                 onReconnect: notifier.connect,
                 capReached: state.capReached,
+                serviceDown: state.serviceDown,
                 onUpgrade: () => _startUpgrade(context, notifier),
               ),
             ),
@@ -1006,10 +1007,15 @@ class ReconnectOverlay extends StatelessWidget {
     super.key,
     required this.onReconnect,
     this.capReached = false,
+    this.serviceDown = false,
     this.onUpgrade,
   });
 
   final VoidCallback onReconnect;
+
+  /// The voice provider refused to start (operator credit / model down):
+  /// explain, and offer a retry — never a silent reconnect loop.
+  final bool serviceDown;
 
   /// The session ended because today's plan cap was spent. When true the
   /// overlay leads with Upgrade — a plain "Start session" would just re-hit the
@@ -1028,16 +1034,33 @@ class ReconnectOverlay extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            capReached ? Icons.hourglass_bottom_rounded : Icons.power_settings_new,
+            capReached
+                ? Icons.hourglass_bottom_rounded
+                : serviceDown
+                    ? Icons.cloud_off_rounded
+                    : Icons.power_settings_new,
             size: 48,
             color: capReached ? Aurora.amber : Aurora.textMuted,
           ),
           const SizedBox(height: 12),
           Text(
-            capReached ? "That's today's free minutes" : 'Session ended',
+            capReached
+                ? "That's today's free minutes"
+                : serviceDown
+                    ? 'Service temporarily unavailable'
+                    : 'Session ended',
             style: const TextStyle(color: Aurora.textPrimary, fontSize: 18),
             textAlign: TextAlign.center,
           ),
+          if (serviceDown) ...[
+            const SizedBox(height: 8),
+            const Text(
+              "Farry's voice service isn't reachable right now. This is on "
+              'our side, not yours — please try again in a little while.',
+              style: TextStyle(color: Aurora.textMuted, fontSize: 14),
+              textAlign: TextAlign.center,
+            ),
+          ],
           if (capReached) ...[
             const SizedBox(height: 8),
             const Text(
@@ -1070,8 +1093,8 @@ class ReconnectOverlay extends StatelessWidget {
                 )
               : FilledButton.icon(
                   onPressed: onReconnect,
-                  icon: const Icon(Icons.play_arrow),
-                  label: const Text('Start session'),
+                  icon: Icon(serviceDown ? Icons.refresh : Icons.play_arrow),
+                  label: Text(serviceDown ? 'Try again' : 'Start session'),
                   style: FilledButton.styleFrom(
                     backgroundColor: Aurora.teal,
                     foregroundColor: Aurora.tealInk,

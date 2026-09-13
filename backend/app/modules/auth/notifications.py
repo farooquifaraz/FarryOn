@@ -154,3 +154,20 @@ def send_invite_email(*, to_email: str, token: str) -> None:
             button="Activate my account",
         ),
     )
+
+
+def send_outage_alert(*, to_email: str, subject: str, text: str) -> None:
+    """Tell the operator the voice provider is refusing sessions.
+
+    Same daemon-thread sender as the auth mails (log-only without SMTP). Used
+    by the live session when a model connect fails for a reason no user can
+    fix — depleted prepaid credits, most of all — so the person who CAN fix
+    it hears about it before the users do.
+    """
+    _send(
+        to_email=to_email,
+        subject=subject,
+        text=text,
+        html=f"<pre style=\"font-family:inherit\">{text}</pre>",
+        kind="outage",
+    )

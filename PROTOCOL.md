@@ -108,6 +108,16 @@ All JSON messages have a `type` field.
 // the app reconnects in the right mode.
 { "type": "speech_start" }
 { "type": "speech_end" }
+```
+
+Fatal `error` codes the app treats specially (server → client, §4):
+`quota_exceeded` — the USER's own plan cap: the app offers Upgrade;
+`provider_credits` — the OPERATOR's model account is out of credit/quota;
+`provider_unavailable` — the model would not connect for another reason.
+On the two provider codes the app stops auto-reconnecting and shows a
+"service unavailable" overlay with a manual retry (a reconnect loop into the
+same failure looked like a spinner that never ended).
+```
 { "type": "text", "text": "..." }    // typed user input (no mic)
 { "type": "interrupt" }              // barge-in: stop current TTS playback
 { "type": "tool_permission", "id": "call-id", "granted": true }  // optional gate
