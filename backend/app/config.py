@@ -460,6 +460,16 @@ class Settings(BaseSettings):
     # audio cap: music keeps the gate open and must never trip this. 0
     # disables.
     stuck_reconnect_after_nudges: int = Field(default=3)
+
+    #: Run the model's activity detection MANUALLY for a glasses microphone:
+    #: the app's own energy gate says when speech starts and stops
+    #: (``speech_start`` / ``speech_end``) and the session maps that to the
+    #: model's activityStart/activityEnd. The glasses' call-mode (SCO) audio
+    #: is narrowband and hot, and the model's automatic detector either fired
+    #: on the room (empty turns, 0 output tokens) or missed the user's onset
+    #: for 20-40 s (live 2026-09-13, session 1c397a). The phone mic keeps the
+    #: automatic detector. False = the old behaviour everywhere.
+    manual_vad_for_glasses: bool = Field(default=True)
     # The client's mic gate holds silence back, so the provider's detector
     # never SEES the quiet after a sentence - it only sees the next burst.
     # Indoors on 2026-09-11 four "How are you?"s went unheard for 27 s until

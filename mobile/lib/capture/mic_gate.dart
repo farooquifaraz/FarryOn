@@ -31,10 +31,35 @@ class MicGate {
     this.noiseMultiplier = 2.2,
     this.absoluteFloor = 180.0,
     this.maxNoiseFloor = 450.0,
+    this.onsetMs = 0,
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
 
+  /// The profile for the glasses' call-mode (SCO) microphone.
+  ///
+  /// That signal is hot and omnidirectional: the wearer's voice measured
+  /// 700–11000 RMS where the phone mic gives 80–600, and the room — a TV,
+  /// someone talking behind the wearer — lands well above the phone
+  /// profile's bar (450 × 2.2 = 990), so every voice in the room opened the
+  /// gate and became a turn (live 2026-09-13: empty turns, mixed
+  /// transcripts). The floor may learn higher, the bar sits further above
+  /// it, and speech must HOLD for [onsetMs] before the gate opens — a word
+  /// fragment from across the room does not. The pre-roll keeps the onset.
+  factory MicGate.glasses({DateTime Function()? clock}) => MicGate(
+        absoluteFloor: 600.0,
+        maxNoiseFloor: 1500.0,
+        noiseMultiplier: 2.5,
+        onsetMs: 120,
+        hangover: const Duration(milliseconds: 900),
+        clock: clock,
+      );
+
   final int sampleRate;
+
+  /// Speech-loud audio must last this long before the gate opens (0 = open
+  /// on the first loud chunk, the phone behaviour). The chunks that make up
+  /// the onset are kept and flushed with the pre-roll, so nothing is lost.
+  final int onsetMs;
 
   /// Audio kept before speech is detected, flushed with the first speech chunk.
   final Duration preRoll;
@@ -74,11 +99,19 @@ class MicGate {
   bool _open = false;
   DateTime? _lastSpeechAt;
 
+  /// Bytes of consecutive speech-loud audio seen while closed (the onset).
+  int _loudBytes = 0;
+
   /// Called each time the gate opens, with the chunk's level and the bar it
   /// had to clear. If a user ever reports "she can't hear me", this is the
   /// number that says whether their voice reached the bar — without it the
   /// gate would be an invisible place for speech to disappear.
   void Function(double rms, double threshold)? onOpen;
+
+  /// Called each time the gate closes — the hangover after the last loud
+  /// chunk elapsed, or [reset] shut an open gate. Paired with [onOpen] it
+  /// brackets one utterance (the backend's manual activity window).
+  void Function()? onClose;
 
   /// Level and threshold at the most recent open. Diagnostics.
   double lastOpenRms = 0;
@@ -143,6 +176,14 @@ class MicGate {
     if (rms > threshold) {
       _lastSpeechAt = now;
       if (!_open) {
+        final need = onsetMs * _bytesPerSecond ~/ 1000;
+        if (need > 0 && _loudBytes + pcm16.length < need) {
+          // Loud, but not for long enough yet: hold it with the pre-roll.
+          _loudBytes += pcm16.length;
+          _remember(pcm16);
+          return const [];
+        }
+        _loudBytes = 0;
         _open = true;
         lastOpenRms = rms;
         lastOpenThreshold = threshold;
@@ -157,11 +198,15 @@ class MicGate {
 
     // Below threshold: keep streaming through the hangover so the tail of a
     // word — and the silence the server needs to end the turn — still gets out.
+    _loudBytes = 0; // an onset that did not hold
     final last = _lastSpeechAt;
     if (_open && last != null && now.difference(last) < hangover) {
       return [pcm16];
     }
-    _open = false;
+    if (_open) {
+      _open = false;
+      onClose?.call();
+    }
     _remember(pcm16);
     return const [];
   }
@@ -170,9 +215,14 @@ class MicGate {
   void reset() {
     _ring.clear();
     _ringBytes = 0;
+    _loudBytes = 0;
+    final wasOpen = _open;
     _open = false;
     _lastSpeechAt = null;
     _noiseFloor = absoluteFloor;
+    // An utterance that was cut off (the speaker started) still ends: the
+    // backend's manual activity window must not stay open.
+    if (wasOpen) onClose?.call();
   }
 
   /// Forget the learned room level only — keep the pre-roll and the open

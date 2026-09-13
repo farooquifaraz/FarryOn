@@ -154,6 +154,14 @@ class Session:
 
         self._send_lock = asyncio.Lock()
         self._closing = False
+        #: Manual activity detection for this session (glasses mic): the
+        #: client's speech_start/speech_end drive the model's turn window.
+        #: Decided from hello, applied to the gateway before connect.
+        self._manual_vad = False
+        #: Mic frames dropped because the upstream sender fell behind
+        #: (oldest-first). Logged, never fatal — see _queue_audio.
+        self._audio_dropped = 0
+        self._audio_drop_logged_at = 0.0
         self._hello: dict[str, Any] | None = None
         # Session mode, resolved from hello: "agent" (the assistant, and the
         # default for every client that has never heard of this field) or
@@ -334,6 +342,7 @@ class Session:
                     self._resolve_provider(), prompt
                 )
                 self._wire_session_resume()
+                self._apply_vad_mode()
 
             try:
                 await self._gateway.connect()
@@ -378,6 +387,7 @@ class Session:
                             default_provider, prompt
                         )
                         self._wire_session_resume()
+                        self._apply_vad_mode()
                         await self._gateway.connect()
                     except Exception as exc2:  # noqa: BLE001
                         await self._send_error(
@@ -691,6 +701,7 @@ class Session:
         mode = hello.get("mode")
         if mode in (None, "", "agent"):
             self._mode = "agent"
+            self._manual_vad = self._wants_manual_vad(hello)
             return True
         if mode != "translate":
             # A mode we don't implement is a bug in the client, not something
@@ -824,23 +835,30 @@ class Session:
         try:
             self._audio_queue.put_nowait((pcm, ts_ms))
         except asyncio.QueueFull:
-            # Never silently lose a user's words.  Keeping an unbounded queue
-            # would replay stale speech seconds later; dropping a frame would
-            # make the assistant appear to have misheard.  Instead end this
-            # unhealthy connection explicitly.  The mobile client reconnects
-            # on socket close and the session-resumption handle preserves the
-            # conversation context.
-            logger.error(
-                "audio.forward_queue_full",
-                session_id=self.session_id,
-                queued=self._audio_queue.qsize(),
-            )
-            await self._send_error(
-                "audio_backpressure",
-                "The live audio connection fell behind. Reconnecting now.",
-                fatal=True,
-            )
-            raise AudioBackpressureError("upstream audio queue is full")
+            # The provider stopped taking audio for a moment (a stalled
+            # model-side detector, a slow link). This used to END the session
+            # with a fatal error — twice on 2026-09-13 mid-conversation
+            # (sessions 834742, 65db89), each time 18 s after the model had
+            # gone quiet on glasses audio. Losing 40 ms of stale mic audio
+            # is nothing; losing the session is everything. Drop the OLDEST
+            # frame (the newest is the one still worth hearing), count it,
+            # and say so once in a while.
+            try:
+                self._audio_queue.get_nowait()
+                self._audio_queue.task_done()
+            except (asyncio.QueueEmpty, ValueError):
+                pass
+            self._audio_queue.put_nowait((pcm, ts_ms))
+            self._audio_dropped += 1
+            now = time.monotonic()
+            if now - self._audio_drop_logged_at >= 5.0:
+                self._audio_drop_logged_at = now
+                logger.warning(
+                    "audio.forward_queue_full",
+                    session_id=self.session_id,
+                    dropped_total=self._audio_dropped,
+                    queued=self._audio_queue.qsize(),
+                )
 
     def _queue_audio_dump(self, pcm: bytes) -> None:
         """Best-effort diagnostic copy; it must never delay live audio."""
@@ -917,7 +935,9 @@ class Session:
             elif not await self._meter_voice(len(payload)):
                 return  # over today's cap — _meter_voice ended the session
             await self._queue_audio(payload, ts)
-            if self._mode == "agent":
+            # The unheard-audio cap reasons about the model's AUTOMATIC
+            # detector; with manual markers the turn window is ours.
+            if self._mode == "agent" and not self._manual_vad:
                 await self._note_unheard_audio(now_audio)
         elif tag == FrameTag.INPUT_VIDEO:
             metrics.FRAMES_IN.labels(kind="video").inc()
@@ -1006,6 +1026,8 @@ class Session:
             await self._send_state("listening")
         elif mtype == "audio_stop":
             await self._send_state("idle")
+        elif mtype in ("speech_start", "speech_end"):
+            await self._handle_speech_marker(mtype == "speech_start")
         elif mtype == "interrupt":
             await self._handle_interrupt()
         elif mtype == "ping":
@@ -1058,6 +1080,9 @@ class Session:
             # photo-trigger glasses capture gets the long budget it needs —
             # without this the session kept the hello-time "phone" budget and
             # cut off every glasses photo (device-proven 2026-07-11).
+            audio_kind = message.get("audioKind")
+            if isinstance(audio_kind, str):
+                await self._audio_kind_changed(audio_kind)
             new_kind = message.get("videoKind")
             if self._orchestrator is not None and isinstance(new_kind, str):
                 budget = self._frame_wait_for_kind(new_kind)
@@ -1360,7 +1385,7 @@ class Session:
         real frame arrives. Returns True when a fill was sent.
         """
         seconds = float(getattr(self._settings, "vad_silence_filler_seconds", 0.0) or 0.0)
-        if seconds <= 0.0 or self._mode != "agent":
+        if seconds <= 0.0 or self._mode != "agent" or self._manual_vad:
             return False
         last = self._last_audio_frame_at
         if last <= 0.0 or last == self._filler_filled_for:
@@ -1407,7 +1432,7 @@ class Session:
         per pause. Returns True when a nudge was sent.
         """
         quiet = float(getattr(self._settings, "stuck_turn_quiet_nudge_seconds", 0.0) or 0.0)
-        if quiet <= 0.0 or self._mode != "agent":
+        if quiet <= 0.0 or self._mode != "agent" or self._manual_vad:
             return False
         if self._unheard_audio_since == 0.0:
             return False  # nothing unheard is pending
@@ -1526,6 +1551,100 @@ class Session:
                 session_id=self.session_id,
                 error=repr(exc),
             )
+
+    # -- Manual activity detection (glasses mic) -----------------------------
+
+    def _wants_manual_vad(self, hello: dict[str, Any]) -> bool:
+        """Whether this session's MICROPHONE is the glasses.
+
+        ``hello.device.kind`` is the app's active capture pair: ``"glasses"``
+        when both mic and camera are the glasses, ``"glasses+phone"`` when the
+        mic is the glasses and the camera the phone (audio first). Anything
+        else keeps the model's automatic detector.
+        """
+        if not bool(getattr(self._settings, "manual_vad_for_glasses", False)):
+            return False
+        device = hello.get("device")
+        kind = device.get("kind") if isinstance(device, dict) else None
+        if not isinstance(kind, str):
+            return False
+        return kind.split("+", 1)[0].strip().lower() == "glasses"
+
+    def _apply_vad_mode(self) -> None:
+        """Tell a gateway that supports it which detector to run."""
+        gw = self._gateway
+        if gw is None or not hasattr(gw, "manual_vad"):
+            if self._manual_vad:
+                logger.info(
+                    "vad.manual_unsupported",
+                    session_id=self.session_id,
+                    provider=getattr(gw, "provider", None),
+                )
+            self._manual_vad = False
+            return
+        gw.manual_vad = self._manual_vad
+        logger.info(
+            "vad.mode",
+            session_id=self.session_id,
+            manual=self._manual_vad,
+        )
+
+    async def _handle_speech_marker(self, start: bool) -> None:
+        """The client's mic gate opened (``speech_start``) or closed.
+
+        With manual detection these are the model's activityStart /
+        activityEnd: the turn opens exactly when speech energy crossed the
+        gate's bar and closes when it fell silent, so the model never fires
+        on the room and never misses an onset. Under automatic detection they
+        are informational only.
+        """
+        if start:
+            # A person is talking: that is activity, whatever the model makes
+            # of it (the idle cap otherwise counts only heard turns).
+            self._last_activity = time.monotonic()
+        if not self._manual_vad or self._gateway is None:
+            return
+        try:
+            if start:
+                await self._gateway.send_activity_start()
+            else:
+                await self._gateway.send_activity_end()
+        except Exception as exc:  # noqa: BLE001 - a marker must never end a session
+            logger.warning(
+                "vad.marker_failed",
+                session_id=self.session_id,
+                start=start,
+                error=repr(exc),
+            )
+            return
+        logger.info(
+            "vad.activity", session_id=self.session_id, start=start
+        )
+
+    async def _audio_kind_changed(self, audio_kind: str) -> None:
+        """The app switched microphones mid-session (device_update).
+
+        The detector mode is fixed at connect time, so when the switch means
+        a different mode, close the socket the way the stuck-turn path does:
+        the app reconnects at once, its hello names the new mic, and the
+        resume handle keeps the conversation.
+        """
+        if self._mode != "agent" or self._gateway is None:
+            return
+        if not hasattr(self._gateway, "manual_vad"):
+            return
+        if not bool(getattr(self._settings, "manual_vad_for_glasses", False)):
+            return
+        wants = audio_kind.strip().lower() == "glasses"
+        if wants == self._manual_vad:
+            return
+        logger.info(
+            "vad.mode_change_reconnect",
+            session_id=self.session_id,
+            audio_kind=audio_kind,
+            manual=wants,
+        )
+        await self._close_for_reconnect()
 
     async def _close_for_reconnect(self) -> None:
         """Close the client socket so the app reconnects (see stuck_reconnect)."""

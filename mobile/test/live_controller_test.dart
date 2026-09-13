@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:farryon/capture/capture_source.dart';
@@ -301,6 +302,26 @@ void main() {
     final frame = MediaFrame.decode(binary.last);
     expect(frame.tag, FrameTag.inputVideo);
     expect(frame.payload, equals(Uint8List.fromList([1, 2, 3])));
+  });
+
+  test('the mic gate opening tells the server speech started', () async {
+    // On a glasses mic the backend turns this into the model's activityStart
+    // (manual detection); it must go out the moment the gate opens.
+    await controller.connect();
+    await tick();
+    await controller.startListening();
+    await tick();
+
+    source.audioCtl.add(Uint8List.fromList([5, 6])); // one loud sample
+    await tick();
+
+    final types = fake.sentLog
+        .whereType<String>()
+        .map((s) => (jsonDecode(s) as Map<String, dynamic>)['type'])
+        .toList();
+    expect(types, contains('speech_start'));
+    expect(types, isNot(contains('speech_end')),
+        reason: 'the gate is still open');
   });
 
   test('startListening sends audio_start and pipes mic PCM to 0x01', () async {

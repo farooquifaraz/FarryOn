@@ -55,7 +55,15 @@ async def test_slow_provider_send_does_not_block_the_next_input_frame() -> None:
             await session._audio_sender_task
 
 
-async def test_audio_backpressure_is_reported_and_not_silently_dropped() -> None:
+async def test_audio_backpressure_drops_the_oldest_frame_and_keeps_the_session() -> None:
+    """A provider that stops taking audio for a moment costs 40 ms of stale
+    mic audio, not the conversation.
+
+    It used to raise and end the session with a fatal error — twice on
+    2026-09-13 mid-conversation, each time right after the model had gone
+    quiet on glasses audio. The newest frame is the one still worth hearing,
+    so the OLDEST goes, the count is kept, and nothing is sent to the client.
+    """
     session = Session(
         object(),
         gateway_factory=lambda *args: None,  # type: ignore[arg-type]
@@ -74,12 +82,18 @@ async def test_audio_backpressure_is_reported_and_not_silently_dropped() -> None
     try:
         await session._queue_audio(b"in-flight", 0)
         await gateway.started.wait()
-        for _ in range(_AUDIO_FORWARD_QUEUE_MAX):
-            await session._queue_audio(b"queued", 0)
+        for i in range(_AUDIO_FORWARD_QUEUE_MAX):
+            await session._queue_audio(b"queued-%d" % i, 0)
 
-        with pytest.raises(AudioBackpressureError):
-            await session._queue_audio(b"must-not-disappear", 0)
-        assert errors == [("audio_backpressure", True)]
+        await session._queue_audio(b"newest", 0)  # no raise
+        assert session._audio_dropped == 1
+        assert session._audio_queue.qsize() == _AUDIO_FORWARD_QUEUE_MAX
+        assert errors == [], "backpressure is not the client's problem"
+        # The oldest queued frame went; the newest is at the back.
+        items = list(session._audio_queue._queue)  # type: ignore[attr-defined]
+        assert items[0][0] == b"queued-1"
+        assert items[-1][0] == b"newest"
+        assert AudioBackpressureError  # the type stays importable
     finally:
         session._audio_sender_task.cancel()
         with pytest.raises(asyncio.CancelledError):

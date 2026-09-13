@@ -216,20 +216,35 @@ class LiveController {
   bool _foreignMusic = false;
   int _musicActivePolls = 0;
 
-  late final MicGate _micGate = MicGate()
-    ..onOpen = (rms, threshold) {
-      // The moment speech energy crossed the bar IS when Farry began hearing
-      // this utterance. The transcript arrives from the model only after the
-      // user stops speaking (input transcription lands as a lump), so a
-      // bubble stamped at transcript-arrival read as "Farry heard me late"
-      // when the audio had been streaming live all along (user-reported
-      // 2026-08-27). Remember the true start; the user bubble consumes it.
-      _utteranceStartAt ??= DateTime.now();
-      _log.info(
-          'mic gate opened (level ${rms.round()} > bar ${threshold.round()})');
-      // The user is speaking: ask music to step aside for the exchange.
-      _holdFocus();
-    };
+  /// One gate per microphone: rebuilt in [_startAudio] for whichever mic is
+  /// active, because the glasses' call-mode audio is a different signal from
+  /// the phone's (see [MicGate.glasses]).
+  late MicGate _micGate = _buildGate(CaptureDeviceKind.phone);
+
+  MicGate _buildGate(CaptureDeviceKind kind) {
+    final gate =
+        kind == CaptureDeviceKind.glasses ? MicGate.glasses() : MicGate();
+    gate
+      ..onOpen = (rms, threshold) {
+        // The moment speech energy crossed the bar IS when Farry began hearing
+        // this utterance. The transcript arrives from the model only after the
+        // user stops speaking (input transcription lands as a lump), so a
+        // bubble stamped at transcript-arrival read as "Farry heard me late"
+        // when the audio had been streaming live all along (user-reported
+        // 2026-08-27). Remember the true start; the user bubble consumes it.
+        _utteranceStartAt ??= DateTime.now();
+        _log.info(
+            'mic gate opened (level ${rms.round()} > bar ${threshold.round()})');
+        // The user is speaking: ask music to step aside for the exchange.
+        _holdFocus();
+        // The backend brackets the model's turn window with these on a
+        // glasses mic (manual activity detection); on the phone mic it just
+        // notes that a person is talking.
+        _client.send(const SpeechStartMessage());
+      }
+      ..onClose = () => _client.send(const SpeechEndMessage());
+    return gate;
+  }
 
   /// When the current utterance's speech energy first opened the mic gate —
   /// the honest "Farry started hearing" moment for the next user bubble.
@@ -2639,6 +2654,8 @@ class LiveController {
   }
 
   Future<void> _startAudio() async {
+    // The gate for THIS microphone (a new one: the room is re-learned too).
+    _micGate = _buildGate(_registry.audioKind);
     await _audioSource.startAudio();
     await _audioSub?.cancel();
     _audioSub = _audioSource.audio16k.listen((pcm) {

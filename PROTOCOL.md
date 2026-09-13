@@ -99,6 +99,15 @@ All JSON messages have a `type` field.
 
 { "type": "audio_start" }            // user begins speaking / mic opened
 { "type": "audio_stop" }             // mic closed
+// The client's energy gate opened (speech-loud audio is now streaming) or
+// closed (the hangover after the last loud chunk elapsed). With a GLASSES
+// microphone (hello.device.kind starting "glasses") the server runs the
+// model's activity detection MANUALLY and maps these to activityStart /
+// activityEnd; with the phone mic they are informational. Switching the mic
+// mid-session (device_update.audioKind) makes the server close the socket so
+// the app reconnects in the right mode.
+{ "type": "speech_start" }
+{ "type": "speech_end" }
 { "type": "text", "text": "..." }    // typed user input (no mic)
 { "type": "interrupt" }              // barge-in: stop current TTS playback
 { "type": "tool_permission", "id": "call-id", "granted": true }  // optional gate

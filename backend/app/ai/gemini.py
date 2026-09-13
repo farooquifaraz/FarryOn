@@ -92,6 +92,10 @@ class GeminiGateway(AIGateway):
             model=model or settings.gemini_model,
         )
         self._api_key = settings.gemini_api_key
+        #: Set by the owner BEFORE connect(): drive activity detection from
+        #: the client's speech markers instead of the model's automatic VAD
+        #: (see Settings.manual_vad_for_glasses).
+        self.manual_vad: bool = False
         # Session resumption (ChatGPT-like continuity): the owner (ws.session)
         # may set ``resume_handle`` BEFORE connect() to re-attach the previous
         # Gemini Live context, and ``on_resume_handle`` to be told each fresh
@@ -204,8 +208,13 @@ class GeminiGateway(AIGateway):
         # automatic VAD never re-triggers on the TTS.
         try:
             config_kwargs["realtime_input_config"] = types.RealtimeInputConfig(
-                automatic_activity_detection=self._activity_detection(
-                    types, get_settings()
+                # Manual: the app's gate has already decided where speech
+                # starts and stops (glasses mic); the model only gets
+                # activityStart/activityEnd and never guesses from the room.
+                automatic_activity_detection=(
+                    types.AutomaticActivityDetection(disabled=True)
+                    if self.manual_vad
+                    else self._activity_detection(types, get_settings())
                 ),
             )
         except Exception:  # noqa: BLE001 - field optional across SDK versions

@@ -644,3 +644,26 @@ class UnknownServerMessage extends ServerMessage {
   final String type;
   final Map<String, dynamic> raw;
 }
+
+/// The mic gate opened: speech-loud audio is streaming from now on.
+///
+/// With a glasses microphone the backend turns this into the model's
+/// activityStart (manual detection) — the model's own detector either fired
+/// on the room or missed the user's onset for 20-40 s on that audio
+/// (2026-09-13). On the phone mic it is informational.
+class SpeechStartMessage extends ClientMessage {
+  const SpeechStartMessage();
+  @override
+  String get type => MsgType.speechStart;
+  @override
+  Map<String, dynamic> toJson() => {'type': type};
+}
+
+/// The mic gate closed after its hangover: the utterance is over.
+class SpeechEndMessage extends ClientMessage {
+  const SpeechEndMessage();
+  @override
+  String get type => MsgType.speechEnd;
+  @override
+  Map<String, dynamic> toJson() => {'type': type};
+}

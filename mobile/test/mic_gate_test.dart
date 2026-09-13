@@ -150,4 +150,69 @@ void main() {
     expect(gate.process(Uint8List(0)), isEmpty);
     expect(gate.process(Uint8List(1)), isEmpty);
   });
+
+  group('onset and close', () {
+    Uint8List loud(int samples, [int amp = 3000]) {
+      final b = Uint8List(samples * 2);
+      for (var i = 0; i < samples; i++) {
+        b[i * 2] = amp & 0xff;
+        b[i * 2 + 1] = (amp >> 8) & 0xff;
+      }
+      return b;
+    }
+
+    Uint8List quiet(int samples) => Uint8List(samples * 2);
+
+    test('the glasses profile needs speech to HOLD before it opens', () {
+      var t = DateTime(2026, 1, 1);
+      final gate = MicGate.glasses(clock: () => t);
+      // 40 ms chunks (640 samples at 16 kHz): one loud chunk is not an onset…
+      expect(gate.process(loud(640)), isEmpty);
+      expect(gate.isOpen, isFalse);
+      t = t.add(const Duration(milliseconds: 40));
+      expect(gate.process(loud(640)), isEmpty);
+      t = t.add(const Duration(milliseconds: 40));
+      // …the third (120 ms of speech) opens it and flushes what it held.
+      final out = gate.process(loud(640));
+      expect(gate.isOpen, isTrue);
+      expect(out.length, 3, reason: 'nothing of the onset is lost');
+    });
+
+    test('a loud blip that does not hold never opens the gate', () {
+      var t = DateTime(2026, 1, 1);
+      final gate = MicGate.glasses(clock: () => t);
+      expect(gate.process(loud(640)), isEmpty);
+      t = t.add(const Duration(milliseconds: 40));
+      expect(gate.process(quiet(640)), isEmpty); // the blip ended
+      t = t.add(const Duration(milliseconds: 40));
+      expect(gate.process(loud(640)), isEmpty, reason: 'the count restarts');
+      expect(gate.isOpen, isFalse);
+    });
+
+    test('the phone profile still opens on the first loud chunk', () {
+      final gate = MicGate();
+      expect(gate.process(loud(320)), isNotEmpty);
+      expect(gate.isOpen, isTrue);
+    });
+
+    test('onClose fires once when the hangover expires, and on reset', () {
+      var t = DateTime(2026, 1, 1);
+      final gate = MicGate(clock: () => t);
+      var closes = 0;
+      gate.onClose = () => closes++;
+      gate.process(loud(320));
+      expect(gate.isOpen, isTrue);
+      t = t.add(const Duration(milliseconds: 500));
+      gate.process(quiet(320)); // inside the hangover: still open
+      expect(closes, 0);
+      t = t.add(const Duration(seconds: 1));
+      gate.process(quiet(320)); // hangover over
+      expect(closes, 1);
+      gate.process(quiet(320));
+      expect(closes, 1, reason: 'closed gates do not close again');
+      gate.process(loud(320));
+      gate.reset(); // the speaker started: the utterance ends here
+      expect(closes, 2);
+    });
+  });
 }
