@@ -1637,6 +1637,10 @@ class Session:
                 )
             self._manual_vad = False
             return
+        if getattr(gw, "requires_manual_vad", False):
+            # A gateway with no detector of its own (the cascade provider):
+            # the app's speech markers ARE its utterances, whatever the mic.
+            self._manual_vad = True
         gw.manual_vad = self._manual_vad
         logger.info(
             "vad.mode",

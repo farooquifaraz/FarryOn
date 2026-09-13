@@ -145,4 +145,11 @@ def build_gateway(
 
         return GrokRealtimeGateway(system_prompt=system_prompt, tools=tools)
 
+    if provider == "cascade":
+        from app.ai.cascade_agent import CascadeAgentGateway
+
+        return CascadeAgentGateway(
+            system_prompt=system_prompt, tools=tools, settings=settings
+        )
+
     raise ValueError(f"unknown AI provider: {provider!r}")

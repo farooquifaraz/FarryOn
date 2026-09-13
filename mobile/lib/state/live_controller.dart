@@ -27,6 +27,7 @@ import '../data/finder_api.dart';
 import '../data/live_client.dart';
 import '../features/glasses_lab/bridge/glasses_channel.dart';
 import '../playback/audio_focus.dart';
+import '../playback/device_voice.dart';
 import '../playback/pcm_player.dart';
 import '../playback/voice_audio_mode.dart';
 import '../protocol/frames.dart';
@@ -59,13 +60,15 @@ class LiveController {
     required DeviceRegistry registry,
     required PcmPlayer player,
     required PermissionsService permissions,
+    DeviceVoice? deviceVoice,
     required WebSocketLiveClient Function(AppConfig, DeviceInfo Function())
         clientFactory,
     String? platform,
     GlassesBridgeApi? glassesBridge,
     int? Function()? currentUserId,
     AudioFocus? audioFocus,
-  })  : _currentUserId = currentUserId ?? (() => null),
+  })  : _voice = deviceVoice ?? DeviceVoice(),
+        _currentUserId = currentUserId ?? (() => null),
         _config = config,
         _registry = registry,
         _player = player,
@@ -251,6 +254,13 @@ class LiveController {
   DateTime? _utteranceStartAt;
 
   bool _ttsActive = false;
+
+  /// The phone's own text-to-speech, used when the session's model label
+  /// says `cascade:` — that provider sends the reply as words, never audio.
+  final DeviceVoice _voice;
+
+  /// Set from the `ready` message: this session's replies are spoken here.
+  bool _deviceSpeech = false;
 
   // Turn-latency instrumentation (client side, mirrors the backend's
   // turn.timing log): when Farry first HEARD this utterance, and when the
@@ -1505,6 +1515,7 @@ class LiveController {
     await _stopAudio();
     await _stopVideo();
     await _player.stop();
+    unawaited(_voice.stop());
     await _client.stop();
     // Session over — drop the mic foreground service + wake-lock.
     try {
@@ -1563,6 +1574,38 @@ class LiveController {
     _ttsClear = Timer(const Duration(seconds: 20), _ttsOver);
   }
 
+  /// Say a cascade reply with the phone's voice, with the mic shut for the
+  /// duration exactly as it is for streamed audio (the speaker would
+  /// otherwise come straight back in as a "user" turn).
+  Future<void> _speakOnDevice(String text) async {
+    _beginTts();
+    _emit(_state.copyWith(liveState: LiveState.speaking));
+    try {
+      final spoke = await _voice.speak(text, _speechLanguageFor(text));
+      if (!spoke) _log.warn('device voice could not speak the reply');
+    } catch (e) {
+      _log.warn('device voice failed: $e');
+    } finally {
+      _ttsClear?.cancel();
+      _ttsClear = Timer(_ttsTail, _ttsOver);
+      if (_state.liveState == LiveState.speaking) {
+        _emit(_state.copyWith(liveState: LiveState.idle));
+      }
+    }
+  }
+
+  /// The voice to use for a reply, from its script: Devanagari → Hindi,
+  /// Arabic script → Arabic, anything else → the user's primary language if
+  /// it is not one of those, else English. The model already mirrored the
+  /// user's language; this only has to pick a matching voice.
+  String _speechLanguageFor(String text) {
+    if (RegExp(r'[\u0900-\u097F]').hasMatch(text)) return 'hi-IN';
+    if (RegExp(r'[\u0600-\u06FF]').hasMatch(text)) return 'ar';
+    final primary = _config.primaryLanguage.toLowerCase();
+    if (primary.startsWith('hindi')) return 'en-IN';
+    return 'en-US';
+  }
+
   /// The turn's audio has fully played out (or been cut short): the mic may
   /// hear again, and music may come back up shortly after.
   void _ttsOver() {
@@ -1590,6 +1633,7 @@ class LiveController {
         // trail clearly shows which provider/model the user was talking to.
         LogStore.instance.setProvider(msg.model ?? _config.provider);
         _log.info('session ready (model: ${msg.model ?? "?"})');
+        _deviceSpeech = (msg.model ?? '').startsWith('cascade');
         _emit(_state.copyWith(clearError: true));
         // A slow connect can land after the user already came back to the
         // foreground, leaving the camera released with nothing to restore it.
@@ -1771,6 +1815,11 @@ class LiveController {
     if (msg.role != 'user' && msg.isFinal) {
       _lastAssistantFinal = msg.text;
       if (msg.text.trim().isNotEmpty) _log.info('AI  : ${msg.text.trim()}');
+      // The cascade provider never sends audio: the words ARE the reply, and
+      // this phone says them.
+      if (_deviceSpeech && msg.text.trim().isNotEmpty) {
+        unawaited(_speakOnDevice(msg.text.trim()));
+      }
     }
 
     // GLOBAL transcript guard (provider-agnostic — every AI's transcripts pass

@@ -57,9 +57,27 @@ class Settings(BaseSettings):
 
     # Providers a client is allowed to request per-session via hello.provider.
     allowed_providers: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["gemini", "openai", "grok", "mock"],
+        default_factory=lambda: ["gemini", "openai", "grok", "cascade", "mock"],
         description="Comma-separated allow-list for hello.provider.",
     )
+
+    # -- The `cascade` provider (app/ai/cascade_agent.py) ----------------------
+    # Hear / think / speak in three cheap steps for TESTING: speech-to-text
+    # once per utterance, an OpenAI-compatible chat completion with the same
+    # tools, and the phone's own voice. Each step is a base URL + key + model
+    # so Groq, OpenRouter, NVIDIA or OpenAI can be plugged in; with an empty
+    # key the step falls back to Gemini 3.5 Flash-Lite through the existing
+    # GEMINI_API_KEY (cents an hour, no extra account).
+    cascade_stt_base_url: str = Field(default="https://api.groq.com/openai/v1")
+    cascade_stt_api_key: str = Field(default="")
+    cascade_stt_model: str = Field(default="whisper-large-v3-turbo")
+    cascade_llm_base_url: str = Field(default="https://openrouter.ai/api/v1")
+    cascade_llm_api_key: str = Field(default="")
+    cascade_llm_model: str = Field(default="nvidia/nemotron-3-ultra-550b-a55b:free")
+    cascade_gemini_stt_model: str = Field(default="gemini-3.5-flash-lite")
+    cascade_gemini_llm_model: str = Field(default="gemini-3.5-flash-lite")
+    #: How many user turns (with their tool traffic) ride along as context.
+    cascade_history_turns: int = Field(default=12)
 
     # -- Live translation (hello.mode == "translate") ---------------------------
     # A translate session is a different model with a different contract — no

@@ -57,7 +57,9 @@ class AppConfig {
   final String appVersion;
 
   /// AI provider the backend should use for this session: `gemini` | `openai`
-  /// | `grok` | `mock`. Sent in `hello.provider`; changing it reconnects.
+  /// | `grok` | `cascade` | `mock`. Sent in `hello.provider`; changing it
+  /// reconnects. `cascade` is the near-free testing path: the backend hears
+  /// and thinks in cheap steps and the PHONE speaks the replies.
   final String provider;
 
   /// Web search: primary provider (`tavily` | `serper` | `serpapi` | `mock`)

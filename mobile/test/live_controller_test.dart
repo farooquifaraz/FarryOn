@@ -7,6 +7,7 @@ import 'package:farryon/capture/device_registry.dart';
 import 'package:farryon/core/config.dart';
 import 'package:farryon/data/live_client.dart';
 import 'package:farryon/features/glasses_lab/bridge/glasses_channel.dart';
+import 'package:farryon/playback/device_voice.dart';
 import 'package:farryon/playback/pcm_player.dart';
 import 'package:farryon/protocol/frames.dart';
 import 'package:farryon/protocol/messages.dart';
@@ -19,6 +20,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'live_client_test.dart' show FakeChannel;
 
 /// In-memory capture source the test can pump audio/video through.
+class FakeDeviceVoice extends DeviceVoice {
+  final spoken = <String>[];
+  final languages = <String>[];
+  @override
+  Future<bool> speak(String text, String language) async {
+    spoken.add(text);
+    languages.add(language);
+    return true;
+  }
+
+  @override
+  Future<void> stop() async {}
+
+  @override
+  bool isSpeakingWithin(Duration tail) => false;
+}
+
 class FakeCaptureSource implements CaptureSource {
   final audioCtl = StreamController<Uint8List>.broadcast();
   final videoCtl = StreamController<Uint8List>.broadcast();
@@ -322,6 +340,84 @@ void main() {
     expect(controller.state.transcripts.last.role, 'notice');
     expect(controller.state.connection, ConnectionStatus.disconnected,
         reason: 'no reconnect loop into the same failure');
+  });
+
+  test('a cascade session speaks assistant replies with the phone voice',
+      () async {
+    // The `ready.model` label starting with `cascade:` is the whole signal:
+    // that provider sends words, never audio, and the phone says them with
+    // the mic shut for the duration (the speaker must not become a turn).
+    final voice = FakeDeviceVoice();
+    final ctl = LiveController(
+      config: const AppConfig(host: 'h', port: 8000, secure: false),
+      registry: registry,
+      player: player,
+      permissions: GrantingPermissions(),
+      clientFactory: (cfg, deviceInfo) => WebSocketLiveClient(
+        config: cfg,
+        platform: 'android',
+        deviceInfoProvider: deviceInfo,
+        channelFactory: (_) => fake,
+      ),
+      deviceVoice: voice,
+      platform: 'android',
+    );
+    addTearDown(ctl.dispose);
+    await ctl.connect();
+    await tick();
+    fake.pushJson({
+      'type': 'ready',
+      'sessionId': 's-c',
+      'protocolVersion': 1,
+      'model': 'cascade:whisper+nemotron',
+    });
+    await tick();
+    fake.pushJson({
+      'type': 'transcript',
+      'role': 'assistant',
+      'text': 'नमस्ते, मैं सुन रही हूँ।',
+      'final': true,
+    });
+    await tick();
+
+    expect(voice.spoken, ['नमस्ते, मैं सुन रही हूँ।']);
+    expect(voice.languages, ['hi-IN']);
+  });
+
+  test('a Gemini session never uses the phone voice', () async {
+    final voice = FakeDeviceVoice();
+    final ctl = LiveController(
+      config: const AppConfig(host: 'h', port: 8000, secure: false),
+      registry: registry,
+      player: player,
+      permissions: GrantingPermissions(),
+      clientFactory: (cfg, deviceInfo) => WebSocketLiveClient(
+        config: cfg,
+        platform: 'android',
+        deviceInfoProvider: deviceInfo,
+        channelFactory: (_) => fake,
+      ),
+      deviceVoice: voice,
+      platform: 'android',
+    );
+    addTearDown(ctl.dispose);
+    await ctl.connect();
+    await tick();
+    fake.pushJson({
+      'type': 'ready',
+      'sessionId': 's-g',
+      'protocolVersion': 1,
+      'model': 'gemini-2.5-flash-native-audio-latest',
+    });
+    await tick();
+    fake.pushJson({
+      'type': 'transcript',
+      'role': 'assistant',
+      'text': 'Hello there.',
+      'final': true,
+    });
+    await tick();
+    expect(voice.spoken, isEmpty);
   });
 
   test('the mic gate opening tells the server speech started', () async {
