@@ -427,6 +427,30 @@ void main() {
       expect(connectCount, 2, reason: 'a different server has to be dialled');
     });
 
+    test('a changed provider does drop the socket too', () async {
+      // The provider is carried in `hello`, not the URL. Device 2026-09-14:
+      // Cascade picked in Settings, the Gemini session went on billing.
+      var connectCount = 0;
+      final client = WebSocketLiveClient(
+        config: _config(),
+        platform: 'android',
+        deviceInfoProvider: _device,
+        channelFactory: (_) {
+          connectCount++;
+          return FakeChannel();
+        },
+      );
+      addTearDown(client.dispose);
+
+      client.start();
+      await Future<void>.delayed(Duration.zero);
+      expect(connectCount, 1);
+
+      client.updateConfig(_config().copyWith(provider: 'cascade'));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(connectCount, 2, reason: 'a new hello has to carry the provider');
+    });
+
     test('stop() prevents further reconnects', () async {
       var connectCount = 0;
       FakeChannel? latest;

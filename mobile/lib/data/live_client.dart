@@ -195,10 +195,16 @@ class WebSocketLiveClient {
   /// token is only needed by the *next* connect, which now picks it up from the
   /// stored config.
   void updateConfig(AppConfig config) {
-    final moved = _endpointOf(config) != _endpointOf(_config);
+    // The provider rides in `hello`, not the URL: picking another one in
+    // Settings must also start a new session, or the old model keeps
+    // answering while Settings says otherwise (device 2026-09-14: Cascade
+    // chosen, Gemini still billing until the app was killed).
+    final moved = _endpointOf(config) != _endpointOf(_config) ||
+        config.provider != _config.provider;
     _config = config;
     if (_started && !_disposed && moved) {
-      _log.info('config updated → reconnecting to ${config.liveUri}');
+      _log.info('config updated → reconnecting to ${config.liveUri} '
+          '(${config.provider})');
       unawaited(_reconnectNow());
     }
   }
