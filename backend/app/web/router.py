@@ -90,11 +90,21 @@ async def landing() -> HTMLResponse:
 @router.get("/farry-icon.png", include_in_schema=False)
 @router.get("/favicon.ico", include_in_schema=False)
 async def brand_icon() -> FileResponse:
-    """The FarryOn winged-orb app icon — used as the site logo and favicon."""
-    icon = _HERE / "farry-icon.png"
-    if not icon.is_file():  # pragma: no cover - asset ships with the package
-        raise HTTPException(status_code=404, detail="icon not found")
-    return FileResponse(icon, media_type="image/png")
+    """The FarryOn app icon (F + glasses) — the nav mark and favicon."""
+    return _brand_file("farry-icon.png")
+
+
+@router.get("/farryon-logo.png", include_in_schema=False)
+async def brand_logo() -> FileResponse:
+    """The full FarryOn logo (circle, wordmark, tagline) — hero and footer."""
+    return _brand_file("farryon-logo.png")
+
+
+def _brand_file(name: str) -> FileResponse:
+    path = _HERE / name
+    if not path.is_file():  # pragma: no cover - asset ships with the package
+        raise HTTPException(status_code=404, detail="asset not found")
+    return FileResponse(path, media_type="image/png")
 
 
 @router.get("/download/info", include_in_schema=False)

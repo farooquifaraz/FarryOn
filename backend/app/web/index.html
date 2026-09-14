@@ -556,70 +556,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
         <div class="hud tl"></div><div class="hud tr"></div>
         <div class="hud bl"></div><div class="hud br"></div>
         <div class="scan-line"></div>
-        <svg viewBox="0 0 520 520" fill="none" style="width:100%;height:100%">
-          <defs>
-            <radialGradient id="lL" cx="35%" cy="40%" r="65%"><stop offset="0%" stop-color="#0F6E56" stop-opacity=".45"/><stop offset="100%" stop-color="#030912" stop-opacity=".9"/></radialGradient>
-            <radialGradient id="lR" cx="35%" cy="40%" r="65%"><stop offset="0%" stop-color="#00D4AA" stop-opacity=".5"/><stop offset="50%" stop-color="#7B4FE0" stop-opacity=".18"/><stop offset="100%" stop-color="#030912" stop-opacity=".95"/></radialGradient>
-            <radialGradient id="eyeG" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#00FFD1" stop-opacity=".9"/><stop offset="100%" stop-color="#00D4AA" stop-opacity="0"/></radialGradient>
-            <filter id="gfx"><feGaussianBlur stdDeviation="7"/></filter>
-            <filter id="gfx2"><feGaussianBlur stdDeviation="3"/></filter>
-            <linearGradient id="frG" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00D4AA" stop-opacity=".85"/><stop offset="100%" stop-color="#7B4FE0" stop-opacity=".65"/></linearGradient>
-          </defs>
-          <!-- Ambient glow -->
-          <ellipse cx="260" cy="280" rx="200" ry="90" fill="rgba(0,212,170,.05)" filter="url(#gfx)"/>
-          <ellipse cx="370" cy="268" rx="110" ry="75" fill="rgba(0,212,170,.06)" filter="url(#gfx)"/>
-          <!-- Arms -->
-          <path d="M82 252 Q32 258 22 315" stroke="#0D2D1E" stroke-width="8" stroke-linecap="round"/>
-          <path d="M438 252 Q488 258 498 315" stroke="#0D2D1E" stroke-width="8" stroke-linecap="round"/>
-          <!-- Frame gradients -->
-          <path d="M82 243 Q112 218 157 212 L200 210" stroke="url(#frG)" stroke-width="2.5" stroke-linecap="round"/>
-          <path d="M320 210 L363 212 Q408 218 438 243" stroke="url(#frG)" stroke-width="2.5" stroke-linecap="round"/>
-          <path d="M208 228 Q260 244 312 228" stroke="url(#frG)" stroke-width="2"/>
-          <!-- Left lens -->
-          <ellipse cx="148" cy="268" rx="80" ry="60" fill="rgba(15,110,86,.05)" filter="url(#gfx2)"/>
-          <ellipse cx="148" cy="268" rx="78" ry="58" fill="url(#lL)" stroke="url(#frG)" stroke-width="2"/>
-          <ellipse cx="148" cy="268" rx="73" ry="53" fill="none" stroke="rgba(0,212,170,.12)" stroke-width="1"/>
-          <ellipse cx="124" cy="248" rx="20" ry="10" fill="rgba(255,255,255,.04)"/>
-          <line x1="78" y1="265" x2="218" y2="265" stroke="rgba(0,212,170,.06)" stroke-width="1.5"/>
-          <!-- Right lens glow -->
-          <ellipse cx="372" cy="268" rx="98" ry="74" fill="rgba(0,212,170,.06)" filter="url(#gfx)"/>
-          <ellipse cx="372" cy="268" rx="78" ry="58" fill="url(#lR)" stroke="#00D4AA" stroke-width="2"/>
-          <ellipse cx="372" cy="268" rx="73" ry="53" fill="none" stroke="rgba(0,212,170,.22)" stroke-width="1"/>
-          <!-- Scan lines -->
-          <line x1="300" y1="255" x2="444" y2="255" stroke="rgba(0,212,170,.07)" stroke-width="1"/>
-          <line x1="300" y1="265" x2="444" y2="265" stroke="rgba(0,212,170,.1)" stroke-width="1.5"/>
-          <line x1="300" y1="275" x2="444" y2="275" stroke="rgba(0,212,170,.07)" stroke-width="1"/>
-          <line x1="300" y1="285" x2="444" y2="285" stroke="rgba(0,212,170,.04)" stroke-width="1"/>
-          <!-- AI Eye rings -->
-          <circle cx="372" cy="268" r="30" fill="rgba(0,212,170,.04)" stroke="rgba(0,212,170,.15)" stroke-width="1" stroke-dasharray="6 4"/>
-          <circle cx="372" cy="268" r="20" fill="rgba(0,212,170,.08)" stroke="rgba(0,212,170,.22)" stroke-width="1"/>
-          <!-- Iris -->
-          <ellipse cx="372" cy="268" rx="9" ry="12" fill="#00D4AA" opacity=".9"/>
-          <ellipse cx="372" cy="268" rx="4" ry="5.5" fill="#030912"/>
-          <circle cx="372" cy="268" r="2.5" fill="#00FFD1"/>
-          <circle cx="374" cy="265.5" r="1.2" fill="rgba(255,255,255,.85)"/>
-          <ellipse cx="372" cy="268" rx="9" ry="12" fill="url(#eyeG)" opacity=".4" filter="url(#gfx2)"/>
-          <!-- Orbit node -->
-          <circle id="orb" cx="402" cy="268" r="4" fill="#00D4AA" filter="url(#gfx2)"/>
-          <!-- Camera -->
-          <rect x="430" y="218" width="18" height="16" rx="4" fill="rgba(3,9,18,.95)" stroke="rgba(0,212,170,.3)" stroke-width="1.2"/>
-          <circle cx="439" cy="226" r="4" fill="rgba(0,212,170,.12)"/>
-          <circle cx="439" cy="226" r="2" fill="#00D4AA" opacity=".8"/>
-          <circle cx="439" cy="226" r=".8" fill="#00FFD1"/>
-          <!-- Mic -->
-          <circle cx="80" cy="228" r="4" fill="#090F1E" stroke="rgba(0,212,170,.2)" stroke-width="1"/>
-          <circle cx="80" cy="228" r="1.5" fill="rgba(0,212,170,.5)"/>
-          <!-- Nose pads -->
-          <path d="M208 236 L203 248 Q206 256 208 252" stroke="rgba(0,212,170,.2)" stroke-width="1.5"/>
-          <path d="M312 236 L317 248 Q314 256 312 252" stroke="rgba(0,212,170,.2)" stroke-width="1.5"/>
-          <!-- Status dots -->
-          <circle cx="148" cy="196" r="3" fill="rgba(0,212,170,.3)"/>
-          <circle cx="372" cy="196" r="3" fill="#00D4AA" opacity=".9"/>
-          <!-- HUD labels -->
-          <text x="78" y="314" font-family="monospace" font-size="7" fill="rgba(0,212,170,.22)">MIC·ON</text>
-          <text x="418" y="314" font-family="monospace" font-size="7" fill="rgba(0,212,170,.3)">CAM·AI</text>
-          <text x="238" y="342" font-family="monospace" font-size="7" fill="rgba(123,79,224,.28)">BLE·5.4·LINK</text>
-        </svg>
+        <img src="/farryon-logo.png" alt="FarryOn — See · Ask · Act" style="width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 0 40px rgba(0,212,170,.35))">
         <div class="fb b1"><span class="fb-icon">🎙</span><span class="fb-txt">Hey Farry...<small>Listening</small></span></div>
         <div class="fb b2"><span class="fb-icon">📷</span><span class="fb-txt">IMX219 · 8MP<small>Anti-shake</small></span></div>
         <div class="fb b3"><span class="fb-icon">⚡</span><span class="fb-txt">BLE 5.4<small>Connected</small></span></div>
@@ -841,7 +778,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
     <div class="footer-top">
       <div class="footer-brand">
         <div style="margin-bottom:16px">
-          <img src="/farry-icon.png" alt="FarryOn" style="height:80px;width:auto;filter:drop-shadow(0 0 10px rgba(0,212,170,.2))">
+          <img src="/farryon-logo.png" alt="FarryOn" style="height:150px;width:auto;filter:drop-shadow(0 0 14px rgba(0,212,170,.25))">
         </div>
         <p>AI-powered smart glasses for the UAE. Voice, camera, memory, and action — from a pair of glasses.</p>
         <div class="footer-social">

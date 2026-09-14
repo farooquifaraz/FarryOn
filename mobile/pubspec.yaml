@@ -86,6 +86,9 @@ flutter:
     # The FarryOn mark (2026-09-12): auth screens, the live-screen orb, and
     # the launcher-icon source — one file so the brand cannot drift.
     - assets/icon/farryon_icon.png
+    # The full FarryOn logo (2026-09-14: circle, wordmark, tagline) — the
+    # app's front door only; every other surface carries the icon above.
+    - assets/brand/farryon_logo.png
 
 # App icon — the FARRYON winged-orb emblem. Source lives at the path below;
 # `dart run flutter_launcher_icons` writes the mipmaps + adaptive icon.
@@ -98,5 +101,5 @@ flutter_launcher_icons:
   # on every side, which lands the full-bleed rounded-square mark exactly in
   # the 66 % safe zone, on the logo's own dark-navy interior — every launcher
   # mask (circle, squircle, rounded square) keeps the whole F.
-  adaptive_icon_background: "#07093E"
+  adaptive_icon_background: "#03231B"
   adaptive_icon_foreground: "assets/icon/farryon_icon.png"

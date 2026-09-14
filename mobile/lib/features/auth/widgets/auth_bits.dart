@@ -4,8 +4,39 @@ import 'package:flutter/material.dart';
 
 import '../../../core/theme.dart';
 
-/// The brand mark with a neon glow behind it — the crown of every auth
-/// screen.
+/// The full FarryOn logo (circle, wordmark, tagline) — the front door only.
+/// The circle is baked into the image with a feathered edge, so it needs no
+/// clipping and sits on the aurora ground as it does on the launch window.
+class BrandLogo extends StatelessWidget {
+  const BrandLogo({super.key, this.size = 260});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: Aurora.neon.withValues(alpha: 0.28),
+            blurRadius: 40,
+          ),
+        ],
+      ),
+      child: Image.asset(
+        'assets/brand/farryon_logo.png',
+        fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) => AuthLogo(size: size * 0.5),
+      ),
+    );
+  }
+}
+
+/// The app icon with a neon glow behind it — the crown of the sign-in and
+/// sign-up screens.
 class AuthLogo extends StatelessWidget {
   const AuthLogo({super.key, this.size = 118});
 

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The window shown while the Flutter engine starts: the logo's own dark
-     navy with the FarryOn mark centred, so the first frame of the Flutter
-     splash (same mark, same ground) lands without a white flash. -->
+<!-- The window shown while the Flutter engine starts: the logo's own deep
+     green with the full FarryOn logo centred, so the first frame of the
+     Flutter splash (same logo, same ground) lands without a white flash. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@color/launch_background" />
     <item>

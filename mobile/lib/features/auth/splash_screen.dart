@@ -26,17 +26,9 @@ class SplashScreen extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    AuthLogo(size: 130),
-                    SizedBox(height: 18),
-                    Text(
-                      'FarryOn',
-                      style: TextStyle(
-                        fontSize: 27,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.4,
-                        color: Colors.white,
-                      ),
-                    ),
+                    // The full logo (2026-09-14) — wordmark and tagline
+                    // are part of it, so no text underneath.
+                    BrandLogo(size: 280),
                   ],
                 ),
               ),

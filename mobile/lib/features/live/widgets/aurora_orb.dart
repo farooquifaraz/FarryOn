@@ -66,12 +66,17 @@ class _AuroraOrbState extends State<AuroraOrb>
                       color.withValues(alpha: 0.10 * _intensity)),
                   _ring(widget.size * 0.68 * pulse,
                       color.withValues(alpha: 0.20 * _intensity)),
-                  // The FarryOn winged-orb emblem sits at the heart of the
-                  // orb — Faraz asked for the brand mark on the main screen
-                  // (2026-08-27) instead of the old abstract dot. The
-                  // state-coloured glow rings still breathe around it, so the
-                  // listening/thinking/speaking signal is unchanged.
-                  ClipOval(
+                  // The FarryOn app icon sits at the heart of the orb —
+                  // Faraz asked for the brand mark on the main screen
+                  // (2026-08-27) instead of the old abstract dot, and for the
+                  // 2026-09-14 icon exactly as the launcher shows it: a
+                  // rounded square (a circle would cut its neon frame into
+                  // four arcs). The state-coloured glow rings still breathe
+                  // around it, so the listening/thinking/speaking signal is
+                  // unchanged.
+                  ClipRRect(
+                    borderRadius:
+                        BorderRadius.circular(widget.size * 0.62 * pulse * 0.2),
                     child: Image.asset(
                       'assets/icon/farryon_icon.png',
                       width: widget.size * 0.62 * pulse,
