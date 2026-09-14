@@ -38,6 +38,7 @@ class HelloMessage extends ClientMessage {
     this.protocolVersion = kProtocolVersion,
     this.resumeId,
     this.provider,
+    this.devKeys,
     this.webSearch,
     this.email,
     this.emails,
@@ -62,6 +63,10 @@ class HelloMessage extends ClientMessage {
 
   /// Per-session web-search config (`{provider, apiKey, fallbackProvider,
   /// fallbackApiKey}`); omitted when null so the backend uses its env settings.
+  /// Dev Mode only: the user's own `{stt, llm}` keys for the `cascade`
+  /// provider. Omitted otherwise; the backend uses its own keys.
+  final Map<String, String>? devKeys;
+
   final Map<String, dynamic>? webSearch;
 
   /// Per-session email (IMAP) config for the PRIMARY account
@@ -109,6 +114,7 @@ class HelloMessage extends ClientMessage {
         'device': device.toJson(),
         'session': {'resumeId': resumeId},
         if (provider != null) 'provider': provider,
+        if (devKeys != null) 'devKeys': devKeys,
         if (webSearch != null) 'webSearch': webSearch,
         if (email != null) 'email': email,
         if (emails != null) 'emails': emails,

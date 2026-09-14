@@ -45,6 +45,13 @@ class ConfigStore {
   static String? _accessCache;
   static String? _refreshCache;
 
+  // Dev Mode keys (Settings → AI model → Dev Mode): keystore only, hydrated
+  // in [init] like the tokens so the synchronous [load] can attach them.
+  static const String _devSttKey = 'dev.key.stt';
+  static const String _devLlmKey = 'dev.key.llm';
+  static String? _devSttCache;
+  static String? _devLlmCache;
+
   /// Must be awaited once at startup (in `main`) before [load].
   static Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
@@ -52,6 +59,8 @@ class ConfigStore {
     await _hydrateSecrets();
     _accessCache = await _secure.read(key: _authAccessKey);
     _refreshCache = await _secure.read(key: _authRefreshKey);
+    _devSttCache = await _secure.read(key: _devSttKey);
+    _devLlmCache = await _secure.read(key: _devLlmKey);
   }
 
   // ---- Auth session --------------------------------------------------------
@@ -133,6 +142,8 @@ class ConfigStore {
       webSearchApiKey: p.getString('cfg.ws.key'),
       webSearchFallbackProvider: p.getString('cfg.ws.fbProvider'),
       webSearchFallbackApiKey: p.getString('cfg.ws.fbKey'),
+      devSttApiKey: _devSttCache,
+      devLlmApiKey: _devLlmCache,
       emailAccounts: _loadAccounts(),
       handsFree: p.getBool('cfg.handsFree'),
       saveCapturesToGallery: p.getBool('cfg.saveCapturesToGallery'),
@@ -156,6 +167,16 @@ class ConfigStore {
   /// Null for a missing OR blank string, so a blank falls back to the default.
   static String? _nonBlank(String? v) =>
       (v == null || v.trim().isEmpty) ? null : v;
+
+  /// A blank secret is a deleted one — nothing stale stays in the keystore.
+  static Future<void> _saveSecret(String key, String? value) async {
+    final v = _nonBlank(value);
+    if (v == null) {
+      await _secure.delete(key: key);
+    } else {
+      await _secure.write(key: key, value: v.trim());
+    }
+  }
 
   // ---- Last-used local server ---------------------------------------------
   //
@@ -202,6 +223,10 @@ class ConfigStore {
     await p.setString('cfg.ws.key', c.webSearchApiKey ?? '');
     await p.setString('cfg.ws.fbProvider', c.webSearchFallbackProvider);
     await p.setString('cfg.ws.fbKey', c.webSearchFallbackApiKey ?? '');
+    await _saveSecret(_devSttKey, c.devSttApiKey);
+    await _saveSecret(_devLlmKey, c.devLlmApiKey);
+    _devSttCache = _nonBlank(c.devSttApiKey);
+    _devLlmCache = _nonBlank(c.devLlmApiKey);
     await _saveAccounts(c.emailAccounts);
     await p.setBool('cfg.handsFree', c.handsFree);
     await p.setBool('cfg.saveCapturesToGallery', c.saveCapturesToGallery);

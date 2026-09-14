@@ -115,6 +115,41 @@ void main() {
       expect(config['audioOut']['sampleRate'], 24000);
     });
 
+    test('Dev Mode keys ride in hello for cascade only, blanks dropped',
+        () async {
+      FakeChannel helloFor(AppConfig cfg) {
+        final fake = FakeChannel();
+        final client = WebSocketLiveClient(
+          config: cfg,
+          platform: 'android',
+          deviceInfoProvider: _device,
+          channelFactory: (_) => fake,
+        );
+        addTearDown(client.dispose);
+        client.start();
+        return fake;
+      }
+
+      final onCascade = helloFor(_config().copyWith(
+        provider: 'cascade',
+        devSttApiKey: 'gsk_x',
+        devLlmApiKey: '  ',
+      ));
+      final onGemini = helloFor(_config().copyWith(
+        provider: 'gemini',
+        devSttApiKey: 'gsk_x',
+        devLlmApiKey: 'sk-or-y',
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      final a = jsonDecode(onCascade.sentLog[0] as String);
+      expect(a['provider'], 'cascade');
+      expect(a['devKeys'], {'stt': 'gsk_x'}, reason: 'blank llm key dropped');
+      final b = jsonDecode(onGemini.sentLog[0] as String);
+      expect(b.containsKey('devKeys'), isFalse,
+          reason: 'no other provider takes client keys');
+    });
+
     test('ready transitions status to connected and captures resumeId',
         () async {
       final fake = FakeChannel();

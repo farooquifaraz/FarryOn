@@ -200,7 +200,8 @@ class WebSocketLiveClient {
     // answering while Settings says otherwise (device 2026-09-14: Cascade
     // chosen, Gemini still billing until the app was killed).
     final moved = _endpointOf(config) != _endpointOf(_config) ||
-        config.provider != _config.provider;
+        config.provider != _config.provider ||
+        !_sameKeys(config.devKeysWire, _config.devKeysWire);
     _config = config;
     if (_started && !_disposed && moved) {
       _log.info('config updated → reconnecting to ${config.liveUri} '
@@ -232,6 +233,16 @@ class WebSocketLiveClient {
   /// The live URI with the token removed — everything a reconnect would be for.
   static Uri _endpointOf(AppConfig c) =>
       c.liveUri.replace(queryParameters: const <String, String>{});
+
+  /// Dev Mode keys ride in hello too: a changed key needs a new session.
+  static bool _sameKeys(Map<String, String>? a, Map<String, String>? b) {
+    if (a == null || b == null) return a == b;
+    if (a.length != b.length) return false;
+    for (final e in a.entries) {
+      if (b[e.key] != e.value) return false;
+    }
+    return true;
+  }
 
   /// Begin connecting and keep the connection alive (auto-reconnect) until
   /// [stop] or [dispose] is called. Idempotent.
@@ -385,6 +396,7 @@ class WebSocketLiveClient {
       device: device,
       resumeId: _resumeId,
       provider: _config.provider,
+      devKeys: _config.devKeysWire,
       clientTime: _localTimeIso(),
       languages: [_config.primaryLanguage, _config.secondaryLanguage],
       // Only send web-search config when the user supplied a primary key,

@@ -392,10 +392,16 @@ class CascadeAgentGateway(AIGateway):
         settings: Any | None = None,
         stt: Any | None = None,
         llm: Any | None = None,
+        stt_api_key: str | None = None,
+        llm_api_key: str | None = None,
     ) -> None:
+        """``stt_api_key`` / ``llm_api_key`` are the user's own keys for this
+        session (Settings → Dev Mode → "Your API keys", carried in
+        ``hello.devKeys``); a non-empty one beats the server's. The keys stay
+        in this object — never logged, never stored."""
         s = settings or get_settings()
-        self._stt = stt or self._pick_stt(s)
-        self._llm = llm or self._pick_llm(s)
+        self._stt = stt or self._pick_stt(s, stt_api_key)
+        self._llm = llm or self._pick_llm(s, llm_api_key)
         super().__init__(
             system_prompt=system_prompt,
             tools=tools,
@@ -414,8 +420,8 @@ class CascadeAgentGateway(AIGateway):
     # -- backends ------------------------------------------------------------
 
     @staticmethod
-    def _pick_stt(s: Any) -> Any:
-        key = (getattr(s, "cascade_stt_api_key", "") or "").strip()
+    def _pick_stt(s: Any, override: str | None = None) -> Any:
+        key = (override or getattr(s, "cascade_stt_api_key", "") or "").strip()
         if key:
             return OpenAICompatSTT(
                 base_url=s.cascade_stt_base_url, api_key=key, model=s.cascade_stt_model
@@ -423,8 +429,8 @@ class CascadeAgentGateway(AIGateway):
         return GeminiSTT(model=s.cascade_gemini_stt_model, api_key=s.gemini_api_key)
 
     @staticmethod
-    def _pick_llm(s: Any) -> Any:
-        key = (getattr(s, "cascade_llm_api_key", "") or "").strip()
+    def _pick_llm(s: Any, override: str | None = None) -> Any:
+        key = (override or getattr(s, "cascade_llm_api_key", "") or "").strip()
         if key:
             return OpenAICompatLLM(
                 base_url=s.cascade_llm_base_url, api_key=key, model=s.cascade_llm_model

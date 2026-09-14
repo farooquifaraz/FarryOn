@@ -114,6 +114,10 @@ Providers (`hello.provider`): `gemini` (default, Live), `openai`, `grok`,
 `cascade` (shown in the app as "Dev Mode": speech-to-text + text model with
 the same tools + the phone's own voice — the `ready.model` label starts with
 `cascade:` and the app then speaks assistant transcripts itself), `mock`.
+With `provider: "cascade"` the hello may carry `devKeys: {"stt": "…", "llm":
+"…"}` — the user's own Groq / OpenRouter keys (Settings → AI model → Dev
+Mode); a present, non-blank key replaces the server's for that session and is
+never logged or stored server-side. Ignored for every other provider.
 
 Fatal `error` codes the app treats specially (server → client, §4):
 `quota_exceeded` — the USER's own plan cap: the app offers Upgrade;

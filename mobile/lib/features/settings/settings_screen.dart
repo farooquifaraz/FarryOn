@@ -521,10 +521,26 @@ class _AiModelPage extends ConsumerStatefulWidget {
 
 class _AiModelPageState extends ConsumerState<_AiModelPage> {
   late String _provider = ref.read(configProvider).provider;
+  // Dev Mode: the user's own keys (kept in the keystore, see ConfigStore).
+  late final _sttKeyCtl =
+      TextEditingController(text: ref.read(configProvider).devSttApiKey ?? '');
+  late final _llmKeyCtl =
+      TextEditingController(text: ref.read(configProvider).devLlmApiKey ?? '');
+
+  @override
+  void dispose() {
+    _sttKeyCtl.dispose();
+    _llmKeyCtl.dispose();
+    super.dispose();
+  }
 
   void _save() {
     final cfg = ref.read(configProvider);
-    ref.read(configProvider.notifier).state = cfg.copyWith(provider: _provider);
+    ref.read(configProvider.notifier).state = cfg.copyWith(
+      provider: _provider,
+      devSttApiKey: _sttKeyCtl.text.trim(),
+      devLlmApiKey: _llmKeyCtl.text.trim(),
+    );
     Navigator.pop(context);
   }
 
@@ -561,6 +577,41 @@ class _AiModelPageState extends ConsumerState<_AiModelPage> {
           'Gemini is the best value (cheapest); OpenAI is premium.',
           style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
         ),
+        if (_provider == 'cascade') ...[
+          const SizedBox(height: 20),
+          _fieldLabel('Your API keys (Dev Mode)'),
+          const SizedBox(height: 6),
+          const Text(
+            'Dev Mode hears with Groq Whisper and thinks with an OpenRouter '
+            'model, both on free tiers. With your own keys here the session '
+            'runs on your accounts and costs FarryOn nothing; blank = the '
+            "server's keys. Stored in the phone's keystore only.",
+            style:
+                TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _sttKeyCtl,
+            obscureText: true,
+            autocorrect: false,
+            decoration: const InputDecoration(
+              labelText: 'Groq API key (hearing)',
+              hintText: 'gsk_… — console.groq.com/keys',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _llmKeyCtl,
+            obscureText: true,
+            autocorrect: false,
+            decoration: const InputDecoration(
+              labelText: 'OpenRouter API key (thinking)',
+              hintText: 'sk-or-v1-… — openrouter.ai/keys',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ],
       ],
     );
   }

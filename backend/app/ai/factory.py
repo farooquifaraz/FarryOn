@@ -101,6 +101,7 @@ def build_gateway(
     *,
     provider: str | None = None,
     system_prompt: str | None = None,
+    provider_options: dict | None = None,
 ) -> AIGateway:
     """Construct a gateway for the given (or configured) provider.
 
@@ -112,6 +113,9 @@ def build_gateway(
             ``mock``). When ``None`` falls back to ``settings.ai_provider`` —
             this is how a client picks its provider per-session.
         system_prompt: System instruction for the assistant.
+        provider_options: Per-session settings the client sent for this
+            provider. Today only ``cascade`` reads any: ``stt_api_key`` and
+            ``llm_api_key`` (the user's own keys from Settings → Dev Mode).
 
     Returns:
         An unconnected :class:`AIGateway`. Call ``await gateway.connect()``.
@@ -148,8 +152,13 @@ def build_gateway(
     if provider == "cascade":
         from app.ai.cascade_agent import CascadeAgentGateway
 
+        opts = provider_options or {}
         return CascadeAgentGateway(
-            system_prompt=system_prompt, tools=tools, settings=settings
+            system_prompt=system_prompt,
+            tools=tools,
+            settings=settings,
+            stt_api_key=opts.get("stt_api_key"),
+            llm_api_key=opts.get("llm_api_key"),
         )
 
     raise ValueError(f"unknown AI provider: {provider!r}")

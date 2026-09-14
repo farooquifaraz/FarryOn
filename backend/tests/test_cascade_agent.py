@@ -218,3 +218,32 @@ async def test_wav_header_is_16k_mono_pcm16() -> None:
     assert wav[22:24] == b"\x01\x00"  # channels
     assert int.from_bytes(wav[24:28], "little") == 16_000
     assert int.from_bytes(wav[40:44], "little") == 16
+
+
+async def test_the_users_own_keys_beat_the_servers(monkeypatch) -> None:
+    """Dev Mode: keys from hello.devKeys pick the OpenAI-compatible backends
+    even when the server has none; a blank one leaves the server's choice."""
+    from app.ai.factory import build_gateway
+    from app.config import Settings
+
+    s = Settings(gemini_api_key="server-gemini", cascade_stt_api_key="", cascade_llm_api_key="")
+    schemas = [{"name": "create_note", "description": "d", "parameters": {"type": "object"}}]
+
+    gw = build_gateway(schemas, s, provider="cascade", system_prompt="P")
+    assert gw.model_label == "cascade:gemini-3.5-flash-lite+gemini-3.5-flash-lite"
+
+    gw = build_gateway(
+        schemas, s, provider="cascade", system_prompt="P",
+        provider_options={"stt_api_key": "gsk_user", "llm_api_key": ""},
+    )
+    assert isinstance(gw._stt, OpenAICompatSTT) and gw._stt.api_key == "gsk_user"
+    assert gw.model_label.startswith("cascade:whisper-large-v3-turbo+gemini-3.5-flash-lite")
+
+    gw = build_gateway(
+        schemas, s, provider="cascade", system_prompt="P",
+        provider_options={"stt_api_key": "gsk_user", "llm_api_key": "sk-or-user"},
+    )
+    assert isinstance(gw._llm, OpenAICompatLLM) and gw._llm.api_key == "sk-or-user"
+    assert gw.model_label == "cascade:whisper-large-v3-turbo+nvidia/nemotron-3-ultra-550b-a55b:free"
+    await gw.close()
+

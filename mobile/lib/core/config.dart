@@ -25,6 +25,8 @@ class AppConfig {
     this.webSearchApiKey,
     this.webSearchFallbackProvider = 'serper',
     this.webSearchFallbackApiKey,
+    this.devSttApiKey,
+    this.devLlmApiKey,
     this.emailAccounts = const [],
     this.handsFree = true,
     this.saveCapturesToGallery = true,
@@ -69,6 +71,23 @@ class AppConfig {
   final String? webSearchApiKey;
   final String webSearchFallbackProvider;
   final String? webSearchFallbackApiKey;
+
+  /// Dev Mode (`cascade`) only: the user's own keys for the hearing (Groq)
+  /// and thinking (OpenRouter) steps, so testing costs FarryOn nothing. Kept
+  /// in the platform keystore, sent per-session in `hello.devKeys`, and used
+  /// by the backend in place of its own; blank means the server's key.
+  final String? devSttApiKey;
+  final String? devLlmApiKey;
+
+  /// The Dev Mode keys on the wire, or null when there is nothing to send.
+  Map<String, String>? get devKeysWire {
+    if (provider != 'cascade') return null;
+    final out = <String, String>{
+      if ((devSttApiKey ?? '').trim().isNotEmpty) 'stt': devSttApiKey!.trim(),
+      if ((devLlmApiKey ?? '').trim().isNotEmpty) 'llm': devLlmApiKey!.trim(),
+    };
+    return out.isEmpty ? null : out;
+  }
 
   /// Configured mail accounts (0, 1, or 2) so the assistant can read and send
   /// from the user's OWN mailboxes. Farry uses [primaryEmailAccount] unless the
@@ -229,6 +248,8 @@ class AppConfig {
     String? webSearchApiKey,
     String? webSearchFallbackProvider,
     String? webSearchFallbackApiKey,
+    String? devSttApiKey,
+    String? devLlmApiKey,
     List<EmailAccount>? emailAccounts,
     bool? handsFree,
     bool? saveCapturesToGallery,
@@ -257,6 +278,8 @@ class AppConfig {
             webSearchFallbackProvider ?? this.webSearchFallbackProvider,
         webSearchFallbackApiKey:
             webSearchFallbackApiKey ?? this.webSearchFallbackApiKey,
+        devSttApiKey: devSttApiKey ?? this.devSttApiKey,
+        devLlmApiKey: devLlmApiKey ?? this.devLlmApiKey,
         emailAccounts: emailAccounts ?? this.emailAccounts,
         handsFree: handsFree ?? this.handsFree,
         saveCapturesToGallery:
