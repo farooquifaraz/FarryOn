@@ -312,6 +312,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     @Volatile private var callMicThread: Thread? = null
     @Volatile private var callMicRunning = false
     private var callModePreviousMode = AudioManager.MODE_NORMAL
+
+    /** The call-mode mic was up when a photo was asked for and was put down
+     *  for the transfer; bring it back when the photo request ends. */
+    @Volatile private var callMicPausedForPhoto = false
     private var callModeApplied = false
     private var tts: TextToSpeech? = null
     private var classicBtReceiverRegistered = false
@@ -1723,7 +1727,33 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         false
     }
 
-    private fun stopCallModeMic() {
+    /**
+     * The BLE thumbnail cannot get through while the SCO link is up: both
+     * ride one radio and the voice link has priority. Device 2026-09-14
+     * 23:00: five ~1 kB chunks in 150 ms, then not one more for 8 s
+     * ("transfer stalled"); the retry found the glasses still busy. The
+     * 8 s per-chunk budget only made the failure slower. So the mic goes
+     * down for the photo — capture (~2.3 s) plus transfer (~2 s) plus SCO
+     * back up (~1 s) — and returns on its own. The user is waiting for the
+     * picture anyway.
+     */
+    private fun pauseCallMicForPhoto() {
+        if (!callMicRunning || callMicPausedForPhoto) return
+        callMicPausedForPhoto = true
+        Log.i(TAG, "call-mode mic: paused for the photo transfer")
+        stopCallModeMic("call-mode mic paused for the photo")
+    }
+
+    /** Called (posted) whenever a photo request ends, any outcome. */
+    private fun resumeCallMicIfPaused() {
+        if (!callMicPausedForPhoto) return
+        callMicPausedForPhoto = false
+        if (callMicRunning) return // Dart restarted it meanwhile
+        Log.i(TAG, "call-mode mic: back up after the photo")
+        startCallModeMic()
+    }
+
+    private fun stopCallModeMic(statusOverride: String? = null) {
         callMicRunning = false
         callMicThread?.let { t ->
             try {
@@ -1748,7 +1778,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         val secs = (SystemClock.elapsedRealtime() - pcmStartMs) / 1000.0
         emit(
             "audio",
-            mapOf("status" to "glasses mic OFF (call mode) — $pcmBytesTotal B in ${"%.1f".format(secs)}s")
+            mapOf(
+                "status" to (statusOverride
+                    ?: "glasses mic OFF (call mode) — $pcmBytesTotal B in ${"%.1f".format(secs)}s")
+            )
         )
     }
 
@@ -1932,6 +1965,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             "thumbnail",
             mapOf("requestId" to requestId, "jpeg" to ByteArray(0), "elapsedMs" to -1)
         )
+        // Posted: callers clear photoRequestId before or after this call. A
+        // "busy" report for a duplicate leaves the first request in flight.
+        main.post { if (photoRequestId == null) resumeCallMicIfPaused() }
     }
 
     override fun takeAiPhoto(requestId: String) {
@@ -1958,6 +1994,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
         photoRequestId = requestId
         photoStartMs = SystemClock.elapsedRealtime()
+        pauseCallMicForPhoto()
         // Busy glasses (e.g. stuck in WiFi/transfer mode) silently ignore the
         // command — without this the Lab shows "capturing…" forever
         // (hit on-device 2026-07-06 23:38).
@@ -2522,6 +2559,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
         cancelPhotoWatchdog()
         thumbnailFetchActive = true
+        pauseCallMicForPhoto() // a touch-gesture photo never went through takeAiPhoto
         // Device-initiated captures (touch gesture) have no app-side request.
         val requestId = photoRequestId ?: DEVICE_INITIATED_REQUEST_ID
         val gen = ++thumbnailFetchGen
@@ -2560,6 +2598,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 emitCaptureFailed(requestId, "empty_image", "thumbnail fetch: 0 bytes")
             }
             photoRequestId = null
+            main.post { resumeCallMicIfPaused() }
         }
     }
 
