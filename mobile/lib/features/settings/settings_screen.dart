@@ -39,7 +39,7 @@ bool _isCloud(AppConfig c) =>
 
 String _providerSubtitle(String p) => switch (p) {
       'openai' => 'OpenAI · premium',
-      'cascade' => 'Cascade · testing, near-free (phone voice)',
+      'cascade' => 'Dev Mode · testing, near-free, phone voice',
       'mock' => 'Mock (offline test)',
       _ => 'Gemini · fast, best value',
     };
@@ -543,7 +543,9 @@ class _AiModelPageState extends ConsumerState<_AiModelPage> {
             for (final p in const [
               ('Gemini ⚡', 'gemini'),
               ('OpenAI ⚡', 'openai'),
-              ('Cascade 🧪', 'cascade'),
+              // The `cascade` pipeline (hear → think → phone voice) wears a
+              // name that says what it is FOR: developers testing at no cost.
+              ('Dev Mode 🧪', 'cascade'),
               ('Mock', 'mock'),
             ])
               _SelectPill(

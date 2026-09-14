@@ -111,9 +111,9 @@ All JSON messages have a `type` field.
 ```
 
 Providers (`hello.provider`): `gemini` (default, Live), `openai`, `grok`,
-`cascade` (testing: speech-to-text + text model with the same tools + the
-phone's own voice — the `ready.model` label starts with `cascade:` and the app
-then speaks assistant transcripts itself), `mock`.
+`cascade` (shown in the app as "Dev Mode": speech-to-text + text model with
+the same tools + the phone's own voice — the `ready.model` label starts with
+`cascade:` and the app then speaks assistant transcripts itself), `mock`.
 
 Fatal `error` codes the app treats specially (server → client, §4):
 `quota_exceeded` — the USER's own plan cap: the app offers Upgrade;
