@@ -328,7 +328,12 @@ class SettingsScreen extends ConsumerWidget {
               icon: Icons.info_rounded,
               gradient: Aurora.gradGreen,
               title: 'Version',
-              subtitle: cfg.appVersion,
+              // "1.0.0 · build 4432" — the build is what the website's
+              // download line shows (arm64 phones show the +2000 number).
+              subtitle: cfg.appVersion.contains('+')
+                  ? '${cfg.appVersion.split('+').first} · build '
+                      '${cfg.appVersion.split('+').last}'
+                  : cfg.appVersion,
               trailing: const SizedBox.shrink(),
               showDivider: false,
             ),

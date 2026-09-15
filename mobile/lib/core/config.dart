@@ -201,6 +201,12 @@ class AppConfig {
   ///
   /// Note: on the Android emulator, `10.0.2.2` maps to the host machine's
   /// `localhost`; that makes a good override during development.
+  /// The installed build's real "version+build", read from the package at
+  /// startup (main.dart) — e.g. `1.0.0+4432`. Shown in Settings → Version
+  /// and sent in hello, so it can be checked against the build line on the
+  /// website. Empty until read; the constant below then stands in.
+  static String installedVersion = '';
+
   factory AppConfig.fromEnvironment() {
     const host = String.fromEnvironment(
       'FARRYON_HOST',
@@ -217,6 +223,7 @@ class AppConfig {
       secure: secure,
       authToken: token.isEmpty ? null : token,
       provider: provider,
+      appVersion: installedVersion.isNotEmpty ? installedVersion : '1.0.0',
     );
   }
 

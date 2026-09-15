@@ -544,6 +544,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
         </a>
         <a href="#features" class="btn-outline">Explore features ↓</a>
       </div>
+      <div id="build-line" style="margin-top:10px;font-size:.78rem;color:var(--t3,#7f8ea3);letter-spacing:.01em">Android APK · v1.0.0</div>
       <div class="hero-stats">
         <div><div class="stat-num">8h+</div><div class="stat-label">All-day battery</div></div>
         <div><div class="stat-num">25+</div><div class="stat-label">Languages</div></div>
@@ -937,6 +938,23 @@ document.querySelectorAll('a[href^="#"]').forEach(a=>
     if(t){e.preventDefault();t.scrollIntoView({behavior:'smooth',block:'start'});}
   })
 );
+</script>
+<script>
+// Build line under the download button: what the site is serving right now,
+// so a phone's Settings → Version (arm64 shows the +2000 versionCode) can be
+// checked against it.
+(function(){
+  var el=document.getElementById('build-line'); if(!el) return;
+  fetch('/download/info',{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){
+    var b=d&&d.build; if(!b){ el.textContent='Android APK · v'+(d&&d.version||'1.0.0'); return; }
+    var when=b.builtAt?new Date(b.builtAt):null;
+    var day=when?when.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'';
+    var vc=b.versionCode||{};
+    el.innerHTML='Android APK · v'+(b.version||d.version)+' · build <b>'+b.build+'</b>'+
+      (vc.arm64?' <span title="what Settings → Version shows on a 64-bit phone">(arm64 shows '+vc.arm64+')</span>':'')+
+      (b.commit?' · '+b.commit:'')+(day?' · '+day:'');
+  }).catch(function(){});
+})();
 </script>
 </body>
 </html>

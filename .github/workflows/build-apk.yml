@@ -201,4 +201,15 @@ jobs:
           publish app-arm64-v8a-release.apk   FarryOn-Aurora-arm64.apk
           publish app-armeabi-v7a-release.apk FarryOn-Aurora-arm32.apk
 
+          # What the site shows next to the download, so a phone's Settings →
+          # Version can be checked against it. The arm64 split carries
+          # versionCode BUILD_NUMBER + 2000 (Flutter's per-ABI offset); the
+          # phone shows that one.
+          version=$(sed -n 's/^version: *\([0-9][0-9.]*\).*/\1/p' pubspec.yaml | head -n1)
+          printf '{"version":"%s","build":%s,"versionCode":{"arm64":%s,"arm32":%s},"commit":"%s","builtAt":"%s"}\n' \
+            "${version:-1.0.0}" "$BUILD_NUMBER" "$((BUILD_NUMBER + 2000))" "$((BUILD_NUMBER + 1000))" \
+            "${GITHUB_SHA::7}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$out/build-info.json"
+          cat "$out/build-info.json"
+          publish build-info.json build-info.json
+
           ssh -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" "ls -lh '$APK_HOST_DIR'"

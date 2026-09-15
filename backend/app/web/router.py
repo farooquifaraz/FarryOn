@@ -12,6 +12,7 @@ Builds are matched by ABI: ``arm64`` (most modern phones) and ``arm32``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -111,6 +112,18 @@ def _brand_file(name: str) -> FileResponse:
 async def download_info() -> JSONResponse:
     """Live build metadata for the page (version + per-ABI availability/size)."""
     out: dict[str, object] = {"version": APP_VERSION}
+    # build-info.json is written by the build-apk workflow beside the APKs:
+    # build number, per-ABI versionCode, commit, time. The page shows it so
+    # a phone's Settings → Version can be checked against the site.
+    info = _apk_dir() / "build-info.json"
+    if info.is_file():
+        try:
+
+            data = json.loads(info.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                out["build"] = data
+        except (OSError, ValueError) as exc:  # pragma: no cover - a bad sidecar
+            logger.warning("site.build_info_unreadable", error=str(exc))
     for abi in _BUILDS:
         path = _build_path(abi)
         out[abi] = (
