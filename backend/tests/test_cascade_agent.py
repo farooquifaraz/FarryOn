@@ -272,6 +272,34 @@ async def test_openai_compatible_wire_shape() -> None:
     await llm.close()
 
 
+def test_stt_hints_pin_one_language_and_bias_two() -> None:
+    from app.ai.cascade_agent import stt_hints
+
+    assert stt_hints(None) == (None, None)
+    assert stt_hints(["Hindi"]) == ("hi", "हिंदी देवनागरी में लिखें।")
+    lang, prompt = stt_hints(["English", "Hindi"])
+    assert lang is None, "a Hinglish speaker switches mid-sentence"
+    assert "English and Hindi" in prompt and "देवनागरी" in prompt
+    assert stt_hints(["Klingon"]) == (None, None)
+
+
+async def test_the_whisper_call_carries_the_hints() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"text": "नमस्ते"})
+
+    stt = OpenAICompatSTT(base_url="https://stt.example/v1", api_key="k", model="w",
+                          language="hi", prompt="हिंदी देवनागरी में लिखें।")
+    stt._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    assert await stt.transcribe(_second(400)) == "नमस्ते"
+    body = seen[0].content
+    assert b'name="language"' in body and b"hi" in body
+    assert "देवनागरी".encode() in body
+    await stt.close()
+
+
 async def test_wav_header_is_16k_mono_pcm16() -> None:
     wav = pcm16_to_wav(b"\x00\x01" * 8)
     assert wav[:4] == b"RIFF" and wav[8:12] == b"WAVE"

@@ -445,6 +445,25 @@ void main() {
         reason: 'the gate is still open');
   });
 
+  test('a Hindi or Urdu user line reaches the chat like an English one',
+      () async {
+    // Dart's \w is ASCII: the duplicate filter normalised every Devanagari
+    // and Urdu line to nothing and rejected it (device 2026-09-15 18:48).
+    await controller.connect();
+    await tick();
+    for (final line in ['हिंदी में बात करो', 'ہلو اب یہ بتاؤ', 'Hello']) {
+      fake.pushJson({
+        'type': 'transcript', 'role': 'user', 'text': line, 'final': true,
+      });
+      await tick();
+    }
+    final users = controller.state.transcripts
+        .where((t) => t.role == 'user')
+        .map((t) => t.text)
+        .toList();
+    expect(users, ['हिंदी में बात करो', 'ہلو اب یہ بتاؤ', 'Hello']);
+  });
+
   test('speech the gate held back is reported to the server with its levels',
       () async {
     await controller.connect();

@@ -37,6 +37,8 @@ class MicGate {
     this.keepOpenRatio = 1.0,
     this.speakerBar = false,
     this.speakerBarMin = 0,
+    this.fastOpenRatio = 0,
+    this.fastOpenMin = 0,
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
 
@@ -83,14 +85,25 @@ class MicGate {
         absoluteFloor: 2400.0,
         maxNoiseFloor: 2800.0,
         noiseMultiplier: 2.5,
-        onsetMs: 240,
+        onsetMs: 200,
         hangover: const Duration(milliseconds: 900),
         floorFromWindow: true,
         keepOpenRatio: 0.4,
         speakerBar: true,
         speakerBarMin: 4000.0,
+        fastOpenRatio: 2.0,
+        fastOpenMin: 8000.0,
         clock: clock,
       );
+
+  /// A single chunk this far over the opening bar (and over [fastOpenMin])
+  /// opens the gate at once, no onset needed. Device 2026-09-15 14:29-14:31:
+  /// five short "Hello"s were held back with peaks of 10,000-18,000 — two
+  /// to three times the bar — because they were loud for 120-200 ms and the
+  /// onset wanted 240. Nothing in the room comes close: the TV's p98 was
+  /// 6,800. Zero = off (the phone profile).
+  final double fastOpenRatio;
+  final double fastOpenMin;
 
   /// Once open, the level that counts as "still speaking" is this fraction
   /// of the opening bar (1.0 = the same bar, the phone behaviour). Speech
@@ -389,7 +402,9 @@ class MicGate {
       _lastSpeechAt = now;
       if (!_open) {
         final need = onsetMs * _bytesPerSecond ~/ 1000;
-        if (need > 0) {
+        final unmistakable = fastOpenRatio > 0 &&
+            rms > math.max(threshold * fastOpenRatio, fastOpenMin);
+        if (need > 0 && !unmistakable) {
           _loud.addLast((now, pcm16.length));
           while (_loud.isNotEmpty &&
               now.difference(_loud.first.$1) > _onsetWindow) {
@@ -438,7 +453,7 @@ class MicGate {
   void _learnSpeaker(double rms) {
     _speechLevels.add(rms);
     if (_speechLevels.length > _speechLevelsMax) _speechLevels.removeAt(0);
-    if (_speechLevels.length < 25) return; // one short sentence, at least
+    if (_speechLevels.length < 12) return; // half a second of speech
     final sorted = List<double>.of(_speechLevels)..sort();
     _speakerLevel = sorted[sorted.length ~/ 2];
   }

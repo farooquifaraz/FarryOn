@@ -167,16 +167,16 @@ void main() {
       var t = DateTime(2026, 1, 1);
       final gate = MicGate.glasses(clock: () => t);
       // 40 ms chunks (640 samples at 16 kHz) of voice-on-the-face level:
-      // five loud chunks are not yet an onset…
-      for (var i = 0; i < 5; i++) {
+      // four loud chunks are not yet an onset…
+      for (var i = 0; i < 4; i++) {
         expect(gate.process(loud(640, 9000)), isEmpty);
         expect(gate.isOpen, isFalse);
         t = t.add(const Duration(milliseconds: 40));
       }
-      // …the sixth (240 ms of speech) opens it and flushes what it held.
+      // …the fifth (200 ms of speech) opens it and flushes what it held.
       final out = gate.process(loud(640, 9000));
       expect(gate.isOpen, isTrue);
-      expect(out.length, 6, reason: 'nothing of the onset is lost');
+      expect(out.length, 5, reason: 'nothing of the onset is lost');
     });
 
     test('a loud blip that does not hold never opens the gate', () {
@@ -187,15 +187,29 @@ void main() {
       expect(gate.process(quiet(640)), isEmpty); // the blip ended
       t = t.add(const Duration(milliseconds: 40));
       expect(gate.process(loud(640, 9000)), isEmpty,
-          reason: 'two chunks with a gap are 80 ms of speech, not 240');
+          reason: 'two chunks with a gap are 80 ms of speech, not 200');
       expect(gate.isOpen, isFalse);
       // …and once the window has moved on, those chunks no longer count.
       t = t.add(const Duration(milliseconds: 500));
-      for (var i = 0; i < 5; i++) {
+      for (var i = 0; i < 4; i++) {
         expect(gate.process(loud(640, 9000)), isEmpty);
         t = t.add(const Duration(milliseconds: 40));
       }
-      expect(gate.isOpen, isFalse, reason: '200 ms in the window is not 240');
+      expect(gate.isOpen, isFalse, reason: '160 ms in the window is not 200');
+    });
+
+    test('one unmistakably loud chunk opens the gate at once', () {
+      // Device 2026-09-15: short "Hello"s at 10-18k peaks, loud for less
+      // than the onset, held back five times.
+      final t = DateTime(2026, 1, 1);
+      final gate = MicGate.glasses(clock: () => t);
+      final out = gate.process(loud(640, 14000));
+      expect(gate.isOpen, isTrue);
+      expect(out, isNotEmpty);
+      // …but a TV-level chunk (6,500) still needs the onset.
+      final gate2 = MicGate.glasses(clock: () => t);
+      expect(gate2.process(loud(640, 6500)), isEmpty);
+      expect(gate2.isOpen, isFalse);
     });
 
     test('a dip inside the onset does not throw the onset away', () {
@@ -205,14 +219,14 @@ void main() {
       // (Faraz, 2026-09-15: "kai baar hearing nahi hoti").
       var t = DateTime(2026, 1, 1);
       final gate = MicGate.glasses(clock: () => t);
-      final pattern = [9000, 9000, 9000, 1000, 9000, 9000, 9000];
-      List<Uint8List> out = const [];
+      final pattern = [9000, 9000, 1000, 9000, 9000, 9000];
+      var out = const <Uint8List>[];
       for (final amp in pattern) {
-        out = gate.process(amp > 5000 ? loud(640, amp) : loud(640, amp));
+        out = gate.process(loud(640, amp));
         t = t.add(const Duration(milliseconds: 40));
       }
       expect(gate.isOpen, isTrue);
-      expect(out.length, 7, reason: 'the whole onset, dip included, is sent');
+      expect(out.length, 6, reason: 'the whole onset, dip included, is sent');
     });
 
     test('speech that stays under the bar is reported as a miss, with numbers',

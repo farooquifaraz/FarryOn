@@ -159,6 +159,7 @@ def build_gateway(
             settings=settings,
             stt_api_key=opts.get("stt_api_key"),
             llm_api_key=opts.get("llm_api_key"),
+            languages=opts.get("languages"),
         )
 
     raise ValueError(f"unknown AI provider: {provider!r}")

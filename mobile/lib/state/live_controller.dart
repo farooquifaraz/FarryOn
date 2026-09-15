@@ -2003,9 +2003,16 @@ class LiveController {
     }
   }
 
+  // `\w` in a Dart RegExp is ASCII only: every Devanagari, Urdu or Arabic
+  // letter counted as punctuation, the normalised text came out EMPTY, and
+  // the duplicate filter rejected every Hindi/Urdu user line — the words
+  // reached the server, the bubble never reached the screen (device
+  // 2026-09-15 18:48). Letters and digits of any script stay.
+  static final RegExp _notWord = RegExp(r'[^\p{L}\p{N}\s]', unicode: true);
+
   String _normForCompare(String s) => s
       .toLowerCase()
-      .replaceAll(RegExp(r'[^\w\s]'), ' ')
+      .replaceAll(_notWord, ' ')
       .replaceAll(RegExp(r'\s+'), ' ')
       .trim();
 

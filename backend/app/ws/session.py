@@ -649,21 +649,26 @@ class Session:
         """
         if provider != "cascade":
             return None
+        out: dict = {}
+        # The user's Settings languages → speech-to-text hints (script!).
+        languages = (self._hello or {}).get("languages")
+        if isinstance(languages, list):
+            langs = [str(l).strip()[:30] for l in languages[:2] if str(l).strip()]
+            if langs:
+                out["languages"] = langs
         keys = (self._hello or {}).get("devKeys")
-        if not isinstance(keys, dict):
-            return None
-        out = {}
-        for wire, opt in (("stt", "stt_api_key"), ("llm", "llm_api_key")):
-            v = keys.get(wire)
-            if isinstance(v, str) and v.strip():
-                out[opt] = v.strip()
-        if out:
-            logger.info(
-                "provider.dev_keys",
-                session_id=self.session_id,
-                stt="stt_api_key" in out,
-                llm="llm_api_key" in out,
-            )
+        if isinstance(keys, dict):
+            for wire, opt in (("stt", "stt_api_key"), ("llm", "llm_api_key")):
+                v = keys.get(wire)
+                if isinstance(v, str) and v.strip():
+                    out[opt] = v.strip()
+            if "stt_api_key" in out or "llm_api_key" in out:
+                logger.info(
+                    "provider.dev_keys",
+                    session_id=self.session_id,
+                    stt="stt_api_key" in out,
+                    llm="llm_api_key" in out,
+                )
         return out or None
 
     def _resolve_provider(self) -> str | None:

@@ -88,12 +88,24 @@ def pcm16_to_wav(pcm: bytes, sample_rate: int = _SAMPLE_RATE) -> bytes:
 class OpenAICompatSTT:
     """``POST {base}/audio/transcriptions`` — Groq, OpenAI, any compatible host."""
 
-    def __init__(self, *, base_url: str, api_key: str, model: str) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        language: str | None = None,
+        prompt: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.label = f"{model}"
         self._client: Any = None
+        #: Whisper's ISO-639-1 hint (one language) and its decoding prompt
+        #: (style/script bias). See :func:`stt_hints`.
+        self.language = language
+        self.prompt = prompt
 
     def _http(self) -> Any:
         import httpx
@@ -107,7 +119,12 @@ class OpenAICompatSTT:
             f"{self.base_url}/audio/transcriptions",
             headers={"Authorization": f"Bearer {self.api_key}"},
             files={"file": ("utterance.wav", pcm16_to_wav(pcm), "audio/wav")},
-            data={"model": self.model, "response_format": "json"},
+            data={
+                "model": self.model,
+                "response_format": "json",
+                **({"language": self.language} if self.language else {}),
+                **({"prompt": self.prompt} if self.prompt else {}),
+            },
         )
         r.raise_for_status()
         return str(r.json().get("text") or "").strip()
@@ -127,11 +144,12 @@ class GeminiSTT:
         "output nothing."
     )
 
-    def __init__(self, *, model: str, api_key: str) -> None:
+    def __init__(self, *, model: str, api_key: str, prompt: str | None = None) -> None:
         self.model = model
         self.label = model
         self._api_key = api_key
         self._client: Any = None
+        self.prompt = (self._PROMPT + " " + prompt) if prompt else self._PROMPT
 
     def _genai(self) -> Any:
         from google import genai  # type: ignore[import-not-found]
@@ -147,13 +165,58 @@ class GeminiSTT:
             model=self.model,
             contents=[
                 types.Part.from_bytes(data=pcm16_to_wav(pcm), mime_type="audio/wav"),
-                self._PROMPT,
+                self.prompt,
             ],
         )
         return str(getattr(resp, "text", "") or "").strip()
 
     async def close(self) -> None:
         return None
+
+
+_LANG_CODES = {
+    "english": "en", "hindi": "hi", "urdu": "ur", "arabic": "ar", "bengali": "bn",
+    "tamil": "ta", "telugu": "te", "marathi": "mr", "gujarati": "gu", "punjabi": "pa",
+    "malayalam": "ml", "kannada": "kn", "french": "fr", "spanish": "es", "german": "de",
+    "portuguese": "pt", "italian": "it", "turkish": "tr", "russian": "ru",
+    "chinese": "zh", "japanese": "ja", "korean": "ko", "indonesian": "id", "filipino": "tl",
+    "tagalog": "tl", "malay": "ms", "persian": "fa", "farsi": "fa", "dutch": "nl",
+}
+
+#: How a language should be WRITTEN, for the decoding prompt. Whisper hears
+#: Hindi and writes Urdu script (2026-09-15 18:45: "کرو یہ جو میرے سامنے…"
+#: for a Hindi sentence), and the model then answers in Urdu. A prompt in
+#: the wanted script is the standard way to pin it.
+_SCRIPT_SAMPLES = {
+    "hi": "हिंदी देवनागरी में लिखें।",
+    "ur": "اردو رسم الخط میں لکھیں۔",
+    "ar": "اكتب بالعربية.",
+    "en": "English in English.",
+}
+
+
+def stt_hints(languages: list[str] | None) -> tuple[str | None, str | None]:
+    """(language, prompt) for a speech-to-text call from the user's
+    Settings languages (primary, secondary), e.g. ["English", "Hindi"].
+
+    One language → Whisper's ``language`` is pinned to it. Two → not pinned
+    (a Hinglish speaker switches mid-sentence) but the decoding prompt names
+    both and shows the script each should be written in.
+    """
+    codes: list[str] = []
+    names: list[str] = []
+    for name in languages or []:
+        code = _LANG_CODES.get(str(name).strip().lower())
+        if code and code not in codes:
+            codes.append(code)
+            names.append(str(name).strip())
+    if not codes:
+        return None, None
+    samples = " ".join(_SCRIPT_SAMPLES[c] for c in codes if c in _SCRIPT_SAMPLES)
+    if len(codes) == 1:
+        return codes[0], samples or None
+    prompt = f"A conversation in {' and '.join(names)}. {samples}".strip()
+    return None, prompt
 
 
 # ---------------------------------------------------------------- thinking
@@ -401,13 +464,15 @@ class CascadeAgentGateway(AIGateway):
         llm: Any | None = None,
         stt_api_key: str | None = None,
         llm_api_key: str | None = None,
+        languages: list[str] | None = None,
     ) -> None:
         """``stt_api_key`` / ``llm_api_key`` are the user's own keys for this
         session (Settings → Dev Mode → "Your API keys", carried in
         ``hello.devKeys``); a non-empty one beats the server's. The keys stay
-        in this object — never logged, never stored."""
+        in this object — never logged, never stored. ``languages`` are the
+        user's Settings languages, turned into speech-to-text hints."""
         s = settings or get_settings()
-        self._stt = stt or self._pick_stt(s, stt_api_key)
+        self._stt = stt or self._pick_stt(s, stt_api_key, languages)
         self._llm = llm or self._pick_llm(s, llm_api_key)
         # The stand-in when the chosen model is slow or down: Gemini
         # Flash-Lite on the server's own key (cents), built on first use.
@@ -434,13 +499,22 @@ class CascadeAgentGateway(AIGateway):
     # -- backends ------------------------------------------------------------
 
     @staticmethod
-    def _pick_stt(s: Any, override: str | None = None) -> Any:
+    def _pick_stt(
+        s: Any, override: str | None = None, languages: list[str] | None = None
+    ) -> Any:
         key = (override or getattr(s, "cascade_stt_api_key", "") or "").strip()
+        language, prompt = stt_hints(languages)
         if key:
             return OpenAICompatSTT(
-                base_url=s.cascade_stt_base_url, api_key=key, model=s.cascade_stt_model
+                base_url=s.cascade_stt_base_url,
+                api_key=key,
+                model=s.cascade_stt_model,
+                language=language,
+                prompt=prompt,
             )
-        return GeminiSTT(model=s.cascade_gemini_stt_model, api_key=s.gemini_api_key)
+        return GeminiSTT(
+            model=s.cascade_gemini_stt_model, api_key=s.gemini_api_key, prompt=prompt
+        )
 
     @staticmethod
     def _pick_llm(s: Any, override: str | None = None) -> Any:
