@@ -119,6 +119,11 @@ With `provider: "cascade"` the hello may carry `devKeys: {"stt": "…", "llm":
 Mode); a present, non-blank key replaces the server's for that session and is
 never logged or stored server-side. Ignored for every other provider.
 
+`gate_missed` (client → server, measurement only, like `mic_dropped`): the
+phone's mic gate held back a stretch of speech-like audio — `peakRms`, `bar`,
+`floor`, `loudMs` (over the bar), `halfMs` (over half of it), `mic`
+(`phone`|`glasses`). Logged as `gate.missed`; never a turn.
+
 Fatal `error` codes the app treats specially (server → client, §4):
 `quota_exceeded` — the USER's own plan cap: the app offers Upgrade;
 `provider_credits` — the OPERATOR's model account is out of credit/quota;

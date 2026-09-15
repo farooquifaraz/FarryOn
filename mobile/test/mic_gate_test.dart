@@ -187,8 +187,77 @@ void main() {
       expect(gate.process(quiet(640)), isEmpty); // the blip ended
       t = t.add(const Duration(milliseconds: 40));
       expect(gate.process(loud(640, 9000)), isEmpty,
-          reason: 'the count restarts');
+          reason: 'two chunks with a gap are 80 ms of speech, not 240');
       expect(gate.isOpen, isFalse);
+      // …and once the window has moved on, those chunks no longer count.
+      t = t.add(const Duration(milliseconds: 500));
+      for (var i = 0; i < 5; i++) {
+        expect(gate.process(loud(640, 9000)), isEmpty);
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(gate.isOpen, isFalse, reason: '200 ms in the window is not 240');
+    });
+
+    test('a dip inside the onset does not throw the onset away', () {
+      // "Hello." with a 40 ms dip after the first syllable: loud, loud,
+      // loud, DIP, loud, loud, loud — 240 ms of speech within 280 ms. The
+      // old consecutive count restarted at the dip and never opened
+      // (Faraz, 2026-09-15: "kai baar hearing nahi hoti").
+      var t = DateTime(2026, 1, 1);
+      final gate = MicGate.glasses(clock: () => t);
+      final pattern = [9000, 9000, 9000, 1000, 9000, 9000, 9000];
+      List<Uint8List> out = const [];
+      for (final amp in pattern) {
+        out = gate.process(amp > 5000 ? loud(640, amp) : loud(640, amp));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(gate.isOpen, isTrue);
+      expect(out.length, 7, reason: 'the whole onset, dip included, is sent');
+    });
+
+    test('speech that stays under the bar is reported as a miss, with numbers',
+        () {
+      var t = DateTime(2026, 1, 1);
+      final gate = MicGate.glasses(clock: () => t);
+      final misses = <(double, double, int, int)>[];
+      gate.onMiss = (peak, bar, loudMs, halfMs) =>
+          misses.add((peak, bar, loudMs, halfMs));
+      // 400 ms at 4500 RMS: over half the 6000 bar, never over it.
+      for (var i = 0; i < 10; i++) {
+        expect(gate.process(loud(640, 4500)), isEmpty);
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(misses, isEmpty, reason: 'still going — nothing to report yet');
+      // Then the room again for half a second: the stretch is over.
+      for (var i = 0; i < 12; i++) {
+        gate.process(quiet(640));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(misses.length, 1);
+      final (peak, bar, loudMs, halfMs) = misses.single;
+      expect(peak, closeTo(4500, 1));
+      expect(bar, closeTo(6000, 1));
+      expect(loudMs, 0);
+      expect(halfMs, 400);
+      expect(gate.isOpen, isFalse);
+    });
+
+    test('an utterance that opened the gate is never reported as a miss', () {
+      var t = DateTime(2026, 1, 1);
+      final gate = MicGate.glasses(clock: () => t);
+      var misses = 0;
+      gate.onMiss = (_, __, ___, ____) => misses++;
+      for (var i = 0; i < 8; i++) {
+        gate.process(loud(640, 9000));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(gate.isOpen, isTrue);
+      for (var i = 0; i < 40; i++) {
+        gate.process(quiet(640));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(gate.isOpen, isFalse);
+      expect(misses, 0);
     });
 
     test('a TV that never stops raises the glasses bar above itself', () {

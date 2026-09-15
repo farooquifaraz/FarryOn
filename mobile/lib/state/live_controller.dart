@@ -245,7 +245,23 @@ class LiveController {
         // notes that a person is talking.
         _client.send(const SpeechStartMessage());
       }
-      ..onClose = () => _client.send(const SpeechEndMessage());
+      ..onClose = (() => _client.send(const SpeechEndMessage()))
+      ..onMiss = (peak, bar, loudMs, halfMs) {
+        // Speech-like audio the gate held back. Logged here and sent to the
+        // server, so a "she can't hear me" comes with the levels that say
+        // whether the voice reached the bar (Faraz, 2026-09-15: the chip
+        // stayed on Listening for some of what he said).
+        _log.info('mic gate MISS: peak ${peak.round()} vs bar ${bar.round()} '
+            '(over bar ${loudMs}ms, over half ${halfMs}ms)');
+        _client.send(GateMissedMessage(
+          peakRms: peak.round(),
+          bar: bar.round(),
+          loudMs: loudMs,
+          halfMs: halfMs,
+          floor: gate.noiseFloor.round(),
+          mic: kind.name,
+        ));
+      };
     return gate;
   }
 

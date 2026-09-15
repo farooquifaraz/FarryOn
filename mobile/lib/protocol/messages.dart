@@ -277,6 +277,38 @@ class CallStateMessage extends ClientMessage {
 /// [tailMs] is the part that fell in the tail alone, with the speaker already
 /// silent — energy there is the user, not an echo, and is the number that
 /// matters.
+/// A measurement from the mic gate: speech-like audio that did NOT open it.
+/// Sent so "she can't hear me" shows up in the server log with the levels —
+/// peak against the bar, how long it was over the bar and over half of it.
+class GateMissedMessage extends ClientMessage {
+  const GateMissedMessage({
+    required this.peakRms,
+    required this.bar,
+    required this.loudMs,
+    required this.halfMs,
+    required this.floor,
+    required this.mic,
+  });
+  final int peakRms;
+  final int bar;
+  final int loudMs;
+  final int halfMs;
+  final int floor;
+  final String mic;
+  @override
+  String get type => MsgType.gateMissed;
+  @override
+  Map<String, dynamic> toJson() => {
+        'type': type,
+        'peakRms': peakRms,
+        'bar': bar,
+        'loudMs': loudMs,
+        'halfMs': halfMs,
+        'floor': floor,
+        'mic': mic,
+      };
+}
+
 class MicDroppedMessage extends ClientMessage {
   const MicDroppedMessage({
     required this.speechMs,

@@ -69,10 +69,22 @@ class MicGate {
 
   final int sampleRate;
 
-  /// Speech-loud audio must last this long before the gate opens (0 = open
-  /// on the first loud chunk, the phone behaviour). The chunks that make up
-  /// the onset are kept and flushed with the pre-roll, so nothing is lost.
+  /// Speech-loud audio must add up to this much before the gate opens (0 =
+  /// open on the first loud chunk, the phone behaviour). The chunks that
+  /// make up the onset are kept and flushed with the pre-roll, so nothing
+  /// is lost.
+  ///
+  /// Added up within [_onsetWindow], not counted consecutively: speech dips
+  /// between syllables and on plosives, and one 40 ms chunk under the bar
+  /// used to reset the count to zero — a soft or short "Hello." with one
+  /// dip in its first quarter second never opened the gate while the chip
+  /// went on saying Listening (Faraz, 2026-09-15 00:25). A burst from the
+  /// room still has to be loud for [onsetMs] out of the window; it only
+  /// gets to pause for the difference.
   final int onsetMs;
+
+  /// The span the onset may be spread over (onset + up to 160 ms of dips).
+  Duration get _onsetWindow => Duration(milliseconds: onsetMs + 160);
 
   /// Learn the room from the quiet fifth of the last [floorWindow] of audio,
   /// whether the gate is open or not — instead of only while it is closed.
@@ -139,8 +151,19 @@ class MicGate {
   bool _open = false;
   DateTime? _lastSpeechAt;
 
-  /// Bytes of consecutive speech-loud audio seen while closed (the onset).
-  int _loudBytes = 0;
+  /// Speech-loud chunks seen while closed, with arrival times, so the onset
+  /// can be added up over [_onsetWindow] (see [onsetMs]).
+  final Queue<(DateTime, int)> _loud = Queue<(DateTime, int)>();
+
+  // A stretch of speech-LIKE audio (above half the bar) that did not open
+  // the gate — measured so "she can't hear me" comes with numbers instead
+  // of a guess: how loud it got, how long it stayed loud, and the bar it
+  // was measured against. See [onMiss].
+  DateTime? _missStart;
+  DateTime? _missLastLoud;
+  double _missPeak = 0;
+  int _missLoudBytes = 0;
+  int _missHalfBytes = 0;
 
   /// Recent chunk levels for [floorFromWindow]: (arrival, rms).
   final Queue<(DateTime, double)> _levels = Queue<(DateTime, double)>();
@@ -156,6 +179,21 @@ class MicGate {
   /// chunk elapsed, or [reset] shut an open gate. Paired with [onOpen] it
   /// brackets one utterance (the backend's manual activity window).
   void Function()? onClose;
+
+  /// Called when a stretch of speech-like audio (at least [_missMinMs]
+  /// above half the bar) ended without the gate opening: its peak level,
+  /// the bar it faced, how long it was actually over the bar, and how long
+  /// it was over half of it. The number that says whether the wearer's
+  /// voice reached the bar — or fell short, and by how much.
+  void Function(double peakRms, double threshold, int loudMs, int halfMs)?
+      onMiss;
+
+  /// A candidate has to be speech-like for this long to be worth reporting;
+  /// shorter blips are the room.
+  static const int _missMinMs = 200;
+
+  /// The candidate ends after this much audio under half the bar.
+  static const Duration _missGap = Duration(milliseconds: 400);
 
   /// Level and threshold at the most recent open. Diagnostics.
   double lastOpenRms = 0;
@@ -244,17 +282,30 @@ class MicGate {
     final threshold =
         math.max(absoluteFloor, _noiseFloor * noiseMultiplier) * musicBoost;
 
+    if (!_open) _trackMiss(now, rms, threshold, pcm16.length);
+
     if (rms > threshold) {
       _lastSpeechAt = now;
       if (!_open) {
         final need = onsetMs * _bytesPerSecond ~/ 1000;
-        if (need > 0 && _loudBytes + pcm16.length < need) {
-          // Loud, but not for long enough yet: hold it with the pre-roll.
-          _loudBytes += pcm16.length;
-          _remember(pcm16);
-          return const [];
+        if (need > 0) {
+          _loud.addLast((now, pcm16.length));
+          while (_loud.isNotEmpty &&
+              now.difference(_loud.first.$1) > _onsetWindow) {
+            _loud.removeFirst();
+          }
+          var loudBytes = 0;
+          for (final e in _loud) {
+            loudBytes += e.$2;
+          }
+          if (loudBytes < need) {
+            // Loud, but not for long enough yet: hold it with the pre-roll.
+            _remember(pcm16);
+            return const [];
+          }
         }
-        _loudBytes = 0;
+        _loud.clear();
+        _clearMiss();
         _open = true;
         _openSince = now;
         lastOpenRms = rms;
@@ -270,7 +321,6 @@ class MicGate {
 
     // Below threshold: keep streaming through the hangover so the tail of a
     // word — and the silence the server needs to end the turn — still gets out.
-    _loudBytes = 0; // an onset that did not hold
     final last = _lastSpeechAt;
     if (_open && last != null && now.difference(last) < hangover) {
       return [pcm16];
@@ -284,11 +334,47 @@ class MicGate {
     return const [];
   }
 
+  /// Track a closed-gate stretch of speech-like audio; report it when it
+  /// ends without an opening. Cheap: a few fields per chunk.
+  void _trackMiss(DateTime now, double rms, double threshold, int bytes) {
+    final half = threshold / 2;
+    if (rms > half) {
+      _missStart ??= now;
+      _missLastLoud = now;
+      _missHalfBytes += bytes;
+      if (rms > threshold) _missLoudBytes += bytes;
+      if (rms > _missPeak) _missPeak = rms;
+      return;
+    }
+    final lastLoud = _missLastLoud;
+    if (_missStart == null || lastLoud == null) return;
+    if (now.difference(lastLoud) < _missGap) return;
+    final halfMs = _missHalfBytes * 1000 ~/ _bytesPerSecond;
+    if (halfMs >= _missMinMs) {
+      onMiss?.call(
+        _missPeak,
+        threshold,
+        _missLoudBytes * 1000 ~/ _bytesPerSecond,
+        halfMs,
+      );
+    }
+    _clearMiss();
+  }
+
+  void _clearMiss() {
+    _missStart = null;
+    _missLastLoud = null;
+    _missPeak = 0;
+    _missLoudBytes = 0;
+    _missHalfBytes = 0;
+  }
+
   /// Forget buffered audio and reset the gate (mic closed, session ended).
   void reset() {
     _ring.clear();
     _ringBytes = 0;
-    _loudBytes = 0;
+    _loud.clear();
+    _clearMiss();
     _levels.clear();
     _openSince = null;
     final wasOpen = _open;

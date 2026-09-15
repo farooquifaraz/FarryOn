@@ -1080,7 +1080,7 @@ class Session:
         # note). Pings arrive every 5 s and location_update every 5 min from
         # any OPEN app — neither means a human is there. Substantive control
         # messages (typed text, audio_start, config, device events) count.
-        if mtype not in ("ping", "location_update", "mic_dropped"):
+        if mtype not in ("ping", "location_update", "mic_dropped", "gate_missed"):
             self._last_activity = time.monotonic()
         if mtype == "text":
             text = (message.get("text") or "").strip()
@@ -1140,6 +1140,20 @@ class Session:
                 tail_ms=int(message.get("tailMs") or 0),
                 window_ms=int(message.get("windowMs") or 0),
                 chunks=int(message.get("chunks") or 0),
+            )
+        elif mtype == "gate_missed":
+            # The phone's mic gate held back a stretch of speech-like audio.
+            # Peak vs bar says whether the voice fell short and by how much
+            # — the number to tune the glasses profile on (2026-09-15).
+            logger.info(
+                "gate.missed",
+                session_id=self.session_id,
+                mic=str(message.get("mic") or "")[:16],
+                peak=int(message.get("peakRms") or 0),
+                bar=int(message.get("bar") or 0),
+                floor=int(message.get("floor") or 0),
+                loud_ms=int(message.get("loudMs") or 0),
+                half_ms=int(message.get("halfMs") or 0),
             )
         elif mtype == "call_state":
             # A phone call took the microphone, or gave it back. The model

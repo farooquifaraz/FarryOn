@@ -70,6 +70,7 @@ abstract final class MsgType {
   static const String deviceUpdate = 'device_update';
   static const String callState = 'call_state';
   static const String micDropped = 'mic_dropped';
+  static const String gateMissed = 'gate_missed';
   static const String speechStart = 'speech_start';
   static const String speechEnd = 'speech_end';
   static const String ping = 'ping';

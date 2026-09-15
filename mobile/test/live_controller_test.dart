@@ -440,6 +440,40 @@ void main() {
         reason: 'the gate is still open');
   });
 
+  test('speech the gate held back is reported to the server with its levels',
+      () async {
+    await controller.connect();
+    await tick();
+    await controller.startListening();
+    await tick();
+
+    // 240 ms at RMS 300: over half the phone bar (396 → 198), under it.
+    final soft = Int16List(320)..fillRange(0, 320, 300);
+    for (var i = 0; i < 12; i++) {
+      source.audioCtl.add(soft.buffer.asUint8List());
+    }
+    await tick();
+    // The stretch ends once the room has been quiet for 400 ms.
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+    source.audioCtl.add(Uint8List(640));
+    await tick();
+
+    final missed = fake.sentLog
+        .whereType<String>()
+        .map((s) => jsonDecode(s) as Map<String, dynamic>)
+        .where((m) => m['type'] == 'gate_missed')
+        .toList();
+    expect(missed.length, 1);
+    expect(missed.single['peakRms'], 300);
+    expect(missed.single['halfMs'], 240);
+    expect(missed.single['loudMs'], 0);
+    expect(missed.single['mic'], 'phone');
+    final types = fake.sentLog
+        .whereType<String>()
+        .map((s) => (jsonDecode(s) as Map<String, dynamic>)['type']);
+    expect(types, isNot(contains('speech_start')));
+  });
+
   test('startListening sends audio_start and pipes mic PCM to 0x01', () async {
     await controller.connect();
     await tick();
