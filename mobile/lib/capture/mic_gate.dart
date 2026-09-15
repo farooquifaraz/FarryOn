@@ -91,7 +91,11 @@ class MicGate {
         keepOpenRatio: 0.4,
         speakerBar: true,
         speakerBarMin: 4000.0,
-        fastOpenRatio: 2.0,
+        // 1.6, not 2: in a room whose floor has lifted the bar to 7,000
+        // (a TV on), 2× asked for 14,000 and a 13,600 "Hello" was held back
+        // (device 2026-09-15 20:50). 1.6 × 7,000 = 11,200 is still far
+        // above anything the TV reached (p98 6,800).
+        fastOpenRatio: 1.6,
         fastOpenMin: 8000.0,
         clock: clock,
       );
