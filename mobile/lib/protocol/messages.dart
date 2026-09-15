@@ -288,6 +288,9 @@ class GateMissedMessage extends ClientMessage {
     required this.halfMs,
     required this.floor,
     required this.mic,
+    this.meanRms,
+    this.route,
+    this.scoUp,
   });
   final int peakRms;
   final int bar;
@@ -295,6 +298,14 @@ class GateMissedMessage extends ClientMessage {
   final int halfMs;
   final int floor;
   final String mic;
+
+  /// Smoothed level around the miss, and — on the glasses — which input the
+  /// recorder was actually on (`sco` | `builtin` | …) and whether the SCO
+  /// link was up. A loud peak on a low mean from `builtin` is a phone on the
+  /// table, not a wearer's voice.
+  final int? meanRms;
+  final String? route;
+  final bool? scoUp;
   @override
   String get type => MsgType.gateMissed;
   @override
@@ -306,6 +317,9 @@ class GateMissedMessage extends ClientMessage {
         'halfMs': halfMs,
         'floor': floor,
         'mic': mic,
+        if (meanRms != null) 'meanRms': meanRms,
+        if (route != null) 'route': route,
+        if (scoUp != null) 'scoUp': scoUp,
       };
 }
 

@@ -34,6 +34,9 @@ class MicGate {
     this.onsetMs = 0,
     this.floorFromWindow = false,
     this.floorWindow = const Duration(seconds: 8),
+    this.keepOpenRatio = 1.0,
+    this.speakerBar = false,
+    this.speakerBarMin = 0,
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
 
@@ -57,6 +60,25 @@ class MicGate {
   /// sub-240 ms grunts); 5,000 / 160 ms still let one TV burst per 40 s in.
   /// The window may raise the floor to 2,800 (bar 7,000) for a louder room,
   /// never higher, so a raised voice always gets through.
+  ///
+  /// Two things that bar got wrong, measured on the wearer's own sentences
+  /// two days later (2026-09-15 09:57, three utterances the gate DID pass):
+  /// only 32-42 % of their chunks were over 6,000 — the median of his
+  /// speech was ~5,000, UNDER the bar — and the ends of sentences sat at
+  /// 3,200-3,400. So a 6,000 bar held for the whole utterance closed the
+  /// gate mid-sentence on any 900 ms stretch of ordinary speech (one
+  /// utterance had 1,080 ms of it) and cut every sentence's tail; and
+  /// relaxed speech, whose stressed syllables alone crossed the bar (misses
+  /// logged with peaks of 8,500-11,800 but only 120-360 ms over it), never
+  /// opened it at all — "deaf after a few minutes", on both servers.
+  ///
+  /// Hence: the bar opens the gate; a much lower one KEEPS it open
+  /// ([keepOpenRatio] 0.4 → 2,400, under which those utterances never
+  /// stayed for more than 440 ms); and the opening bar follows the
+  /// wearer's own measured speech level ([speakerBar], never below
+  /// [speakerBarMin] 4,000 — above the TV's p90 of 3,300 — nor above the
+  /// room-derived bar). A room's bar (floor × 2.5, capped at 7,000) still
+  /// wins in a loud room.
   factory MicGate.glasses({DateTime Function()? clock}) => MicGate(
         absoluteFloor: 2400.0,
         maxNoiseFloor: 2800.0,
@@ -64,8 +86,26 @@ class MicGate {
         onsetMs: 240,
         hangover: const Duration(milliseconds: 900),
         floorFromWindow: true,
+        keepOpenRatio: 0.4,
+        speakerBar: true,
+        speakerBarMin: 4000.0,
         clock: clock,
       );
+
+  /// Once open, the level that counts as "still speaking" is this fraction
+  /// of the opening bar (1.0 = the same bar, the phone behaviour). Speech
+  /// is loud on its stressed syllables and quiet between and after them;
+  /// holding the gate to the opening bar throughout cut sentences in the
+  /// middle and always at the end (see [MicGate.glasses]).
+  final double keepOpenRatio;
+
+  /// Learn the wearer's own speech level from the utterances the gate
+  /// passed, and let the opening bar follow it (0.9 × the running median
+  /// of speech-loud chunks, never under [speakerBarMin], never over the
+  /// room's bar). Someone who talks softly after the first minute is still
+  /// heard; a TV that never reaches [speakerBarMin] still is not.
+  final bool speakerBar;
+  final double speakerBarMin;
 
   final int sampleRate;
 
@@ -199,6 +239,12 @@ class MicGate {
   double lastOpenRms = 0;
   double lastOpenThreshold = 0;
 
+  /// Smoothed level of everything the gate has seen lately (~2 s), open or
+  /// closed. A miss with a loud peak but a low mean is a chopped stream, not
+  /// a quiet voice.
+  double get recentMeanRms => _meanRms;
+  double _meanRms = 0;
+
   /// True while the gate is passing audio (speech + hangover). Diagnostics.
   bool get isOpen => _open;
 
@@ -216,13 +262,51 @@ class MicGate {
   /// Measured background level in PCM16 RMS units. Diagnostics.
   double get noiseFloor => _noiseFloor;
 
+  /// The wearer's measured speech level (median of speech-loud chunks
+  /// while the gate was open), or 0 before anything was heard.
+  double get speakerLevel => _speakerLevel;
+  double _speakerLevel = 0;
+
+  /// Levels of the last few hundred speech-loud chunks while open, for the
+  /// running median that [speakerLevel] is.
+  final List<double> _speechLevels = <double>[];
+  static const int _speechLevelsMax = 300;
+
   int get _bytesPerSecond => sampleRate * 2;
 
   /// The bar a chunk must clear right now to count as speech. Exposed so the
   /// caller can measure audio it is about to DROP against the same bar the
   /// gate would have used, instead of a second guess of its own.
-  double get threshold =>
-      math.max(absoluteFloor, _noiseFloor * noiseMultiplier) * musicBoost;
+  double get threshold => _openBar();
+
+  /// The bar the gate opens on.
+  ///
+  /// Without a learned wearer: the room's bar as it always was —
+  /// max(absoluteFloor, floor × multiplier), with the floor clamped to
+  /// [absoluteFloor, maxNoiseFloor]. With one: the greater of the wearer's
+  /// own bar (0.9 × their speech median, never under [speakerBarMin]) and
+  /// what the room ACTUALLY measures (its unclamped quiet fifth ×
+  /// multiplier) — so a quiet room lets the bar come down to the wearer,
+  /// and a room with a TV in it (quiet fifth 2,800+) keeps it at 7,000 as
+  /// before. Never above the room's capped bar, whoever is talking.
+  double _openBar() {
+    final room = math.max(absoluteFloor, _noiseFloor * noiseMultiplier);
+    double bar = room;
+    if (speakerBar && _speakerLevel > 0) {
+      final own = math.max(speakerBarMin, _speakerLevel * 0.9);
+      final measured = _rawFloor * noiseMultiplier;
+      bar = math.min(math.max(own, measured), maxNoiseFloor * noiseMultiplier);
+    }
+    return bar * musicBoost;
+  }
+
+  /// The room's quiet fifth as measured, before the [absoluteFloor] clamp
+  /// that keeps the legacy bar at 6,000 in a silent room.
+  double _rawFloor = 0;
+
+  /// The level under which an OPEN gate starts counting silence (for the
+  /// first [_longOpen] of an utterance; see [process]).
+  double get keepOpenThreshold => _openBar() * keepOpenRatio;
 
   /// RMS level of a chunk in PCM16 units; 0 for anything unmeasurable.
   double levelOf(Uint8List pcm16) {
@@ -250,6 +334,7 @@ class MicGate {
       return [pcm16];
     }
     final now = _now();
+    _meanRms = _meanRms == 0 ? rms : _meanRms * 0.96 + rms * 0.04;
 
     // Learn the room only while we're NOT passing speech, so the speaker's own
     // voice and the user's can't inflate the floor and deafen the gate.
@@ -271,6 +356,7 @@ class MicGate {
         final sorted = _levels.map((e) => e.$2).toList()..sort();
         final p20 =
             sorted[(sorted.length * 0.2).floor().clamp(0, sorted.length - 1)];
+        _rawFloor = p20;
         _noiseFloor = p20.clamp(absoluteFloor, maxNoiseFloor);
       }
     } else if (!_open) {
@@ -279,12 +365,27 @@ class MicGate {
           : (_noiseFloor * 0.995) + (rms * 0.005);
       if (_noiseFloor > maxNoiseFloor) _noiseFloor = maxNoiseFloor;
     }
-    final threshold =
-        math.max(absoluteFloor, _noiseFloor * noiseMultiplier) * musicBoost;
+    final threshold = _openBar();
 
     if (!_open) _trackMiss(now, rms, threshold, pcm16.length);
 
-    if (rms > threshold) {
+    // What the wearer sounds like: every chunk of an open utterance that
+    // is speech (over the keep bar), stressed and unstressed alike.
+    if (_open && speakerBar && rms > threshold * keepOpenRatio) {
+      _learnSpeaker(rms);
+    }
+
+    // Open: the wearer keeps the gate with the lower bar — stressed
+    // syllables clear the opening bar, the words between them do not. A
+    // gate open longer than [_longOpen] is not hearing a sentence but a
+    // background that once cleared the bar (a TV); from there on it takes
+    // the full bar to stay open, so the room's bar can shut it as before.
+    final openFor =
+        _openSince == null ? Duration.zero : now.difference(_openSince!);
+    final keepBar =
+        openFor > _longOpen ? threshold : threshold * keepOpenRatio;
+    final speaking = _open ? rms > keepBar : rms > threshold;
+    if (speaking) {
       _lastSpeechAt = now;
       if (!_open) {
         final need = onsetMs * _bytesPerSecond ~/ 1000;
@@ -334,6 +435,14 @@ class MicGate {
     return const [];
   }
 
+  void _learnSpeaker(double rms) {
+    _speechLevels.add(rms);
+    if (_speechLevels.length > _speechLevelsMax) _speechLevels.removeAt(0);
+    if (_speechLevels.length < 25) return; // one short sentence, at least
+    final sorted = List<double>.of(_speechLevels)..sort();
+    _speakerLevel = sorted[sorted.length ~/ 2];
+  }
+
   /// Track a closed-gate stretch of speech-like audio; report it when it
   /// ends without an opening. Cheap: a few fields per chunk.
   void _trackMiss(DateTime now, double rms, double threshold, int bytes) {
@@ -381,6 +490,9 @@ class MicGate {
     _open = false;
     _lastSpeechAt = null;
     _noiseFloor = absoluteFloor;
+    _rawFloor = 0;
+    // The wearer is the same person after a reset; what was learned about
+    // their voice stays (only the ROOM is re-learned).
     // An utterance that was cut off (the speaker started) still ends: the
     // backend's manual activity window must not stay open.
     if (wasOpen) onClose?.call();
@@ -392,6 +504,7 @@ class MicGate {
   /// than decaying from the old level.
   void resetFloor() {
     _noiseFloor = absoluteFloor;
+    _rawFloor = 0;
     _levels.clear();
   }
 

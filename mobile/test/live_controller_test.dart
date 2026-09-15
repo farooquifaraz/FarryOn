@@ -64,6 +64,9 @@ class FakeCaptureSource implements CaptureSource {
   @override
   Future<void> startAudio() async => audioStarted = true;
   @override
+  Future<Map<String, Object?>> micDiagnostics() async => const {};
+
+  @override
   Future<void> stopAudio() async => audioStarted = false;
   @override
   Future<void> startVideo() async => videoStarted = true;
@@ -183,6 +186,8 @@ class FakeGlassesBridge implements GlassesBridgeApi {
   Future<void> startAudioTest(String mode) async {}
   @override
   Future<void> stopAudioTest() async {}
+  @override
+  Future<Map<String, Object?>> micRoute() async => const {};
   @override
   Future<void> startWifiSync() async => syncCalls++;
   @override

@@ -90,6 +90,8 @@ class _FakeBridge implements GlassesBridgeApi {
 
   @override
   Future<void> stopAudioTest() => _maybeFail('stopAudioTest');
+  @override
+  Future<Map<String, Object?>> micRoute() async => const {};
 
   @override
   Future<void> startWifiSync() => _maybeFail('startWifiSync');

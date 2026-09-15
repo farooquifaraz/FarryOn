@@ -1154,6 +1154,9 @@ class Session:
                 floor=int(message.get("floor") or 0),
                 loud_ms=int(message.get("loudMs") or 0),
                 half_ms=int(message.get("halfMs") or 0),
+                mean=int(message.get("meanRms") or 0),
+                route=str(message.get("route") or "")[:16],
+                sco_up=message.get("scoUp"),
             )
         elif mtype == "call_state":
             # A phone call took the microphone, or gave it back. The model

@@ -251,6 +251,9 @@ class PhoneCaptureSource implements CaptureSource {
   }
 
   @override
+  Future<Map<String, Object?>> micDiagnostics() async => const {};
+
+  @override
   Future<void> stopAudio() async {
     // Not gated on `_audioRunning`: a recorder whose stream died still holds
     // native capture state, and a stop that skips it leaves the next start

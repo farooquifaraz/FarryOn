@@ -23,6 +23,9 @@ class _FakeSource implements CaptureSource {
   @override
   Future<void> startAudio() async {}
   @override
+  Future<Map<String, Object?>> micDiagnostics() async => const {};
+
+  @override
   Future<void> stopAudio() async {}
   @override
   Future<void> startVideo() async {}

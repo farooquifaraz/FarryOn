@@ -496,6 +496,7 @@ class GlassesChannels private constructor(
                     result.success(null)
                 }
                 "stopAudioTest" -> { sdk.stopAudioTest(); result.success(null) }
+                "micRoute" -> result.success(sdk.micRoute())
                 "startWifiSync" -> { sdk.startWifiSync(); result.success(null) }
                 "refreshMediaCounts" -> {
                     sdk.refreshMediaCounts(); result.success(null)

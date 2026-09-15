@@ -67,6 +67,11 @@ abstract class GlassesBridgeApi {
 
   Future<void> stopAudioTest();
 
+  /// Where the call-mode mic's audio is coming from right now: `route`
+  /// (`sco` | `builtin` | …), `recording`, `scoUp`, `mode`. Read when the
+  /// gate reports a miss, so the report says which microphone it was.
+  Future<Map<String, Object?>> micRoute();
+
   Future<void> startWifiSync();
 
   Future<void> stopWifiSync();
@@ -257,6 +262,12 @@ class GlassesChannel implements GlassesBridgeApi {
 
   @override
   Future<void> stopAudioTest() => _method.invokeMethod<void>('stopAudioTest');
+
+  @override
+  Future<Map<String, Object?>> micRoute() async {
+    final m = await _method.invokeMapMethod<String, Object?>('micRoute');
+    return m ?? const {};
+  }
 
   @override
   Future<void> startWifiSync() => _method.invokeMethod<void>('startWifiSync');

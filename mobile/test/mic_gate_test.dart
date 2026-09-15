@@ -242,6 +242,70 @@ void main() {
       expect(gate.isOpen, isFalse);
     });
 
+    test('once open, the gate holds through quiet syllables and the tail', () {
+      // Measured 2026-09-15: a sentence's middle sat under 6,000 for up to
+      // 1,080 ms and its last half-second at ~3,300. With the bar held for
+      // the whole utterance the gate closed inside the sentence.
+      var t = DateTime(2026, 1, 1);
+      final gate = MicGate.glasses(clock: () => t);
+      var closes = 0;
+      gate.onClose = () => closes++;
+      for (var i = 0; i < 8; i++) {
+        gate.process(loud(640, 9000));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(gate.isOpen, isTrue);
+      // 1.2 s of speech at 3,300: under the opening bar, over the keep bar.
+      for (var i = 0; i < 30; i++) {
+        expect(gate.process(loud(640, 3300)), isNotEmpty);
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(gate.isOpen, isTrue, reason: 'the sentence is still going');
+      expect(closes, 0);
+      // Real silence: closes after the hangover.
+      for (var i = 0; i < 30; i++) {
+        gate.process(quiet(640));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(gate.isOpen, isFalse);
+      expect(closes, 1);
+    });
+
+    test('the opening bar follows the wearer, never under 4,000', () {
+      var t = DateTime(2026, 1, 1);
+      final gate = MicGate.glasses(clock: () => t);
+      expect(gate.threshold, closeTo(6000, 1));
+      // A first sentence at ~5,000 median (peaks open it).
+      for (var i = 0; i < 8; i++) {
+        gate.process(loud(640, 9000));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      for (var i = 0; i < 30; i++) {
+        gate.process(loud(640, 5000));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      for (var i = 0; i < 30; i++) {
+        gate.process(quiet(640));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(gate.isOpen, isFalse);
+      expect(gate.speakerLevel, closeTo(5000, 400));
+      expect(gate.threshold, closeTo(4500, 100), reason: '0.9 x median');
+      // A very soft talker cannot drag the bar under 4,000 (the TV\'s p90
+      // was 3,300).
+      for (var i = 0; i < 8; i++) {
+        gate.process(loud(640, 9000));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      for (var i = 0; i < 300; i++) {
+        gate.process(loud(640, 2600));
+        t = t.add(const Duration(milliseconds: 40));
+      }
+      expect(gate.threshold, greaterThanOrEqualTo(4000));
+      // A loud room (floor at its cap) still wins over the wearer's bar.
+      gate.musicBoost = 1.0;
+    });
+
     test('an utterance that opened the gate is never reported as a miss', () {
       var t = DateTime(2026, 1, 1);
       final gate = MicGate.glasses(clock: () => t);

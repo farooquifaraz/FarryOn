@@ -472,6 +472,15 @@ class GlassesCaptureSource implements CaptureSource {
   }
 
   @override
+  Future<Map<String, Object?>> micDiagnostics() async {
+    try {
+      return await _bridge.micRoute();
+    } catch (e) {
+      return {'error': '$e'};
+    }
+  }
+
+  @override
   Future<void> stopAudio() async {
     _audioRunning = false;
     _handsFreeActive = false;

@@ -100,6 +100,11 @@ interface GlassesSdk {
     fun pairClassicBt()
     fun startAudioTest(mode: String)
     fun stopAudioTest()
+
+    /** Which input the call-mode recorder is on right now (`route`:
+     *  sco|builtin|…, `recording`, `scoUp`, `mode`). Diagnostics for a
+     *  mic-gate miss; the stub has no recorder and reports none. */
+    fun micRoute(): Map<String, Any?> = mapOf("route" to "none", "recording" to false)
     fun startWifiSync()
     fun stopWifiSync()
 

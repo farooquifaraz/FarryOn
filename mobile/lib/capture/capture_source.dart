@@ -45,6 +45,11 @@ abstract class CaptureSource {
   /// Stop streaming microphone audio.
   Future<void> stopAudio();
 
+  /// Which microphone is feeding [audio16k] right now, for diagnostics —
+  /// e.g. `{route: sco, scoUp: true}` on the glasses. Empty when the source
+  /// has nothing to say (the phone mic is the phone mic).
+  Future<Map<String, Object?>> micDiagnostics() async => const {};
+
   /// Start streaming camera frames on [jpegFrames].
   Future<void> startVideo();
 

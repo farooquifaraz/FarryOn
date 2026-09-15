@@ -29,6 +29,8 @@ class _FakeBridge implements GlassesBridgeApi {
   @override
   Future<void> stopAudioTest() async => calls.add('stopAudioTest');
   @override
+  Future<Map<String, Object?>> micRoute() async => const {};
+  @override
   Future<void> disconnect() async => calls.add('disconnect');
   @override
   Stream<GlassesLabEvent> events() => events_.stream;

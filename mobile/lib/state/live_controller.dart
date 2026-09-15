@@ -248,21 +248,38 @@ class LiveController {
       ..onClose = (() => _client.send(const SpeechEndMessage()))
       ..onMiss = (peak, bar, loudMs, halfMs) {
         // Speech-like audio the gate held back. Logged here and sent to the
-        // server, so a "she can't hear me" comes with the levels that say
-        // whether the voice reached the bar (Faraz, 2026-09-15: the chip
-        // stayed on Listening for some of what he said).
+        // server with the levels AND the input it came from, so a "she can't
+        // hear me" says whether the voice fell short of the bar, or the
+        // stream was chopped, or the recorder had quietly moved to the
+        // phone's own mic (Faraz, 2026-09-15: deaf after a long reply on
+        // the glasses; peaks 8-10k but only 120 ms of them).
         _log.info('mic gate MISS: peak ${peak.round()} vs bar ${bar.round()} '
-            '(over bar ${loudMs}ms, over half ${halfMs}ms)');
-        _client.send(GateMissedMessage(
-          peakRms: peak.round(),
-          bar: bar.round(),
-          loudMs: loudMs,
-          halfMs: halfMs,
-          floor: gate.noiseFloor.round(),
-          mic: kind.name,
-        ));
+            '(over bar ${loudMs}ms, over half ${halfMs}ms, '
+            'mean ${gate.recentMeanRms.round()})');
+        unawaited(_reportMiss(gate, kind, peak, bar, loudMs, halfMs));
       };
     return gate;
+  }
+
+  Future<void> _reportMiss(MicGate gate, CaptureDeviceKind kind, double peak,
+      double bar, int loudMs, int halfMs) async {
+    Map<String, Object?> diag = const {};
+    if (kind == CaptureDeviceKind.glasses) {
+      diag = await _audioSource.micDiagnostics();
+      final route = diag['route'];
+      if (route != null) _log.info('mic route: $route (sco up: ${diag['scoUp']})');
+    }
+    _client.send(GateMissedMessage(
+      peakRms: peak.round(),
+      bar: bar.round(),
+      loudMs: loudMs,
+      halfMs: halfMs,
+      floor: gate.noiseFloor.round(),
+      mic: kind.name,
+      meanRms: gate.recentMeanRms.round(),
+      route: diag['route'] as String?,
+      scoUp: diag['scoUp'] as bool?,
+    ));
   }
 
   /// When the current utterance's speech energy first opened the mic gate —

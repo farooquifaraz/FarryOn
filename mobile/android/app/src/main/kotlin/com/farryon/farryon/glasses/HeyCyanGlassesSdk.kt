@@ -102,6 +102,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
          *  (2026-09-12). The whole transfer still completed later. */
         private const val THUMBNAIL_CHUNK_TIMEOUT_SCO_MS = 8_000L
 
+        /** Route heal (see healCallMicSoon): wait this long for SCO to come
+         *  back by itself, restart at most this often. */
+        private const val HEAL_DELAY_MS = 1_500L
+        private const val HEAL_MAX_PER_MIN = 3
+
         private fun thumbnailChunkTimeoutMs(callMicOn: Boolean): Long =
             if (callMicOn) THUMBNAIL_CHUNK_TIMEOUT_SCO_MS else THUMBNAIL_CHUNK_TIMEOUT_MS
 
@@ -311,6 +316,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     // mode we found so it can be put back exactly.
     @Volatile private var callMicThread: Thread? = null
     @Volatile private var callMicRunning = false
+
+    /** The live call-mode recorder, for [micRoute] — which input Android is
+     *  actually feeding it. Null when not recording. */
+    @Volatile private var callMicRecorder: AudioRecord? = null
     private var callModePreviousMode = AudioManager.MODE_NORMAL
 
     /** The call-mode mic was up when a photo was asked for and was put down
@@ -1694,9 +1703,33 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             return
         }
         val chunk = ByteArray(CALL_MIC_CHUNK_BYTES)
+        callMicRecorder = recorder
+        // The route can move under a running recorder — the platform may
+        // hand VOICE_COMMUNICATION back to the built-in mic when the SCO
+        // link drops or another audio use-case (the phone's own speech)
+        // ends. Say so the moment it happens: this is the difference between
+        // "the wearer's voice" and "a phone on the table" reaching the gate.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                recorder.addOnRoutingChangedListener(
+                    { r: android.media.AudioRouting ->
+                        val dev = r.routedDevice
+                        val name = deviceTypeName(dev?.type)
+                        Log.i(TAG, "call-mode mic route -> $name")
+                        emit("audio", mapOf("status" to "call-mode mic route: $name",
+                            "route" to name, "scoRoute" to scoIsUp(am)))
+                        if (name != "sco" && name != "none") healCallMicSoon()
+                    },
+                    main,
+                )
+            } catch (e: Throwable) {
+                Log.i(TAG, "routing listener: $e")
+            }
+        }
         try {
             recorder.startRecording()
-            emit("audio", mapOf("status" to "glasses mic ON (call mode)", "scoRoute" to sco))
+            emit("audio", mapOf("status" to "glasses mic ON (call mode)", "scoRoute" to sco,
+                "route" to deviceTypeName(recorder.routedDevice?.type)))
             while (callMicRunning) {
                 val n = recorder.read(chunk, 0, chunk.size)
                 if (n <= 0) continue
@@ -1708,12 +1741,72 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         } catch (e: Throwable) {
             Log.i(TAG, "call-mode mic stopped: $e")
         } finally {
+            callMicRecorder = null
             try {
                 recorder.stop()
             } catch (_: Throwable) {
             }
             recorder.release()
         }
+    }
+
+    /** Route-heal bookkeeping: at most [HEAL_MAX_PER_MIN] restarts a minute,
+     *  so a link that keeps dropping does not turn into a restart storm. */
+    private var healTimes = ArrayDeque<Long>()
+    private var healPending = false
+
+    /**
+     * The recorder left the SCO link while the wearer expects the glasses
+     * mic. Give the platform a moment (SCO renegotiates on its own after a
+     * playback ends), then, if it is still elsewhere, ask for the link again
+     * and rebuild the recorder on it — the same thing a mic off/on does,
+     * without the wearer having to notice first.
+     */
+    private fun healCallMicSoon() {
+        if (healPending || !callMicRunning || callMicPausedForPhoto) return
+        healPending = true
+        main.postDelayed({
+            healPending = false
+            if (!callMicRunning || callMicPausedForPhoto) return@postDelayed
+            val rec = callMicRecorder
+            val route = deviceTypeName(rec?.routedDevice?.type)
+            if (route == "sco") return@postDelayed
+            val now = SystemClock.elapsedRealtime()
+            while (healTimes.isNotEmpty() && now - healTimes.first() > 60_000) healTimes.removeFirst()
+            if (healTimes.size >= HEAL_MAX_PER_MIN) {
+                Log.i(TAG, "call-mode mic: route $route, heal budget spent")
+                emit("audio", mapOf("status" to "call-mode mic: route $route — not healing again this minute"))
+                return@postDelayed
+            }
+            healTimes.addLast(now)
+            Log.i(TAG, "call-mode mic: route $route — restarting on the glasses link")
+            stopCallModeMic("call-mode mic: route $route — restarting on the glasses link")
+            startCallModeMic()
+        }, HEAL_DELAY_MS)
+    }
+
+    /** Where the call-mode mic's audio is coming from RIGHT NOW, plus the
+     *  SCO/mode state around it. Read by Dart when the gate reports a miss,
+     *  so a miss carries "which microphone" and not only "how loud". */
+    override fun micRoute(): Map<String, Any?> {
+        val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val rec = callMicRecorder
+        return mapOf(
+            "route" to deviceTypeName(rec?.routedDevice?.type),
+            "recording" to (rec != null && callMicRunning),
+            "scoUp" to scoIsUp(am),
+            "mode" to am.mode,
+        )
+    }
+
+    private fun deviceTypeName(type: Int?): String = when (type) {
+        null -> "none"
+        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "sco"
+        android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC -> "builtin"
+        android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET -> "wired"
+        android.media.AudioDeviceInfo.TYPE_BLE_HEADSET -> "ble"
+        android.media.AudioDeviceInfo.TYPE_USB_HEADSET -> "usb"
+        else -> "type$type"
     }
 
     private fun scoIsUp(am: AudioManager): Boolean = try {
