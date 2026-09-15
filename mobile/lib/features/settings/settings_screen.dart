@@ -31,11 +31,12 @@ const String kCloudHost = 'farryon.izylrn.com';
 const int kCloudPort = 443;
 // First-run fallback ONLY — after the first non-cloud save, the "Local (Dev)"
 // chip restores the user's own last-saved host (ConfigStore.lastLocalHost).
-const String _kLocalHost = '192.168.100.76';
-const int _kLocalPort = 8000;
+const String kLocalHost = '192.168.100.76';
+const int kLocalPort = 8000;
 
-bool _isCloud(AppConfig c) =>
+bool isCloudConfig(AppConfig c) =>
     c.host.trim() == kCloudHost && c.secure && c.port == kCloudPort;
+bool _isCloud(AppConfig c) => isCloudConfig(c);
 
 String _providerSubtitle(String p) => switch (p) {
       'openai' => 'OpenAI · premium',
@@ -1162,8 +1163,8 @@ class _ServerPageState extends ConsumerState<_ServerPage> {
         // Restore the last dev box the user actually saved (see ConfigStore.
         // saveLastLocal). The hard-coded default only matters before any
         // local save has ever happened — after that the chip follows the user.
-        _hostCtl.text = ConfigStore.lastLocalHost() ?? _kLocalHost;
-        _portCtl.text = '${ConfigStore.lastLocalPort() ?? _kLocalPort}';
+        _hostCtl.text = ConfigStore.lastLocalHost() ?? kLocalHost;
+        _portCtl.text = '${ConfigStore.lastLocalPort() ?? kLocalPort}';
         _secure = false;
       });
 

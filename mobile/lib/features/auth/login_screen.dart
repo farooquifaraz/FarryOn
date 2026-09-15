@@ -5,6 +5,8 @@ import '../../core/config_store.dart';
 import '../../core/theme.dart';
 import '../../state/auth.dart';
 import '../../state/providers.dart';
+import '../settings/settings_screen.dart'
+    show isCloudConfig, kCloudHost, kCloudPort, kLocalHost, kLocalPort;
 import 'signup_screen.dart';
 import 'widgets/auth_bits.dart';
 import 'widgets/auth_scaffold.dart';
@@ -365,7 +367,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   icon: const Icon(Icons.dns_rounded,
                       size: 14, color: Aurora.authTextFaint),
                   label: Text(
-                    '${cfg.host}:${cfg.port}',
+                    isCloudConfig(cfg)
+                        ? 'Cloud · $kCloudHost'
+                        : 'Local · ${cfg.host}:${cfg.port}',
                     style: const TextStyle(
                         color: Aurora.authTextFaint, fontSize: 11.5),
                   ),
@@ -411,16 +415,79 @@ class _ServerSheetState extends ConsumerState<_ServerSheet> {
     super.dispose();
   }
 
+  // The same two presets as Settings → Server, so switching before sign-in
+  // is one tap, not an address typed from memory (Faraz, 2026-09-15).
+  bool get _cloud =>
+      _hostCtl.text.trim() == kCloudHost &&
+      _secure &&
+      _portCtl.text.trim() == '$kCloudPort';
+
+  void _useCloud() => setState(() {
+        _hostCtl.text = kCloudHost;
+        _portCtl.text = '$kCloudPort';
+        _secure = true;
+      });
+
+  void _useLocal() => setState(() {
+        _hostCtl.text = ConfigStore.lastLocalHost() ?? kLocalHost;
+        _portCtl.text = '${ConfigStore.lastLocalPort() ?? kLocalPort}';
+        _secure = false;
+      });
+
   Future<void> _save() async {
     final cfg = ref.read(configProvider);
-    final next = cfg.copyWith(
-      host: _hostCtl.text.trim(),
-      port: int.tryParse(_portCtl.text.trim()) ?? cfg.port,
-      secure: _secure,
-    );
+    final host = _hostCtl.text.trim();
+    final port = int.tryParse(_portCtl.text.trim()) ?? cfg.port;
+    // A non-cloud save is where the dev box lives — the Local chip (here
+    // and in Settings) brings it back next time.
+    if (!_cloud && host.isNotEmpty) {
+      await ConfigStore.saveLastLocal(host, port);
+    }
+    final next = cfg.copyWith(host: host, port: port, secure: _secure);
     ref.read(configProvider.notifier).state = next;
     await ConfigStore.save(next);
     if (mounted) Navigator.of(context).pop();
+  }
+
+  Widget _presetChip({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          decoration: BoxDecoration(
+            color:
+                selected ? Aurora.teal.withValues(alpha: 0.18) : Aurora.glass,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? Aurora.teal : Aurora.glassBorder,
+              width: selected ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(icon,
+                  size: 18, color: selected ? Aurora.teal : Aurora.textMuted),
+              const SizedBox(width: 8),
+              Text(label,
+                  style: TextStyle(
+                      color: selected ? Aurora.textPrimary : Aurora.textMuted,
+                      fontWeight: FontWeight.w600)),
+              if (selected) ...[
+                const Spacer(),
+                const Icon(Icons.check_circle, color: Aurora.teal, size: 16),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -433,7 +500,7 @@ class _ServerSheetState extends ConsumerState<_ServerSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'SERVER ADDRESS',
+            'SERVER',
             style: TextStyle(
               color: Aurora.mint,
               fontSize: 12,
@@ -444,9 +511,28 @@ class _ServerSheetState extends ConsumerState<_ServerSheet> {
           const SizedBox(height: 10),
           Row(
             children: [
+              _presetChip(
+                label: 'Cloud',
+                icon: Icons.cloud_outlined,
+                selected: _cloud,
+                onTap: _useCloud,
+              ),
+              const SizedBox(width: 10),
+              _presetChip(
+                label: 'Local (Dev)',
+                icon: Icons.lan_outlined,
+                selected: !_cloud,
+                onTap: _useLocal,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
               Expanded(
                 child: TextField(
                   controller: _hostCtl,
+                  onChanged: (_) => setState(() {}),
                   autocorrect: false,
                   decoration: const InputDecoration(
                     labelText: 'Host',
@@ -461,6 +547,7 @@ class _ServerSheetState extends ConsumerState<_ServerSheet> {
                 child: TextField(
                   controller: _portCtl,
                   keyboardType: TextInputType.number,
+                  onChanged: (_) => setState(() {}),
                   decoration: const InputDecoration(
                     labelText: 'Port',
                     border: OutlineInputBorder(),
