@@ -222,11 +222,14 @@ section{padding:100px 5%;position:relative;overflow:hidden}
   opacity:0;transition:.4s}
 .feat-card:hover{background:rgba(8,14,30,.95)}
 .feat-card:hover::before,.feat-card:hover::after{opacity:1}
-.feat-icon{width:50px;height:50px;
-  background:linear-gradient(135deg,rgba(0,212,170,.12),rgba(123,79,224,.08));
-  border:1px solid rgba(0,212,170,.15);border-radius:12px;
+.feat-icon{width:84px;height:84px;
+  background:linear-gradient(135deg,rgba(0,212,170,.14),rgba(123,79,224,.10));
+  border:1px solid rgba(0,212,170,.18);border-radius:18px;
   display:flex;align-items:center;justify-content:center;font-size:1.3rem;
-  margin-bottom:18px;box-shadow:0 0 20px rgba(0,212,170,.07);transition:.4s}
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 0 0 1px rgba(0,0,0,.2)}
+.feat-icon svg{width:54px;height:54px;filter:url(#fi-glow) drop-shadow(0 0 10px rgba(0,212,170,.35));transition:transform .35s ease}
+.feat-card:hover .feat-icon svg{transform:scale(1.08)}
+.feat-icon{margin-bottom:18px;transition:.4s}
 .feat-card:hover .feat-icon{box-shadow:0 0 35px rgba(0,212,170,.18);border-color:rgba(0,212,170,.3)}
 .feat-name{font-family:var(--fd);font-size:1.04rem;font-weight:600;margin-bottom:8px}
 .feat-desc{font-size:.855rem;color:var(--tm);line-height:1.65}
@@ -529,6 +532,11 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
 </nav>
 
 <!-- HERO -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="fi-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#00E5B8"/><stop offset="1" stop-color="#7B4FE0"/></linearGradient>
+  <linearGradient id="fi-g2" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#00D4AA"/><stop offset="1" stop-color="#39A9FF"/></linearGradient>
+  <filter id="fi-glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs></svg>
 <section class="hero" id="home">
   <div class="orb orb-teal orb1"></div>
   <div class="orb orb-purple orb2" style="width:500px;height:500px;bottom:-15%;right:-5%"></div>
@@ -588,15 +596,15 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
       <p class="sec-sub">From morning coffee to last meeting — FarryOn handles the cognitive load of your day, hands-free.</p>
     </div>
     <div class="feat-grid">
-      <div class="feat-card reveal"><div class="feat-icon">🎙</div><div class="feat-name">Real-time Voice</div><p class="feat-desc">Talk naturally and Farry answers instantly — a true back-and-forth conversation, hands-free.</p><span class="feat-tag">Voice</span></div>
-      <div class="feat-card reveal d1"><div class="feat-icon">📸</div><div class="feat-name">See &amp; Ask</div><p class="feat-desc">Point your camera or glasses and ask about anything you see — landmarks, products, objects, and text.</p><span class="feat-tag">Vision</span></div>
-      <div class="feat-card reveal d2"><div class="feat-icon">💬</div><div class="feat-name">WhatsApp &amp; Telegram</div><p class="feat-desc">"Message Ahmed I'm 10 minutes late." Sent — hands-free, without touching your phone.</p><span class="feat-tag">Messaging</span></div>
-      <div class="feat-card reveal"><div class="feat-icon">🌐</div><div class="feat-name">Live Translation</div><p class="feat-desc">Speak English, hear Arabic. Or Hindi, or Urdu. 20+ languages, live and both ways.</p><span class="feat-tag">20+ languages</span></div>
-      <div class="feat-card reveal d1"><div class="feat-icon">📝</div><div class="feat-name">Voice Notes</div><p class="feat-desc">Just say it — Farry captures notes and transcribes what's said, organized for you.</p><span class="feat-tag">Notes</span></div>
-      <div class="feat-card reveal d2"><div class="feat-icon">🧠</div><div class="feat-name">Personal AI Memory</div><p class="feat-desc">FarryOn remembers preferences, habits, and contacts. Gets smarter the more you use it.</p><span class="feat-tag">AI memory</span></div>
-      <div class="feat-card reveal"><div class="feat-icon">⏰</div><div class="feat-name">Reminders &amp; Tasks</div><p class="feat-desc">"Remind me at 6." Done. Farry tracks your to-dos and nudges you at the right time.</p><span class="feat-tag">Productivity</span></div>
-      <div class="feat-card reveal d1"><div class="feat-icon">✉️</div><div class="feat-name">Email by Voice</div><p class="feat-desc">Read, summarize, and send email across your accounts — without typing a word.</p><span class="feat-tag">Email</span></div>
-      <div class="feat-card reveal d2"><div class="feat-icon">🔎</div><div class="feat-name">Instant Web Search</div><p class="feat-desc">Ask anything and Farry searches the live web, then reads you a clear answer.</p><span class="feat-tag">Search</span></div>
+      <div class="feat-card reveal"><div class="feat-icon"><svg viewBox="0 0 48 48" fill="none" stroke="url(#fi-g)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="18" y="8" width="12" height="20" rx="6" fill="rgba(0,212,170,.12)"/><path d="M12 24a12 12 0 0 0 24 0"/><path d="M24 36v6M17 42h14"/><path d="M6 20c0 3 0 5 0 8M42 20c0 3 0 5 0 8M9 15v18M39 15v18" stroke="url(#fi-g2)" opacity=".7"/></svg></div><div class="feat-name">Real-time Voice</div><p class="feat-desc">Talk naturally and Farry answers instantly — a true back-and-forth conversation, hands-free.</p><span class="feat-tag">Voice</span></div>
+      <div class="feat-card reveal d1"><div class="feat-icon"><svg viewBox="0 0 48 48" fill="none" stroke="url(#fi-g)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 16h7l3-5h12l3 5h7v20H8z" fill="rgba(0,212,170,.10)"/><circle cx="24" cy="26" r="6.5"/><circle cx="24" cy="26" r="2" fill="url(#fi-g)" stroke="none"/><path d="M38 6l1.2 2.8L42 10l-2.8 1.2L38 14l-1.2-2.8L34 10l2.8-1.2z" fill="url(#fi-g2)" stroke="none"/></svg></div><div class="feat-name">See &amp; Ask</div><p class="feat-desc">Point your camera or glasses and ask about anything you see — landmarks, products, objects, and text.</p><span class="feat-tag">Vision</span></div>
+      <div class="feat-card reveal d2"><div class="feat-icon"><svg viewBox="0 0 48 48" fill="none" stroke="url(#fi-g)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12h22a4 4 0 0 1 4 4v10a4 4 0 0 1-4 4H18l-7 6v-6H8a4 4 0 0 1-4-4V16a4 4 0 0 1 4-4z" fill="rgba(0,212,170,.10)"/><path d="M36 20h4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4h-2v5l-6-5h-4" stroke="url(#fi-g2)"/><path d="M13 21l3 3 7-7" stroke="url(#fi-g2)"/></svg></div><div class="feat-name">WhatsApp &amp; Telegram</div><p class="feat-desc">"Message Ahmed I'm 10 minutes late." Sent — hands-free, without touching your phone.</p><span class="feat-tag">Messaging</span></div>
+      <div class="feat-card reveal"><div class="feat-icon"><svg viewBox="0 0 48 48" fill="none" stroke="url(#fi-g)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="24" cy="24" r="16" fill="rgba(0,212,170,.08)"/><path d="M8 24h32M24 8c6 6 6 26 0 32M24 8c-6 6-6 26 0 32"/><path d="M14 16h8l-2 6" stroke="url(#fi-g2)"/><path d="M28 30h8M30 26l2 8M34 26l-2 8" stroke="url(#fi-g2)"/></svg></div><div class="feat-name">Live Translation</div><p class="feat-desc">Speak English, hear Arabic. Or Hindi, or Urdu. 20+ languages, live and both ways.</p><span class="feat-tag">20+ languages</span></div>
+      <div class="feat-card reveal d1"><div class="feat-icon"><svg viewBox="0 0 48 48" fill="none" stroke="url(#fi-g)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="10" y="6" width="26" height="34" rx="4" fill="rgba(0,212,170,.10)"/><path d="M16 15h14M16 21h10"/><path d="M16 29c2-4 3 4 5 0s3 4 5 0 3 4 5 0" stroke="url(#fi-g2)"/><path d="M33 30l7-7 3 3-7 7-4 1z" fill="rgba(123,79,224,.25)" stroke="url(#fi-g2)"/></svg></div><div class="feat-name">Voice Notes</div><p class="feat-desc">Just say it — Farry captures notes and transcribes what's said, organized for you.</p><span class="feat-tag">Notes</span></div>
+      <div class="feat-card reveal d2"><div class="feat-icon"><svg viewBox="0 0 48 48" fill="none" stroke="url(#fi-g)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 8a7 7 0 0 0-7 7 7 7 0 0 0-4 12 7 7 0 0 0 6 11h5V8zM28 8a7 7 0 0 1 7 7 7 7 0 0 1 4 12 7 7 0 0 1-6 11h-5V8z" fill="rgba(0,212,170,.10)"/><circle cx="17" cy="18" r="1.8" fill="url(#fi-g2)" stroke="none"/><circle cx="31" cy="18" r="1.8" fill="url(#fi-g2)" stroke="none"/><circle cx="19" cy="30" r="1.8" fill="url(#fi-g2)" stroke="none"/><circle cx="29" cy="30" r="1.8" fill="url(#fi-g2)" stroke="none"/><path d="M17 18l2 12M31 18l-2 12M17 18h14M19 30h10" stroke="url(#fi-g2)" opacity=".8"/></svg></div><div class="feat-name">Personal AI Memory</div><p class="feat-desc">FarryOn remembers preferences, habits, and contacts. Gets smarter the more you use it.</p><span class="feat-tag">AI memory</span></div>
+      <div class="feat-card reveal"><div class="feat-icon"><svg viewBox="0 0 48 48" fill="none" stroke="url(#fi-g)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="24" cy="26" r="14" fill="rgba(0,212,170,.10)"/><path d="M24 17v9l6 4"/><path d="M8 12l6-4M40 12l-6-4" stroke="url(#fi-g2)"/><path d="M34 6l1 2.4 2.4 1-2.4 1-1 2.4-1-2.4-2.4-1 2.4-1z" fill="url(#fi-g2)" stroke="none"/></svg></div><div class="feat-name">Reminders &amp; Tasks</div><p class="feat-desc">"Remind me at 6." Done. Farry tracks your to-dos and nudges you at the right time.</p><span class="feat-tag">Productivity</span></div>
+      <div class="feat-card reveal d1"><div class="feat-icon"><svg viewBox="0 0 48 48" fill="none" stroke="url(#fi-g)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="12" width="36" height="24" rx="4" fill="rgba(0,212,170,.10)"/><path d="M6 16l18 12 18-12"/><path d="M14 42c2-3 3 3 5 0s3 3 5 0 3 3 5 0 3 3 5 0" stroke="url(#fi-g2)"/></svg></div><div class="feat-name">Email by Voice</div><p class="feat-desc">Read, summarize, and send email across your accounts — without typing a word.</p><span class="feat-tag">Email</span></div>
+      <div class="feat-card reveal d2"><div class="feat-icon"><svg viewBox="0 0 48 48" fill="none" stroke="url(#fi-g)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="21" cy="21" r="12" fill="rgba(0,212,170,.10)"/><path d="M30 30l11 11"/><path d="M15 21a6 6 0 0 1 6-6" stroke="url(#fi-g2)"/><path d="M36 8l1.2 2.8L40 12l-2.8 1.2L36 16l-1.2-2.8L32 12l2.8-1.2z" fill="url(#fi-g2)" stroke="none"/></svg></div><div class="feat-name">Instant Web Search</div><p class="feat-desc">Ask anything and Farry searches the live web, then reads you a clear answer.</p><span class="feat-tag">Search</span></div>
     </div>
   </div>
 </section>
