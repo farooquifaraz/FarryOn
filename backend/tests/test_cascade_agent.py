@@ -175,6 +175,66 @@ async def test_interrupt_cancels_the_turn_in_flight() -> None:
     await gw.close()
 
 
+async def test_a_second_utterance_waits_for_the_reply_instead_of_killing_it() -> None:
+    """Device 2026-09-15 00:07: "hello?" repeated every 3 s cancelled the
+    turn in flight each time — no reply ever. Now the running turn finishes
+    and only the NEWEST held utterance runs after it."""
+    gate = asyncio.Event()
+
+    class _SlowLLM(_LLM):
+        async def complete(self, system, messages, tools):
+            self.seen.append(list(messages))
+            if len(self.seen) == 1:
+                await gate.wait()
+            return LLMReply(f"reply {len(self.seen)}", [])
+
+    llm = _SlowLLM([])
+    gw = _gateway(_STT("x"), llm)
+    await gw.send_text("hello")
+    await asyncio.sleep(0.02)
+    await gw.send_text("hello?")   # held
+    await gw.send_text("hello??")  # replaces the held one
+    await asyncio.sleep(0.02)
+    assert gw._turn_task is not None and not gw._turn_task.done()
+    gate.set()
+
+    events = await _drain(gw, 4)
+    texts = [e.text for e in events if isinstance(e, TranscriptEvent)]
+    assert texts == ["reply 1", "reply 2"]
+    assert llm.seen[1][-1]["content"] == "hello??", "only the newest held utterance ran"
+    await asyncio.sleep(0.02)
+    assert gw._turn_task is None
+    await gw.close()
+
+
+async def test_a_slow_or_broken_model_hands_the_turn_to_the_standin(monkeypatch) -> None:
+    """Device 2026-09-15 00:11: the free OpenRouter endpoint sat silent for
+    60 s and the user got nothing. The turn now moves to Gemini Flash-Lite
+    after the budget, and the reply still arrives."""
+    import app.ai.cascade_agent as mod
+
+    monkeypatch.setattr(mod, "_LLM_TURN_TIMEOUT_S", 0.05)
+
+    class _Hanging(_LLM):
+        async def complete(self, system, messages, tools):
+            await asyncio.sleep(10)
+            return LLMReply("never", [])
+
+    class _Standin(_LLM):
+        label = "standin"
+
+    standin = _Standin([LLMReply("from the stand-in", [])])
+    gw = _gateway(_STT("x"), _Hanging([]))
+    gw._fallback_llm = standin  # what _standin_llm() would build on the server key
+
+    await gw.send_text("hello")
+    events = await _drain(gw, 2)
+    assert isinstance(events[0], TranscriptEvent) and events[0].text == "from the stand-in"
+    assert isinstance(events[1], TurnCompleteEvent)
+    assert standin.seen[0][-1]["content"] == "hello"
+    await gw.close()
+
+
 async def test_openai_compatible_wire_shape() -> None:
     """One STT and one chat call through MockTransport: paths, auth, bodies."""
     seen: list[httpx.Request] = []

@@ -59,6 +59,13 @@ _MAX_TOOL_ROUNDS = 6
 _TOOL_RESULT_TIMEOUT_S = 60.0
 _HTTP_TIMEOUT_S = 60.0
 
+#: How long one chat completion may take before the turn moves to the
+#: stand-in model. The free OpenRouter endpoint answered in 1.5-2.5 s all
+#: evening and then sat silent for 60 s+ (device 2026-09-15 00:11) — a free
+#: tier has no promise to keep. Twenty seconds covers a slow tool round on a
+#: 550B model; past that the user has stopped waiting.
+_LLM_TURN_TIMEOUT_S = 20.0
+
 
 def pcm16_to_wav(pcm: bytes, sample_rate: int = _SAMPLE_RATE) -> bytes:
     """Wrap raw 16-bit mono PCM in a WAV header (what STT endpoints accept)."""
@@ -402,6 +409,11 @@ class CascadeAgentGateway(AIGateway):
         s = settings or get_settings()
         self._stt = stt or self._pick_stt(s, stt_api_key)
         self._llm = llm or self._pick_llm(s, llm_api_key)
+        # The stand-in when the chosen model is slow or down: Gemini
+        # Flash-Lite on the server's own key (cents), built on first use.
+        # None when the chosen model already IS that (nothing to fall to).
+        self._settings = s
+        self._fallback_llm: Any | None = None
         super().__init__(
             system_prompt=system_prompt,
             tools=tools,
@@ -413,6 +425,8 @@ class CascadeAgentGateway(AIGateway):
         self._buf = bytearray()
         self._listening = False
         self._turn_task: asyncio.Task[None] | None = None
+        #: An utterance that arrived mid-turn, run when the turn ends.
+        self._held_turn: Any | None = None
         self._pending: dict[str, asyncio.Future[Any]] = {}
         self._history: list[dict[str, Any]] = []
         self._closed = False
@@ -498,19 +512,57 @@ class CascadeAgentGateway(AIGateway):
                 await closer()
             except Exception:  # noqa: BLE001 - shutdown must not raise
                 pass
+        if self._fallback_llm is not None:
+            try:
+                await self._fallback_llm.close()
+            except Exception:  # noqa: BLE001 - shutdown must not raise
+                pass
         await self._queue.put(None)
 
     # -- turns ---------------------------------------------------------------
 
     def _start_turn(self, coro: Any) -> None:
-        self._cancel_turn()
+        """Run a turn, or hold it until the one in flight is done.
+
+        A new utterance used to CANCEL the running turn — right for a Live
+        model that is already speaking, wrong here: the reply is still being
+        thought about, nothing is playing, and the user who says "hello?"
+        again because nothing came back was killing the very answer they
+        were waiting for (device 2026-09-15 00:07: six utterances, six
+        cancelled turns, no reply at all). Only the newest held utterance is
+        kept — "hello? hello? hello?" earns one answer, not three. A real
+        barge-in still arrives through :meth:`interrupt`.
+        """
+        task = self._turn_task
+        if task is not None and not task.done():
+            held = self._held_turn
+            if held is not None:
+                held.close()
+            self._held_turn = coro
+            logger.info("cascade.turn_held")
+            return
+        self._held_turn = None
         self._turn_task = asyncio.create_task(coro, name="cascade_turn")
+        self._turn_task.add_done_callback(self._turn_done)
+
+    def _turn_done(self, task: asyncio.Task[None]) -> None:
+        if self._turn_task is not task:
+            return  # cancelled and replaced; the newer task owns the slot
+        self._turn_task = None
+        held = self._held_turn
+        if held is not None and not self._closed:
+            self._held_turn = None
+            self._start_turn(held)
 
     def _cancel_turn(self) -> None:
         task = self._turn_task
         if task is not None and not task.done():
             task.cancel()
         self._turn_task = None
+        held = self._held_turn
+        if held is not None:
+            held.close()
+        self._held_turn = None
         for fut in self._pending.values():
             if not fut.done():
                 fut.cancel()
@@ -542,6 +594,42 @@ class CascadeAgentGateway(AIGateway):
             return list(self._history)
         return list(self._history[starts[-self._history_turns] :])
 
+    async def _complete_with_fallback(self) -> LLMReply:
+        """One chat round on the chosen model; on a timeout or error, the
+        same round on the stand-in so the turn still ends in words."""
+        try:
+            return await asyncio.wait_for(
+                self._llm.complete(self.system_prompt, self._window(), self.tools),
+                _LLM_TURN_TIMEOUT_S,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - any failure of the chosen model
+            fallback = self._standin_llm()
+            if fallback is None:
+                raise
+            logger.warning(
+                "cascade.llm_fallback",
+                from_model=self._llm.label,
+                to_model=fallback.label,
+                error=repr(exc)[:200],
+            )
+            return await asyncio.wait_for(
+                fallback.complete(self.system_prompt, self._window(), self.tools),
+                _LLM_TURN_TIMEOUT_S,
+            )
+
+    def _standin_llm(self) -> Any | None:
+        if isinstance(self._llm, GeminiLLM):
+            return None
+        if self._fallback_llm is None:
+            s = self._settings
+            key = getattr(s, "gemini_api_key", "") or ""
+            if not key:
+                return None
+            self._fallback_llm = GeminiLLM(model=s.cascade_gemini_llm_model, api_key=key)
+        return self._fallback_llm
+
     async def _think(self, user_text: str, *, audio_ms: int, stt_ms: int) -> None:
         self._history.append({"role": "user", "content": user_text})
         t0 = time.monotonic()
@@ -551,7 +639,7 @@ class CascadeAgentGateway(AIGateway):
         try:
             for _ in range(_MAX_TOOL_ROUNDS):
                 rounds += 1
-                reply = await self._llm.complete(self.system_prompt, self._window(), self.tools)
+                reply = await self._complete_with_fallback()
                 tokens_in += reply.usage.get("prompt_tokens", 0)
                 tokens_out += reply.usage.get("completion_tokens", 0)
                 if not reply.tool_calls:
