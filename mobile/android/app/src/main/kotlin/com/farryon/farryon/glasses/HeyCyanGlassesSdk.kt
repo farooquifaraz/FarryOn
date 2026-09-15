@@ -86,6 +86,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
          *  the glasses' classic-BT (A2DP) reattach contends with the LE radio. */
         private const val BT_ON_RECONNECT_DELAY_MS = 2_500L
 
+        /** After a profile (A2DP/HFP) disconnect, how long to wait before
+         *  asking whether the whole classic link is gone (the other profile
+         *  usually follows within a second). */
+        private const val RELEASE_CHECK_DELAY_MS = 2_000L
+
         /** AI-photo budget from the BLE command to the capture notify (0x02).
          *  Capture itself is ~2.2-2.4 s (firmware-fixed); busy glasses ignore
          *  the command silently, which this watchdog turns into a report. */
@@ -262,6 +267,14 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     @Volatile
     private var userDisconnected = false
 
+    /** The glasses' classic Bluetooth (A2DP/HFP) left THIS phone — off, out
+     *  of range, or connected to another phone — and we let go of them: BLE
+     *  unbound, call-mode mic down, vendor auto-reconnect off. Cleared the
+     *  moment they come back on this phone's Bluetooth (followPhoneAudio).
+     *  Unlike [userDisconnected] it is not the user's choice, so a return
+     *  reconnects without a tap. */
+    @Volatile private var releasedForOtherPhone = false
+
     /** Lab toggle state, applied to the SDK on every fresh link (guide §3). */
     private var autoReconnectEnabled = true
 
@@ -379,6 +392,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         if (!autoReconnectEnabled || userDisconnected || !bluetoothEnabled()) return
         if (lastConnectionState == "connected" && pendingMac == mac) return
         if (isConnecting && pendingMac == mac) return
+        releasedForOtherPhone = false // they are back on this phone
         Log.i(TAG, "follow phone audio ($why) → $mac")
         emit("deviceEvent", mapOf("hex" to "glasses on phone Bluetooth → connecting $mac"))
         pendingMac = mac
@@ -398,16 +412,67 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 action != BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED
             ) return
             val state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1)
-            if (state != BluetoothProfile.STATE_CONNECTED) return
             @Suppress("DEPRECATION")
             val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
                 ?: return
             val name = try { device.name } catch (e: SecurityException) { null }
             if (!isGlassesName(name)) return
+            if (state == BluetoothProfile.STATE_DISCONNECTED) {
+                // One profile going down is not the glasses leaving (a
+                // "Call audio" toggle drops HFP and keeps A2DP). Give the
+                // stack a moment, then ask the ACL: if the classic link is
+                // gone, so are the glasses — release them (see
+                // releaseForOtherPhone).
+                val mac = device.address
+                main.postDelayed({
+                    if (!isClassicConnected(device)) {
+                        releaseForOtherPhone(mac, "$name left this phone's Bluetooth")
+                    }
+                }, RELEASE_CHECK_DELAY_MS)
+                return
+            }
+            if (state != BluetoothProfile.STATE_CONNECTED) return
             // The radio is busy finishing the classic link; give it a moment
             // before the BLE connect (same reason as BT_ON_RECONNECT_DELAY_MS).
             val mac = device.address
             main.postDelayed({ followPhoneAudio(mac, "$name on ${if (action == BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED) "A2DP" else "HFP"}") }, BT_ON_RECONNECT_DELAY_MS)
+        }
+    }
+
+    /**
+     * The glasses' classic Bluetooth left this phone (powered off, out of
+     * range, or — the case that bit on 2026-09-15 — connected to a second
+     * phone). Two phones cannot share them: HFP/SCO binds to one, and the
+     * phone that keeps its BLE bind and its call-mode mic gets a "glasses"
+     * chip over a recorder that has silently fallen back to the built-in mic
+     * (route builtin, sco_up false), while the other phone cannot take the
+     * camera. So this phone lets go of everything glasses: the call-mode mic,
+     * the BLE bind and the vendor SDK's own reconnect. Not the user's
+     * Disconnect — when the glasses come back on this phone's Bluetooth the
+     * profile receiver follows them again without a tap.
+     */
+    private fun releaseForOtherPhone(mac: String, why: String) {
+        val ours = pendingMac == null || pendingMac.equals(mac, ignoreCase = true)
+        if (!ours || releasedForOtherPhone) return
+        if (lastConnectionState != "connected" && !isConnecting && !callMicRunning &&
+            !why.contains("mic start")
+        ) return
+        releasedForOtherPhone = true
+        Log.i(TAG, "release: $why — letting go of the glasses")
+        emit("deviceEvent", mapOf("hex" to "glasses left this phone's Bluetooth — released ($why)"))
+        cancelConnectWatchdog()
+        if (callMicRunning) {
+            stopCallModeMic("glasses mic OFF — the glasses left this phone's Bluetooth")
+        }
+        pendingMac = null
+        ble.post {
+            BleOperateManager.getInstance().setNeedConnect(false)
+            try {
+                BleOperateManager.getInstance().setReConnectMac("")
+            } catch (e: Throwable) {
+                Log.i(TAG, "clear setReConnectMac(release): $e")
+            }
+            BleOperateManager.getInstance().unBindDevice()
         }
     }
 
@@ -568,7 +633,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     // but the last device survives in SharedPreferences — use
                     // it so a BT toggle reconnects even after an app restart.
                     val mac = pendingMac ?: savedMac()
-                    if (autoReconnectEnabled && !userDisconnected && mac != null) {
+                    if (autoReconnectEnabled && !userDisconnected &&
+                        !releasedForOtherPhone && mac != null
+                    ) {
                         // Seed the in-memory target (watchdog/events need it);
                         // guarded by !userDisconnected above.
                         pendingMac = mac
@@ -1671,6 +1738,21 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             SystemClock.sleep(100)
         }
         if (!callMicRunning) return
+        if (!sco) {
+            // No SCO. If the glasses are not on this phone's classic
+            // Bluetooth at all (they are on another phone, or off), a
+            // recorder on the built-in mic under a "Glasses" chip is a lie —
+            // the case the release path fixes on a transition, met here when
+            // the transition happened before this build was installed
+            // (device 2026-09-15 23:21, S23). Let go instead.
+            val mac = pendingMac
+            val present = presentGlassesMac()
+            if (mac != null && (present == null || !present.equals(mac, ignoreCase = true))) {
+                callMicRunning = false
+                main.post { releaseForOtherPhone(mac, "glasses not on this phone's Bluetooth at mic start") }
+                return
+            }
+        }
         emit(
             "audio",
             mapOf(

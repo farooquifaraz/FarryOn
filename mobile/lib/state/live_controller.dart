@@ -1103,6 +1103,18 @@ class LiveController {
           unawaited(setVideoDevice(connected
               ? CaptureDeviceKind.glasses
               : CaptureDeviceKind.phone));
+          // The mic too: a chip that still says "Glasses" over a recorder
+          // that has silently fallen back to the built-in mic is worse than
+          // an honest "Phone" (device 2026-09-15: route builtin, sco_up
+          // false, every word missed). Back to the glasses mic when they
+          // return, if that is what the user chose.
+          if (!connected && _registry.audioKind == CaptureDeviceKind.glasses) {
+            _log.info('glasses gone — mic falls back to the phone');
+            unawaited(setAudioDevice(CaptureDeviceKind.phone));
+          } else if (connected && _config.micDevice == 'glasses') {
+            _log.info('glasses back — mic returns to the glasses');
+            unawaited(_ensureGlassesMic());
+          }
         }
       case 'battery':
         final pct = (event.data['pct'] as num?)?.toInt();
@@ -1143,6 +1155,23 @@ class LiveController {
             _scheduleAutoGlassesSync(const Duration(seconds: 8));
           } else {
             _refreshPendingMedia(const Duration(seconds: 8));
+          }
+        }
+        // The glasses' Bluetooth left this phone (off, out of range, on
+        // another phone): the native side has already put the call-mode mic
+        // down and let the BLE bind go. Move the mic and camera to the phone
+        // NOW — the BLE "disconnected" callback can take half a minute, and
+        // if the BLE link was still connecting there is no transition for
+        // it to make at all (device 2026-09-15 23:22, Vivo: chip said
+        // Listening over no recorder for four minutes).
+        if (hex != null && hex.startsWith('glasses left this phone')) {
+          _log.warn('glasses left this phone Bluetooth - mic and camera '
+              'fall back to the phone');
+          if (_registry.audioKind == CaptureDeviceKind.glasses) {
+            unawaited(setAudioDevice(CaptureDeviceKind.phone));
+          }
+          if (_registry.videoKind == CaptureDeviceKind.glasses) {
+            unawaited(setVideoDevice(CaptureDeviceKind.phone));
           }
         }
       case 'syncedPhoto':
@@ -3174,6 +3203,22 @@ class LiveController {
   /// Select the microphone device (phone/earbuds ⇄ glasses). Restarts only the
   /// audio stream; the camera is untouched. The socket stays up; the next
   /// `hello` advertises the new combo.
+  /// The glasses are (back) on this phone and the user wants their mic:
+  /// select it — or, if it is already selected, RESTART it. "Already the
+  /// glasses" is no proof a recorder is running: a release (glasses left the
+  /// phone's Bluetooth) stops the native mic underneath a kind that never
+  /// changed (device 2026-09-15 23:22).
+  Future<void> _ensureGlassesMic() async {
+    if (_registry.audioKind != CaptureDeviceKind.glasses) {
+      await setAudioDevice(CaptureDeviceKind.glasses);
+      return;
+    }
+    if (!_state.micOpen) return;
+    _log.info('glasses mic: restarting on the returned link');
+    await _stopAudio();
+    await _startAudio();
+  }
+
   Future<void> setAudioDevice(CaptureDeviceKind kind) async {
     if (kind == _registry.audioKind) return;
     _log.info('audio device → $kind');
