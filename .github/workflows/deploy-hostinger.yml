@@ -95,8 +95,25 @@ jobs:
             echo "FARRYON_ENV secret not set — keeping the .env already on the VPS."
             exit 0
           fi
+          # The secret REPLACES the .env on the VPS, so an incomplete one
+          # takes production down on the next restart. 2026-09-15: it was
+          # updated with two new lines instead of the whole file, deploy #48
+          # wrote those two lines over a 43-variable .env, and the live
+          # backend survived only because its container never restarted.
+          # Refuse anything that is not a whole production .env, and keep a
+          # copy of what is being replaced.
+          vars=$(printf '%s\n' "$FARRYON_ENV" | grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' || true)
+          missing=""
+          for k in DOMAIN JWT_SECRET POSTGRES_PASSWORD GEMINI_API_KEY; do
+            printf '%s\n' "$FARRYON_ENV" | grep -qE "^$k=." || missing="$missing $k"
+          done
+          if [ "$vars" -lt 20 ] || [ -n "$missing" ]; then
+            echo "::error::FARRYON_ENV is not a whole production .env ($vars variables; missing:${missing:- none}) — refusing to overwrite the .env on the VPS. Paste the FULL file into the secret, or delete the secret to keep the VPS copy."
+            exit 1
+          fi
+          echo "FARRYON_ENV has $vars variables — writing it to the VPS (previous copy kept as .env.bak)."
           printf '%s\n' "$FARRYON_ENV" | ssh -i ~/.ssh/id_deploy \
-            "$SSH_USER@$SSH_HOST" "cat > '$VPS_PATH/.env' && chmod 600 '$VPS_PATH/.env'"
+            "$SSH_USER@$SSH_HOST" "cd '$VPS_PATH' && { [ -f .env ] && cp .env .env.bak || true; } && cat > .env && chmod 600 .env"
 
       - name: Run deploy script on the VPS
         if: steps.check.outputs.configured == 'true'
