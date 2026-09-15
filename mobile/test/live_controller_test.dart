@@ -464,6 +464,36 @@ void main() {
     expect(users, ['हिंदी में बात करो', 'ہلو اب یہ بتاؤ', 'Hello']);
   });
 
+  test('an answer that repeats the words of the question is not an echo', () async {
+    // Device 2026-09-15 19:46: "अपनी बीवी को प्यार करने की सोच रहा हूं" was
+    // dropped as an echo of "किसको प्यार करने की सोच रहे हैं?" — the vowel
+    // signs had been stripped, so रहे/रहा and की/को compared equal.
+    await controller.connect();
+    await tick();
+    final seq = [
+      ('user', 'को प्यार करने की सोच रहा हूं।'),
+      ('assistant', 'किसको प्यार करने की सोच रहे हैं?'),
+      ('user', 'अपनी बीवी को प्यार करने की सोच रहा हूं।'),
+      ('assistant', 'यह तो बहुत अच्छी बात है!'),
+    ];
+    for (final (role, text) in seq) {
+      if (role == 'user') {
+        fake.pushJson({'type': 'transcript', 'role': 'user', 'text': text, 'final': false});
+        await tick();
+      }
+      fake.pushJson({'type': 'transcript', 'role': role, 'text': text, 'final': true});
+      await tick();
+    }
+    final users = controller.state.transcripts
+        .where((t) => t.role == 'user')
+        .map((t) => t.text)
+        .toList();
+    expect(users, [
+      'को प्यार करने की सोच रहा हूं।',
+      'अपनी बीवी को प्यार करने की सोच रहा हूं।',
+    ]);
+  });
+
   test('speech the gate held back is reported to the server with its levels',
       () async {
     await controller.connect();

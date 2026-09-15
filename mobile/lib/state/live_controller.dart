@@ -1958,7 +1958,12 @@ class LiveController {
       if (last.startsWith(norm)) return _UserVerdict.reject; // shorter repeat
       if (_jaccard(text, _lastUserFinal) >= 0.9) return _UserVerdict.reject;
     }
-    if (_lastAssistantFinal.isNotEmpty &&
+    // An echo is the assistant's own voice coming back through the mic.
+    // When the phone speaks the reply itself the mic is shut for the
+    // duration, so nothing can echo — and a user who naturally repeats the
+    // question's words in the answer must not be thrown away for it.
+    if (!_deviceSpeech &&
+        _lastAssistantFinal.isNotEmpty &&
         _jaccard(text, _lastAssistantFinal) >= 0.6) {
       return _UserVerdict.reject; // echo of the assistant's own voice
     }
@@ -2007,8 +2012,11 @@ class LiveController {
   // letter counted as punctuation, the normalised text came out EMPTY, and
   // the duplicate filter rejected every Hindi/Urdu user line — the words
   // reached the server, the bubble never reached the screen (device
-  // 2026-09-15 18:48). Letters and digits of any script stay.
-  static final RegExp _notWord = RegExp(r'[^\p{L}\p{N}\s]', unicode: true);
+  // 2026-09-15 18:48). Letters, COMBINING MARKS (Devanagari vowel signs —
+  // without them रहे/रहा and की/को collapse to the same word and an answer
+  // "echoes" the question, 19:46) and digits of any script stay.
+  static final RegExp _notWord =
+      RegExp(r'[^\p{L}\p{M}\p{N}\s]', unicode: true);
 
   String _normForCompare(String s) => s
       .toLowerCase()
