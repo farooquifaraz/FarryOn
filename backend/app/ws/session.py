@@ -1100,6 +1100,8 @@ class Session:
                         if self._orchestrator is not None:
                             self._orchestrator.user_turns_heard += 1
                     self._t_user_last = now
+                    if self._orchestrator is not None:
+                        self._orchestrator.note_user_turn()
                 await self._send_state("thinking")
                 # A typed turn has no audio VAD, so give the model the current
                 # camera view for "what is this?"-style questions even when
@@ -1798,6 +1800,8 @@ class Session:
                 if self._t_user_first == 0.0:
                     self._t_user_first = now
                     self._cap_nudges = 0
+                    if self._orchestrator is not None:
+                        self._orchestrator.note_user_turn()
                     self._quiet_nudges = 0
                     logger.info(
                         "turn.hearing",
@@ -1805,6 +1809,13 @@ class Session:
                         turn=self._turn_index,
                     )
                 self._t_user_last = now
+            if (
+                event.role != "user"
+                and event.final
+                and (event.text or "").strip()
+                and self._orchestrator is not None
+            ):
+                self._orchestrator.note_assistant_spoke()
             await self._send_json(
                 {
                     "type": "transcript",

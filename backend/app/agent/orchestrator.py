@@ -104,6 +104,16 @@ class Orchestrator:
         self.resume_guard_until: float = 0.0
         #: Bumped by the owner whenever a user turn was actually heard.
         self.user_turns_heard: int = 0
+        #: Tool calls made since the model last SPOKE or the user last asked:
+        #: ``"name:sorted-args-json" -> count``. A model that gets a tool
+        #: result, says nothing, and fires the same call again is looping
+        #: (live 2026-09-13 00:49: read_emails 5× in 45 s, three of them
+        #: followed by silence). The second identical call in that state is
+        #: refused with a reason; a NEW user turn or a spoken reply clears
+        #: the slate, so "Farry, again?" asked afresh is never blocked, and
+        #: different arguments are never blocked at all.
+        self._calls_since_speech: dict[str, int] = {}
+        self._tool_calls_since_speech: dict[str, int] = {}
         #: Mutable — updated in place when the client sends a ``location_update``.
         self.location = location
         #: Mutable — set to the latest INPUT_VIDEO JPEG by the session so the
@@ -315,6 +325,48 @@ class Orchestrator:
         """Phone for a device contact_id the user picked out of a resolve list."""
         return self._resolved_id_phones.get(contact_id or "")
 
+    # -- repeat guard ---------------------------------------------------------
+
+    #: The same tool, any arguments, more often than this without a spoken
+    #: reply in between is a loop whatever the arguments say.
+    _MAX_SAME_TOOL_PER_TURN = 5
+
+    def note_user_turn(self) -> None:
+        """The user asked something (new or again): a clean slate for the
+        repeat guard. Called by the session owner on every user turn."""
+        self._calls_since_speech.clear()
+        self._tool_calls_since_speech.clear()
+
+    def note_assistant_spoke(self) -> None:
+        """The model answered in words: whatever it calls next is a new
+        step, not a retry of the last one."""
+        self._calls_since_speech.clear()
+        self._tool_calls_since_speech.clear()
+
+    def _repeat_refusal(self, event: ToolCallEvent) -> str | None:
+        try:
+            key = f"{event.name}:{json.dumps(event.args or {}, sort_keys=True, default=str)}"
+        except Exception:  # noqa: BLE001 - unserialisable args are just distinct
+            key = f"{event.name}:{id(event)}"
+        seen = self._calls_since_speech.get(key, 0)
+        per_tool = self._tool_calls_since_speech.get(event.name, 0)
+        self._calls_since_speech[key] = seen + 1
+        self._tool_calls_since_speech[event.name] = per_tool + 1
+        if seen >= 1:
+            return (
+                f"not run again: you already called {event.name} with exactly "
+                "these arguments and its result is in your context. Answer the "
+                "user from that result now. Call it again only if the user "
+                "asks again, or with different arguments."
+            )
+        if per_tool >= self._MAX_SAME_TOOL_PER_TURN:
+            return (
+                f"not run: {event.name} has been called "
+                f"{self._MAX_SAME_TOOL_PER_TURN} times without a reply to the "
+                "user. Tell the user what you have so far."
+            )
+        return None
+
     async def handle_tool_call(self, event: ToolCallEvent) -> ToolResult:
         """Execute one model-requested tool call end-to-end.
 
@@ -329,6 +381,22 @@ class Orchestrator:
             call_id=event.id,
             session_id=self._session_id,
         )
+        refusal = self._repeat_refusal(event)
+        if refusal is not None:
+            logger.warning(
+                "tool_call.repeat_refused",
+                tool=event.name,
+                call_id=event.id,
+                session_id=self._session_id,
+            )
+            result = ToolResult(
+                name=event.name, ok=False, result=None, error=refusal, duration_ms=0
+            )
+            with contextlib.suppress(Exception):
+                await self._gateway.send_tool_result(
+                    event.id, event.name, result.error, ok=False
+                )
+            return result
         if (
             event.name == "end_session"
             and self.user_turns_heard == 0

@@ -153,3 +153,48 @@ async def test_end_session_right_after_a_resume_is_refused():
     assert not (
         orch.user_turns_heard == 0 and time.monotonic() < orch.resume_guard_until
     )
+
+
+async def test_the_same_call_again_without_a_reply_is_refused_but_a_new_ask_is_not():
+    """Live 2026-09-13 00:49: read_emails 5x in 45 s, silence after three.
+
+    The second identical call with no spoken reply in between is refused with
+    a reason; different arguments pass; a spoken reply or a new user turn
+    clears the slate, so "Farry, again?" is never blocked.
+    """
+    from app.ai.events import ToolCallEvent
+
+    told: list[tuple] = []
+
+    class _Gateway:
+        async def send_tool_result(self, call_id, name, result, ok=True):
+            told.append((call_id, name, ok, result))
+
+    orch = _orchestrator(lambda msg: asyncio.sleep(0))
+    orch._gateway = _Gateway()  # type: ignore[assignment]
+    orch.note_user_turn()
+
+    a = {"account": "primary", "limit": 5}
+    assert orch._repeat_refusal(ToolCallEvent(id="1", name="read_emails", args=a)) is None
+    r = await orch.handle_tool_call(ToolCallEvent(id="2", name="read_emails", args=dict(a)))
+    assert r.ok is False and "already called" in (r.error or "")
+    assert told[-1][:3] == ("2", "read_emails", False)
+    # Different arguments are a different question.
+    assert orch._repeat_refusal(
+        ToolCallEvent(id="3", name="read_emails", args={"account": "secondary"})
+    ) is None
+    # The model spoke: a fresh slate.
+    orch.note_assistant_spoke()
+    assert orch._repeat_refusal(ToolCallEvent(id="4", name="read_emails", args=a)) is None
+    # The user asked again (any wording): a fresh slate too.
+    orch.note_user_turn()
+    assert orch._repeat_refusal(ToolCallEvent(id="5", name="read_emails", args=a)) is None
+    # And a runaway with ever-changing arguments still stops at the cap.
+    orch.note_user_turn()
+    for i in range(5):
+        assert orch._repeat_refusal(
+            ToolCallEvent(id=f"w{i}", name="web_search", args={"q": f"thing {i}"})
+        ) is None
+    assert "5 times" in (
+        orch._repeat_refusal(ToolCallEvent(id="w9", name="web_search", args={"q": "x"})) or ""
+    )
