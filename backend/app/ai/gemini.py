@@ -14,6 +14,7 @@ fields (``server_content`` for audio/text, ``tool_call`` for function calls).
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -34,6 +35,28 @@ from app.logging_conf import get_logger
 from app.observability import metrics
 
 logger = get_logger(__name__)
+
+# Affective dialog's bookkeeping. With affective dialog on, the native-audio
+# model sometimes lets its own emotion tags into the transcription stream —
+# "emotion_user calm<ctrl95>emotion_model warm<ctrl95> Hello!" (device
+# 2026-09-12) — and the app showed them in the bubble and read them aloud.
+# They are control text, not words: drop the tags and the labels they carry.
+_AFFECT_TAG_RE = re.compile(
+    r"(?:emotion_(?:user|model|assistant)\s*[A-Za-z_\-]*\s*)?<ctrl\d+>\s*",
+    re.IGNORECASE,
+)
+_AFFECT_LABEL_RE = re.compile(r"\bemotion_(?:user|model|assistant)\s*[A-Za-z_\-]*\s*", re.IGNORECASE)
+
+
+def strip_affect_tags(text: str) -> str:
+    """Remove affective-dialog control tags from a transcript; text otherwise
+    untouched (a cumulative buffer is filtered as a whole, so a tag split
+    across two deltas is caught once it is complete)."""
+    if "<ctrl" not in text and "emotion_" not in text:
+        return text
+    out = _AFFECT_TAG_RE.sub("", text)
+    out = _AFFECT_LABEL_RE.sub("", out)
+    return out.lstrip()
 
 # 16 kHz mono PCM input per PROTOCOL.md; Gemini accepts 16 kHz input audio.
 _INPUT_MIME = "audio/pcm;rate=16000"
@@ -486,7 +509,7 @@ class GeminiGateway(AIGateway):
                 self._user_buf += in_text
                 await self._queue.put(
                     TranscriptEvent(
-                        role="user", text=self._user_buf, final=False
+                        role="user", text=strip_affect_tags(self._user_buf), final=False
                     )
                 )
 
@@ -497,7 +520,7 @@ class GeminiGateway(AIGateway):
                 await self._queue.put(
                     TranscriptEvent(
                         role="assistant",
-                        text=self._assistant_buf,
+                        text=strip_affect_tags(self._assistant_buf),
                         final=False,
                     )
                 )
@@ -563,13 +586,13 @@ class GeminiGateway(AIGateway):
             await self._queue.put(AudioEndEvent())
         if self._user_buf:
             await self._queue.put(
-                TranscriptEvent(role="user", text=self._user_buf, final=True)
+                TranscriptEvent(role="user", text=strip_affect_tags(self._user_buf), final=True)
             )
             self._user_buf = ""
         if self._assistant_buf:
             await self._queue.put(
                 TranscriptEvent(
-                    role="assistant", text=self._assistant_buf, final=True
+                    role="assistant", text=strip_affect_tags(self._assistant_buf), final=True
                 )
             )
             self._assistant_buf = ""
@@ -763,7 +786,7 @@ class GeminiGateway(AIGateway):
         if self._assistant_buf:
             await self._queue.put(
                 TranscriptEvent(
-                    role="assistant", text=self._assistant_buf, final=True
+                    role="assistant", text=strip_affect_tags(self._assistant_buf), final=True
                 )
             )
             self._assistant_buf = ""
