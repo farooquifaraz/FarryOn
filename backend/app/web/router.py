@@ -27,6 +27,7 @@ router = APIRouter(tags=["site"])
 
 _HERE = Path(__file__).resolve().parent
 _INDEX = _HERE / "index.html"
+_ABOUT = _HERE / "about.html"
 
 # Public app version shown on the site and in the download filename.
 APP_VERSION = "1.0.0"
@@ -96,6 +97,23 @@ async def landing() -> HTMLResponse:
     except OSError as exc:  # pragma: no cover - only if the asset is missing
         logger.warning("site.index_missing", error=str(exc))
         raise HTTPException(status_code=404, detail="site not found") from exc
+
+
+@router.get("/about", response_class=HTMLResponse, include_in_schema=False)
+async def about_page() -> HTMLResponse:
+    """Who FarryOn is.
+
+    The page a visitor opens before trusting an unfamiliar brand with AED 350 —
+    and the one an Indian distributor reads before replying to anything. It
+    takes the same contact pass as the landing page, so the WhatsApp button at
+    the bottom appears the moment the number is configured.
+    """
+    try:
+        page = contact.render(_ABOUT.read_text(encoding="utf-8"), get_settings())
+    except OSError as exc:  # pragma: no cover - the template ships with the package
+        logger.warning("site.about_missing", error=str(exc))
+        raise HTTPException(status_code=404, detail="page not found") from exc
+    return HTMLResponse(page, headers={"Content-Security-Policy": _SITE_CSP})
 
 
 @router.get("/farry-icon.png", include_in_schema=False)

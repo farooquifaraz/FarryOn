@@ -21,8 +21,8 @@ home. All of them are gone.
 | Footer **WhatsApp** (`#`) | Now a real `wa.me` link, from `WHATSAPP_NUMBER`. |
 | "Questions? WhatsApp us" (plain text) | Now an actual button. |
 | **Changelog, Blog, Careers, Press, SDK Docs** | Removed. |
-| **About** (`#`) | Removed — see "Still worth doing" below. |
-| **Company** footer column | Removed; all four of its links were dead. Footer is now 3 columns. |
+| **About** (`#`) | Now a real page at `/about`, linked from the nav and the footer. |
+| **Company** footer column | The old one (About/Blog/Careers/Press, all dead) is gone. The Support column is now "Company": About, FAQ, WhatsApp, Privacy, Terms. Footer is 3 columns. |
 | **Sign in** → `/login` (nav + footer) | Removed. See below. |
 
 ### Why "Sign in" had to go
@@ -113,18 +113,26 @@ triangle on a good half of the devices that saw them.
 
 ---
 
-## Still worth doing
+## The About page
 
-**An About page.** It was the one removed link worth keeping, and it could not
-be written here because it needs facts only you have — who founded FarryOn,
-when, why, where it operates from. For an unfamiliar brand selling AED 350
-hardware it is one of the highest-value pages on the site, and an Indian
-distributor will look for it before replying to anything. 300 words is plenty.
-Send the content and the page and its footer link can go back in.
+`/about` is the page a visitor opens before trusting an unfamiliar brand with
+AED 350, and the one a distributor reads before replying. It is written from
+what the product and the rest of the site already say — the two models, what
+the assistant does today, the "works with any Bluetooth headset" fact from the
+FAQ, the privacy commitments from the privacy page, Dubai, the 30-day return,
+the 14-day trial — and deliberately nothing else.
 
-**An India number**, if the India plan goes ahead. A `+971` number tells an
-Indian reseller they are dealing with a foreign company that will be expensive
-to call. A `+91` number removes that objection on its own.
+It makes **no claim the site cannot back**: no founding year, no founder
+names, no team size, no customer numbers, no "patented", no investors. A test
+(`test_the_about_page_makes_no_claim_the_site_cannot_back`) fails if one of
+those words is added without the fact behind it. When there is a real story to
+tell — who started it and why — it belongs in a short section after "The idea",
+and that test's word list should be updated alongside.
+
+The page lives in `backend/app/web/about.html`, is served by `GET /about` in
+`router.py`, takes the same contact pass as the landing page (so its closing
+WhatsApp button appears with `WHATSAPP_NUMBER`), and is listed in Caddy's
+forward list — the link tests below check all three.
 
 ---
 

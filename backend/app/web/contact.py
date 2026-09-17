@@ -59,6 +59,7 @@ MESSAGES: dict[str, str] = {
     "l802": "Hi FarryOn! I'd like to know more about the L802 Premium glasses.",
     "cta": "Hi FarryOn! I have a question before I order.",
     "footer": "Hi FarryOn! I need some help.",
+    "about": "Hi FarryOn! I read your About page and have a question.",
 }
 
 
@@ -234,8 +235,10 @@ def _card_button(settings: Settings, slug: str, model: str) -> str:
     return f'<div class="wa-card">{button}</div>' if button else ""
 
 
-def _cta_block(settings: Settings) -> str:
-    button = _button(settings, "cta", "Questions? Chat on WhatsApp")
+def _cta_block(
+    settings: Settings, where: str = "cta", label: str = "Questions? Chat on WhatsApp"
+) -> str:
+    button = _button(settings, where, label)
     if not button:
         return ""
     hours = getattr(settings, "whatsapp_hours", None)
@@ -266,6 +269,10 @@ def render(html: str, settings: Settings) -> str:
     fab = _fab(settings)
     html = html.replace("<!--WHATSAPP_FAB-->", fab)
     html = html.replace("<!--WHATSAPP_CTA-->", _cta_block(settings))
+    # The About page's closing block: same button and hours, its own message.
+    html = html.replace(
+        "<!--WHATSAPP_ABOUT-->", _cta_block(settings, "about", "Ask us anything on WhatsApp")
+    )
     html = html.replace("<!--WHATSAPP_FOOTER-->", _footer_link(settings))
     for slug, model in MODELS.items():
         html = html.replace(

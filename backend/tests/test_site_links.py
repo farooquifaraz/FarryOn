@@ -44,9 +44,14 @@ _LIVE = {
 
 
 def _render(**overrides) -> str:
+    """Both public pages, concatenated: a dead link on either is a dead link."""
     settings = get_settings().model_copy(update=overrides)
-    html = web._INDEX.read_text(encoding="utf-8")
-    return contact.render(products.render(pricing.render(html, settings), settings), settings)
+    landing = web._INDEX.read_text(encoding="utf-8")
+    landing = contact.render(
+        products.render(pricing.render(landing, settings), settings), settings
+    )
+    about = contact.render(web._ABOUT.read_text(encoding="utf-8"), settings)
+    return landing + about
 
 
 def _hrefs(html: str) -> list[str]:
@@ -108,8 +113,12 @@ async def test_the_pages_those_links_reach_actually_render(app) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://t"
     ) as client:
-        for path in ("/", "/privacy", "/terms"):
-            assert (await client.get(path)).status_code == 200, path
+        for path in ("/", "/about", "/privacy", "/terms"):
+            response = await client.get(path)
+            assert response.status_code == 200, path
+            # Every backend-rendered page carries the site's own CSP; the
+            # app-wide default is `default-src 'none'`, which blanks a page.
+            assert "img-src 'self'" in response.headers["content-security-policy"], path
 
 
 # ── the edge proxy forwards them ───────────────────────────────────────────
@@ -156,3 +165,31 @@ async def test_product_media_is_forwarded_to_the_backend() -> None:
             "Caddy does not forward /media — every product photo would come "
             "back as the admin SPA's index.html"
         )
+
+
+# ── the About page ─────────────────────────────────────────────────────────
+
+
+async def test_the_about_page_is_reachable_from_both_pages() -> None:
+    """A trust page nobody can find is not a trust page."""
+    html = _render()
+    landing = html.split("<!DOCTYPE html>")[1]
+    assert 'href="/about"' in landing.split("<footer>")[0], "not in the nav"
+    assert 'href="/about"' in landing.split("<footer>")[1], "not in the footer"
+
+
+async def test_the_about_page_gets_its_own_whatsapp_button() -> None:
+    settings = get_settings().model_copy(update=_LIVE)
+    about = contact.render(web._ABOUT.read_text(encoding="utf-8"), settings)
+    assert 'class="wa-cta"' in about and "9am-6pm" in about
+    assert "About%20page" in about, "the About button should say where it came from"
+    # And, unset, no stub is left behind.
+    assert "WHATSAPP" not in contact.render(web._ABOUT.read_text(encoding="utf-8"), get_settings())
+
+
+async def test_the_about_page_makes_no_claim_the_site_cannot_back() -> None:
+    """Written without the facts only the founders have — so it must not
+    pretend to have them. Anyone adding one of these should add the fact too."""
+    about = web._ABOUT.read_text(encoding="utf-8").lower()
+    for word in ("founded in", "patent", "award", "customers worldwide", "investors", "our team of"):
+        assert word not in about, f"About page claims '{word}' with nothing behind it"
