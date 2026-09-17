@@ -259,7 +259,7 @@ class SettingsScreen extends ConsumerWidget {
               icon: Icons.workspace_premium_rounded,
               gradient: Aurora.gradAmber,
               title: 'Subscription',
-              subtitle: 'Your plan & today\'s usage',
+              subtitle: 'Your plan, usage & upgrades',
               onTap: () => SubscriptionScreen.open(context),
             ),
             SettingsRow(
