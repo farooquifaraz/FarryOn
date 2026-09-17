@@ -81,6 +81,9 @@ services:
       # The /download routes read the APKs from here, not from the image — a
       # new build must reach users without rebuilding the backend.
       APK_DIR: /srv/apk
+      # Product photographs and catalogs (web/products.py) — same idea: they
+      # live on the host, outside the deploy path, and are mounted in.
+      MEDIA_DIR: /srv/media
     volumes:
       # Read-only mount of the host's build directory. It deliberately sits
       # OUTSIDE the deploy path: the CI rsync runs with --delete against
@@ -88,6 +91,10 @@ services:
       # every deploy. The build-apk workflow uploads here directly, and the
       # backend picks a new APK up on the next request — no redeploy needed.
       - ${APK_HOST_DIR:-/opt/farryon-builds}:/srv/apk:ro
+      # Product media: photographs under <dir>/<model>/, catalogs under
+      # <dir>/catalogs/<model>.pdf. Uploaded by hand (docs/MEDIA.md); like the
+      # APKs it must stay outside /opt/farryon or the deploy rsync deletes it.
+      - ${MEDIA_HOST_DIR:-/opt/farryon-media}:/srv/media:ro
     # No host ports: only Caddy (and the obs profile) reach the backend, over
     # the internal docker network.
     depends_on:

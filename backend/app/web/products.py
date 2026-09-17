@@ -82,9 +82,17 @@ _SHOTS: tuple[tuple[str, str], ...] = (
     ("front", "{name} smart glasses seen straight on"),
     ("angle", "{name} at a three-quarter angle, showing the temple and hinge"),
     ("camera", "Close-up of the {name} camera module built into the frame"),
+    ("lenses", "{name} with the clear anti-blue-light lenses fitted"),
+    ("side", "{name} from the side, showing the temple and speaker"),
+    ("back", "{name} from behind, showing the inside of the temples"),
+    ("top", "{name} from above"),
     ("folded", "{name} folded, showing how slim the frame sits"),
     ("worn", "{name} being worn, front view"),
     ("worn-side", "{name} being worn, side view"),
+    ("red", "{name} in the red frame"),
+    ("cream", "{name} in the cream frame"),
+    ("case", "The {name} charging case"),
+    ("charging", "{name} charging in its case, with the case charging a phone"),
     ("lifestyle", "{name} in everyday use"),
     ("scale", "{name} held in a hand, for a sense of size and weight"),
     ("box", "What is in the {name} box"),
@@ -95,13 +103,22 @@ _SHOTS: tuple[tuple[str, str], ...] = (
 MODELS: dict[str, str] = {
     "l801": "L801 Business",
     "l802": "L802 Premium",
+    "gs4": "Farry-GS4",
+    "gs5": "GS5 MAX",
 }
+
+# Product catalogs (one PDF per model) live next to the photographs, in
+# ``<media root>/catalogs/<slug>.pdf``. Like the photographs they are
+# discovered, never assumed: a model without a catalog gets no link.
+CATALOG_DIR = "catalogs"
 
 # `sizes` tells the browser how wide the image will actually be *before* it has
 # any layout, so it can pick the right rendition on the first try. The cards sit
 # two-up above 900px and full width below it — the same breakpoint `.specs-grid`
 # uses.
 _SIZES = "(max-width: 900px) 92vw, 44vw"
+# The thumbnail strip: 56px boxes, so the 400px rendition is already 7x.
+_THUMB_SIZES = "56px"
 
 
 class Gallery:
@@ -214,8 +231,46 @@ def _url(slug: str, filename: str) -> str:
     return f"/media/{slug}/{escape(filename, quote=True)}"
 
 
-def _picture(slug: str, alt: str, by_ext: dict[str, dict[int, str]], eager: bool) -> str:
-    """A <picture> that offers AVIF/WebP and falls back to JPEG/PNG."""
+def catalog_path(settings: Settings, slug: str) -> Path | None:
+    """The model's catalog PDF on disk, or None when there is none."""
+    if slug not in MODELS:
+        return None
+    path = media_root(settings) / CATALOG_DIR / f"{slug}.pdf"
+    return path if path.is_file() else None
+
+
+def catalog_html(settings: Settings, slug: str) -> str:
+    """The "Product catalog (PDF)" link for one spec card, or ""."""
+    path = catalog_path(settings, slug)
+    if path is None:
+        return ""
+    size_mb = path.stat().st_size / 1_048_576
+    name = escape(MODELS[slug], quote=True)
+    return (
+        f'<div class="pm-catalog"><a href="/catalogs/{slug}.pdf" target="_blank" '
+        f'rel="noopener noreferrer" aria-label="{name} product catalog, PDF">'
+        f'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" '
+        f'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
+        f'stroke-linejoin="round" aria-hidden="true">'
+        f'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/>'
+        f'<path d="M14 3v5h5M9 13h6M9 17h6"/></svg>'
+        f"<span>Product catalog</span><small>PDF · {size_mb:.1f} MB</small></a></div>"
+    )
+
+
+def _picture(
+    slug: str,
+    alt: str,
+    by_ext: dict[str, dict[int, str]],
+    eager: bool,
+    sizes: str = _SIZES,
+) -> str:
+    """A <picture> that offers AVIF/WebP and falls back to JPEG/PNG.
+
+    ``sizes`` is how wide the image will be laid out; a thumbnail passes its
+    own so the browser fetches the 400px file for a 56px box instead of the
+    same 800px one the slide already uses.
+    """
     sources = []
     for ext, mime in _MODERN_STILLS:
         by_width = by_ext.get(ext)
@@ -225,7 +280,7 @@ def _picture(slug: str, alt: str, by_ext: dict[str, dict[int, str]], eager: bool
         if sized:
             srcset = ", ".join(f"{_url(slug, f)} {w}w" for w, f in sized)
             sources.append(
-                f'<source type="{mime}" srcset="{srcset}" sizes="{_SIZES}">'
+                f'<source type="{mime}" srcset="{srcset}" sizes="{sizes}">'
             )
         elif 0 in by_width:
             sources.append(
@@ -244,7 +299,7 @@ def _picture(slug: str, alt: str, by_ext: dict[str, dict[int, str]], eager: bool
     sized = [(w, f) for w, f in sorted(by_width.items()) if w]
     srcset = (
         f' srcset="{", ".join(f"{_url(slug, f)} {w}w" for w, f in sized)}"'
-        f' sizes="{_SIZES}"'
+        f' sizes="{sizes}"'
         if sized
         else ""
     )
@@ -315,7 +370,7 @@ def gallery_html(gallery: Gallery) -> str:
         thumbs.append(
             f'<button type="button" class="pm-thumb{on}" data-i="{index}" '
             f'aria-label="{escape(alt, quote=True)}">'
-            f"{_picture(gallery.slug, '', by_ext, eager=False)}</button>"
+            f"{_picture(gallery.slug, '', by_ext, eager=False, sizes=_THUMB_SIZES)}</button>"
         )
         index += 1
 
@@ -575,8 +630,25 @@ _JS = """
 """
 
 
+# The catalog link's own stylesheet: it ships when a catalog exists, which is
+# independent of whether any photographs do.
+_CATALOG_CSS = """
+<style>
+.pm-catalog{padding:0 22px 20px}
+.pm-catalog a{display:flex;align-items:center;gap:10px;padding:11px 16px;
+  border-radius:12px;border:1px solid rgba(0,212,170,.18);
+  background:rgba(0,212,170,.05);color:var(--t);text-decoration:none;
+  font-size:.86rem;font-weight:600;transition:.22s}
+.pm-catalog a svg{color:var(--pl);flex:0 0 auto}
+.pm-catalog a small{margin-left:auto;font-size:.72rem;font-weight:400;color:var(--tm)}
+.pm-catalog a:hover{background:rgba(0,212,170,.12);border-color:rgba(0,212,170,.4)}
+.pm-catalog a:focus-visible{outline:2px solid var(--pl);outline-offset:2px}
+</style>
+"""
+
+
 def render(html: str, settings: Settings) -> str:
-    """Fill the landing page's product-media placeholders.
+    """Fill the landing page's product-media and catalog placeholders.
 
     With no media on disk every placeholder resolves to the empty string, so
     the page is exactly what it was before this module existed — no stylesheet,
@@ -585,7 +657,13 @@ def render(html: str, settings: Settings) -> str:
     found = galleries(settings)
     for slug, gallery in found.items():
         html = html.replace(f"<!--PRODUCT_MEDIA:{slug}-->", gallery_html(gallery))
+    has_catalog = False
+    for slug in MODELS:
+        link = catalog_html(settings, slug)
+        has_catalog = has_catalog or bool(link)
+        html = html.replace(f"<!--CATALOG:{slug}-->", link)
     has_media = any(found.values())
-    return html.replace(
-        "<!--PRODUCT_MEDIA_CSS-->", _CSS if has_media else ""
-    ).replace("<!--PRODUCT_MEDIA_JS-->", _JS if has_media else "")
+    styles = (_CSS if has_media else "") + (_CATALOG_CSS if has_catalog else "")
+    return html.replace("<!--PRODUCT_MEDIA_CSS-->", styles).replace(
+        "<!--PRODUCT_MEDIA_JS-->", _JS if has_media else ""
+    )

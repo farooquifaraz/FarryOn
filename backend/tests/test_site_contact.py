@@ -22,12 +22,28 @@ pytestmark = pytest.mark.asyncio
 _SLOTS = (
     "<!--CONTACT_CSS--><!--SOCIAL_LINKS--><!--WHATSAPP_CTA-->"
     "<!--WHATSAPP_FOOTER--><!--WHATSAPP_CARD:l801--><!--WHATSAPP_CARD:l802-->"
+    "<!--WHATSAPP_CARD:gs4--><!--WHATSAPP_CARD:gs5-->"
     "<!--WHATSAPP_FAB--><!--CONTACT_JS-->"
 )
 
 
+# Every contact field starts unset, whatever the developer's own .env says:
+# these tests describe the page with and without a number, not this machine.
+_CONTACT_FIELDS = (
+    "whatsapp_number",
+    "whatsapp_hours",
+    "social_instagram",
+    "social_linkedin",
+    "social_youtube",
+    "social_facebook",
+    "social_x",
+)
+
+
 def _settings(**overrides):
-    return get_settings().model_copy(update=overrides)
+    clean = dict.fromkeys(_CONTACT_FIELDS, None)
+    clean.update(overrides)
+    return get_settings().model_copy(update=clean)
 
 
 def _render(**overrides) -> str:
@@ -70,7 +86,7 @@ async def test_every_button_appears_once_the_number_is_set() -> None:
     html = _render(whatsapp_number="971501234567")
     # Count the markup, not the stylesheet, which names every class too.
     assert html.count('class="wa-fab"') == 1
-    assert html.count('class="wa-card"') == 2  # one per glasses model
+    assert html.count('class="wa-card"') == 4  # one per glasses model
     assert 'class="wa-cta"' in html and 'class="wa-inline"' in html
 
 
@@ -83,9 +99,10 @@ async def test_each_button_says_where_it_came_from() -> None:
         parse_qs(urlparse(u).query)["text"][0]
         for u in re.findall(r'href="(https://wa\.me/[^"]+)"', html)
     ]
-    assert len(texts) == 5
-    assert len(set(texts)) == 5, "two buttons send the same message"
-    assert any("L801" in t for t in texts) and any("L802" in t for t in texts)
+    assert len(texts) == 7
+    assert len(set(texts)) == 7, "two buttons send the same message"
+    for model in ("L801", "L802", "GS4", "GS5"):
+        assert any(model in t for t in texts), model
 
 
 async def test_every_whatsapp_link_is_a_wa_me_link_for_that_number() -> None:
@@ -111,6 +128,23 @@ async def test_only_the_networks_with_a_url_get_an_icon() -> None:
     assert html.count('class="s-link"') == 1
     assert "instagram.com/farryon" in html
     assert "linkedin" not in html.lower()
+
+
+async def test_a_network_marked_soon_shows_a_greyed_icon_and_no_link() -> None:
+    """LinkedIn and YouTube are announced before their pages exist: the icon
+    is there so the footer does not look like a one-network brand, but it
+    links nowhere and says so."""
+    html = _render(
+        social_instagram="https://instagram.com/farryon",
+        social_linkedin="soon",
+        social_youtube="Coming soon",
+    )
+    assert html.count('class="s-link"') == 1  # the one real link
+    assert html.count('class="s-link s-soon"') == 2
+    assert 'aria-label="LinkedIn: coming soon"' in html
+    assert 'aria-label="YouTube: coming soon"' in html
+    # nothing links to a placeholder
+    assert 'href="soon"' not in html and "href=\"Coming" not in html
 
 
 @pytest.mark.parametrize(

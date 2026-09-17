@@ -34,7 +34,7 @@
 	# /media/* is the glasses product photography on the landing page. It has
 	# to be listed here: everything not matched falls through to the SPA, which
 	# would answer an <img> request with index.html and break every gallery.
-	@backend path /api /api/* /ws/* /healthz /readyz /detect / /download /download/* /notes /notes/* /tasks /tasks/* /media/* /farry-icon.png /farryon-logo.png /favicon.ico /verify-email /reset-password /terms /privacy /about
+	@backend path /api /api/* /ws/* /healthz /readyz /detect / /download /download/* /notes /notes/* /tasks /tasks/* /media/* /catalogs/* /farry-icon.png /farryon-logo.png /favicon.ico /verify-email /reset-password /terms /privacy /about
 	handle @backend {
 		reverse_proxy backend:8000
 	}

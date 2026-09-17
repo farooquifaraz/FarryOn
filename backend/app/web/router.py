@@ -192,6 +192,30 @@ async def product_media(model: str, filename: str) -> FileResponse:
     )
 
 
+@router.get("/catalogs/{slug}.pdf", include_in_schema=False)
+async def product_catalog(slug: str) -> FileResponse:
+    """One model's product catalog, from ``<media root>/catalogs/<slug>.pdf``.
+
+    The slug is looked up in :data:`products.MODELS` before anything touches the
+    filesystem, so the path is always one of four known files; a slug that is
+    not a model, or a model whose catalog has not been uploaded, is a 404.
+    ``inline`` so the browser shows the PDF rather than downloading it — the
+    visitor can still save it, and a WhatsApp forward is one share away.
+    """
+    path = products.catalog_path(get_settings(), slug)
+    if path is None:
+        raise HTTPException(status_code=404)
+    filename = f"FarryOn-{products.MODELS[slug].replace(' ', '-')}-catalog.pdf"
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        headers={
+            "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400",
+            "Content-Disposition": f'inline; filename="{filename}"',
+        },
+    )
+
+
 @router.get("/download/info", include_in_schema=False)
 async def download_info() -> JSONResponse:
     """Live build metadata for the page (version + per-ABI availability/size)."""

@@ -104,6 +104,18 @@ SOCIAL_FACEBOOK=https://facebook.com/yourpage
 SOCIAL_X=https://x.com/yourhandle
 ```
 
+A network whose page is not up yet can be set to `soon`:
+
+```
+SOCIAL_LINKEDIN=soon
+SOCIAL_YOUTUBE=soon
+```
+
+That shows the icon greyed with a small "Soon" under it, unlinked — a footer
+with one lonely Instagram icon reads as a brand with no presence, while a
+hidden network is a promise nobody can see. Replace `soon` with the URL when
+the page exists. (Live since 2026-09-17: Instagram real, LinkedIn/YouTube soon.)
+
 Only the ones with a URL render. Anything that is not an `http(s)` URL is
 ignored rather than written into an `href`.
 

@@ -57,6 +57,8 @@ MESSAGES: dict[str, str] = {
     "fab": "Hi FarryOn! I have a question about your AI smart glasses.",
     "l801": "Hi FarryOn! I'd like to know more about the L801 Business glasses.",
     "l802": "Hi FarryOn! I'd like to know more about the L802 Premium glasses.",
+    "gs4": "Hi FarryOn! I'd like to know more about the Farry-GS4 glasses.",
+    "gs5": "Hi FarryOn! I'd like to know more about the GS5 MAX glasses.",
     "cta": "Hi FarryOn! I have a question before I order.",
     "footer": "Hi FarryOn! I need some help.",
     "about": "Hi FarryOn! I read your About page and have a question.",
@@ -101,11 +103,33 @@ def _safe_url(value: object) -> str | None:
     return url
 
 
+# A network whose page is not up yet: the icon shows, greyed, with "Soon" —
+# because a footer with one lonely Instagram icon reads as a brand with no
+# presence, while a hidden network is a promise nobody can see.
+_SOON = frozenset({"soon", "coming soon", "coming-soon"})
+
+
+def _is_soon(value: object) -> bool:
+    return bool(value) and str(value).strip().lower() in _SOON
+
+
 def social_html(settings: Settings) -> str:
-    """The footer's social icons — only the networks that have a URL set."""
+    """The footer's social icons — the networks with a URL set, plus any
+    marked ``soon`` (shown greyed, not linked)."""
     out = []
     for key, label, path in _SOCIALS:
-        url = _safe_url(getattr(settings, f"social_{key}", None))
+        raw = getattr(settings, f"social_{key}", None)
+        svg = (
+            f'<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" '
+            f'aria-hidden="true"><path d="{path}"/></svg>'
+        )
+        if _is_soon(raw):
+            out.append(
+                f'<span class="s-link s-soon" title="{label} — coming soon" '
+                f'aria-label="{label}: coming soon">{svg}<em>Soon</em></span>'
+            )
+            continue
+        url = _safe_url(raw)
         if not url:
             continue
         out.append(
@@ -135,6 +159,12 @@ _SOCIAL_CSS = """
 .footer-social .s-link:hover{color:var(--pl)}
 .footer-social .s-link:focus-visible{outline:2px solid var(--pl);
   outline-offset:2px;color:var(--pl)}
+/* A network that is not live yet: greyed, unclickable, labelled. */
+.footer-social .s-soon{position:relative;opacity:.45;cursor:default}
+.footer-social .s-soon:hover{color:var(--tm)}
+.footer-social .s-soon em{position:absolute;left:50%;top:100%;transform:translateX(-50%);
+  margin-top:3px;font-size:.58rem;font-style:normal;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--tm);white-space:nowrap}
 </style>
 """
 

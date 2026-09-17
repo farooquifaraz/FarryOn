@@ -68,7 +68,7 @@ def _save(image: Image.Image, out: Path, dry: bool) -> tuple[bool, str]:
         elif suffix == ".avif":
             image.save(out, "AVIF", quality=AVIF_QUALITY)
         else:
-            image.convert("RGB").save(
+            _flatten(image).save(
                 out, "JPEG", quality=JPEG_QUALITY, optimize=True, progressive=True
             )
     except (OSError, KeyError, ValueError) as exc:
@@ -78,9 +78,27 @@ def _save(image: Image.Image, out: Path, dry: bool) -> tuple[bool, str]:
     return True, _kb(out)
 
 
+# The gallery stage's background. A transparent cut-out (the studio PNGs the
+# factory supplies) keeps its alpha in WebP/AVIF, so it sits on the card's own
+# gradient; JPEG has no alpha, so its fallback is flattened onto this colour
+# rather than onto white, which would put a white box on a dark page.
+STAGE_BG = (4, 10, 20)
+
+
+def _flatten(image: Image.Image) -> Image.Image:
+    if image.mode != "RGBA":
+        return image.convert("RGB")
+    flat = Image.new("RGB", image.size, STAGE_BG)
+    flat.paste(image, mask=image.getchannel("A"))
+    return flat
+
+
 def process_shot(src: Path, out_dir: Path, dry: bool, avif: bool) -> int:
     with Image.open(src) as im:
-        im = im.convert("RGB")
+        has_alpha = im.mode in ("RGBA", "LA") or (
+            im.mode == "P" and "transparency" in im.info
+        )
+        im = im.convert("RGBA" if has_alpha else "RGB")
         width, height = im.size
         shot = src.stem.lower()
         print(f"  {shot:<12} {width}x{height}  {_kb(src)}")

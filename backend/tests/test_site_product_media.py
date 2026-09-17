@@ -73,7 +73,7 @@ async def test_no_media_leaves_the_page_byte_for_byte_unchanged(
     import re
 
     monkeypatch.setattr(products, "media_root", lambda _s: tmp_path / "nothing")
-    as_it_shipped = re.sub(r"<!--PRODUCT_MEDIA[^>]*?-->", "", page)
+    as_it_shipped = re.sub(r"<!--(?:PRODUCT_MEDIA|CATALOG)[^>]*?-->", "", page)
     rendered = products.render(pricing.render(page, settings), settings)
     assert rendered == pricing.render(as_it_shipped, settings)
 
@@ -251,3 +251,42 @@ async def test_the_route_serves_exactly_what_the_gallery_asks_for() -> None:
     referenced |= {ext for ext, _ in products._VIDEOS}
     assert referenced <= products.ALLOWED_SUFFIXES
     assert products.ALLOWED_SUFFIXES <= set(products.MEDIA_TYPES)
+
+
+# ── catalogs ───────────────────────────────────────────────────────────────
+
+
+def _catalog(root, slug: str = "l801") -> None:
+    (root / "catalogs").mkdir(exist_ok=True)
+    (root / "catalogs" / f"{slug}.pdf").write_bytes(b"%PDF-1.4\n" + b"x" * 2048)
+
+
+async def test_a_catalog_on_disk_gets_a_link_on_its_card(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(products, "media_root", lambda _s: tmp_path)
+    settings = get_settings()
+    _catalog(tmp_path, "l801")
+    html = products.render(
+        "<!--PRODUCT_MEDIA_CSS--><!--CATALOG:l801--><!--CATALOG:l802-->", settings
+    )
+    assert 'href="/catalogs/l801.pdf"' in html
+    assert "/catalogs/l802.pdf" not in html
+    assert "pm-catalog" in html and "<style>" in html  # link + its stylesheet
+
+
+async def test_no_catalog_means_no_link_and_no_stylesheet(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(products, "media_root", lambda _s: tmp_path)
+    settings = get_settings()
+    html = products.render("<!--PRODUCT_MEDIA_CSS--><!--CATALOG:l801-->", settings)
+    assert html == ""
+
+
+async def test_the_catalog_route_serves_only_known_models(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(products, "media_root", lambda _s: tmp_path)
+    _catalog(tmp_path, "l802")
+    ok = await _get("/catalogs/l802.pdf")
+    assert ok.status_code == 200
+    assert ok.headers["content-type"] == "application/pdf"
+    assert "inline" in ok.headers["content-disposition"]
+    assert (await _get("/catalogs/l801.pdf")).status_code == 404  # not uploaded
+    assert (await _get("/catalogs/l803.pdf")).status_code == 404  # not a model
+    assert (await _get("/catalogs/..%2Fl802.pdf")).status_code == 404

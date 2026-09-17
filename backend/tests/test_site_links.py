@@ -43,9 +43,28 @@ _LIVE = {
 }
 
 
+# Every contact field starts unset, whatever the developer's own .env says:
+# these tests describe the page with and without a number, not this machine.
+def _clean_settings():
+    return get_settings().model_copy(
+        update=dict.fromkeys(
+            (
+                "whatsapp_number",
+                "whatsapp_hours",
+                "social_instagram",
+                "social_linkedin",
+                "social_youtube",
+                "social_facebook",
+                "social_x",
+            ),
+            None,
+        )
+    )
+
+
 def _render(**overrides) -> str:
     """Both public pages, concatenated: a dead link on either is a dead link."""
-    settings = get_settings().model_copy(update=overrides)
+    settings = _clean_settings().model_copy(update=overrides)
     landing = web._INDEX.read_text(encoding="utf-8")
     landing = contact.render(
         products.render(pricing.render(landing, settings), settings), settings
@@ -179,12 +198,12 @@ async def test_the_about_page_is_reachable_from_both_pages() -> None:
 
 
 async def test_the_about_page_gets_its_own_whatsapp_button() -> None:
-    settings = get_settings().model_copy(update=_LIVE)
+    settings = _clean_settings().model_copy(update=_LIVE)
     about = contact.render(web._ABOUT.read_text(encoding="utf-8"), settings)
     assert 'class="wa-cta"' in about and "9am-6pm" in about
     assert "About%20page" in about, "the About button should say where it came from"
     # And, unset, no stub is left behind.
-    assert "WHATSAPP" not in contact.render(web._ABOUT.read_text(encoding="utf-8"), get_settings())
+    assert "WHATSAPP" not in contact.render(web._ABOUT.read_text(encoding="utf-8"), _clean_settings())
 
 
 async def test_the_about_page_makes_no_claim_the_site_cannot_back() -> None:
