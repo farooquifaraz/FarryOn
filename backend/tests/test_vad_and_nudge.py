@@ -275,3 +275,63 @@ async def test_flowing_audio_alone_never_reconnects() -> None:
         t += 21.0
     assert gw.ends >= 5
     assert closed == []
+
+
+# ── switching mic under a provider that only has manual mode ───────────────
+
+
+class _ManualOnlyGateway:
+    """The cascade shape: speech markers are its utterances, whatever the mic."""
+
+    requires_manual_vad = True
+    manual_vad = True
+
+
+class _SwitchableGateway:
+    """The Gemini shape: automatic detector, manual only for the glasses mic."""
+
+    requires_manual_vad = False
+    manual_vad = True
+
+
+def _switching_session(gateway, settings):
+    from app.ws.session import Session
+
+    s = Session.__new__(Session)
+    s.session_id = "vad-switch"
+    s._mode = "agent"
+    s._gateway = gateway
+    s._settings = settings
+    s._manual_vad = True
+    s.closes = 0
+
+    async def _close_for_reconnect():
+        s.closes += 1
+
+    s._close_for_reconnect = _close_for_reconnect
+    return s
+
+
+async def test_a_manual_only_provider_never_reconnects_on_a_mic_change() -> None:
+    """Dev Mode on the phone mic: hello → manual (the provider's only mode),
+    device_update says "phone" → the old code wanted automatic, closed the
+    socket, and the reconnect's hello set manual again — twice a second, for
+    as long as the app stayed open (live 2026-09-17)."""
+    from app.config import Settings
+
+    s = _switching_session(_ManualOnlyGateway(), Settings(manual_vad_for_glasses=True))
+    await s._audio_kind_changed("phone")
+    await s._audio_kind_changed("glasses")
+    await s._audio_kind_changed("phone")
+    assert s.closes == 0
+    assert s._manual_vad is True
+
+
+async def test_a_switchable_provider_still_reconnects_when_the_mic_changes_mode() -> None:
+    from app.config import Settings
+
+    s = _switching_session(_SwitchableGateway(), Settings(manual_vad_for_glasses=True))
+    await s._audio_kind_changed("glasses")  # same mode: nothing to do
+    assert s.closes == 0
+    await s._audio_kind_changed("phone")  # manual → automatic: reconnect
+    assert s.closes == 1

@@ -1766,6 +1766,14 @@ class Session:
             return
         if not hasattr(self._gateway, "manual_vad"):
             return
+        if getattr(self._gateway, "requires_manual_vad", False):
+            # The provider has no detector of its own (cascade / Dev Mode):
+            # manual is its only mode, whatever the mic. Comparing the mic
+            # against it closed the socket on every phone-mic device_update,
+            # and the reconnect's hello put manual right back — a session
+            # that connected, closed and reconnected twice a second (live
+            # 2026-09-17 19:17, "connecting… online… connecting…").
+            return
         if not bool(getattr(self._settings, "manual_vad_for_glasses", False)):
             return
         wants = audio_kind.strip().lower() == "glasses"
