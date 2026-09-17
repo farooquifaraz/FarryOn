@@ -27,7 +27,10 @@
 	# through to the SPA handler below.
 	# /verify-email and /reset-password are the auth-email landing pages —
 	# backend-rendered (web/router.py), NOT part of the admin SPA.
-	@backend path /api /api/* /ws/* /healthz /readyz /detect / /download /download/* /farry-icon.png /farryon-logo.png /favicon.ico /verify-email /reset-password /terms /privacy
+	# /media/* is the glasses product photography on the landing page. It has
+	# to be listed here: everything not matched falls through to the SPA, which
+	# would answer an <img> request with index.html and break every gallery.
+	@backend path /api /api/* /ws/* /healthz /readyz /detect / /download /download/* /media/* /farry-icon.png /farryon-logo.png /favicon.ico /verify-email /reset-password /terms /privacy
 	handle @backend {
 		reverse_proxy backend:8000
 	}

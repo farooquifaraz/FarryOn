@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from app.config import get_settings
-from app.web import pricing, products
+from app.web import contact, pricing, products
 from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -86,6 +86,10 @@ async def landing() -> HTMLResponse:
         # Fills the gallery slots on the spec cards from whatever photography
         # is on disk, and resolves to nothing at all when there is none.
         page = products.render(page, settings)
+        # The WhatsApp buttons and the footer's social icons. Both resolve to
+        # nothing when their settings are unset — which is the point: the page
+        # used to ship a WhatsApp link and four social icons that went nowhere.
+        page = contact.render(page, settings)
         return HTMLResponse(
             page, headers={"Content-Security-Policy": _SITE_CSP}
         )

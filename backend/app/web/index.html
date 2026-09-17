@@ -451,7 +451,7 @@ footer{background:rgba(2,6,14,.97);border-top:1px solid rgba(0,212,170,.08);padd
 footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
   background:linear-gradient(90deg,transparent,rgba(0,212,170,.18),rgba(123,79,224,.1),transparent)}
 .footer-inner{max-width:1200px;margin:0 auto;position:relative}
-.footer-top{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:48px;
+.footer-top{display:grid;grid-template-columns:1.6fr 1fr 1fr;gap:48px;
   padding-bottom:48px;border-bottom:1px solid rgba(0,212,170,.06)}
 .footer-brand p{font-size:.83rem;color:var(--tm);line-height:1.65;margin:12px 0 20px}
 .footer-social{display:flex;gap:10px}
@@ -507,7 +507,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
   .hero-sub{margin:0 auto 40px}
 }
 @media(max-width:480px){section{padding:72px 5%}.specs-grid{grid-template-columns:1fr}.footer-top{grid-template-columns:1fr}}
-</style><!--PRODUCT_MEDIA_CSS-->
+</style><!--PRODUCT_MEDIA_CSS--><!--CONTACT_CSS-->
 </head>
 <body>
 
@@ -525,7 +525,6 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
     <li><a href="#glasses">Glasses</a></li>
     <li><a href="#pricing">Pricing</a></li>
     <li><a href="#faq">FAQ</a></li>
-    <li><a href="/login">Sign in</a></li>
   </ul>
   <a href="/download/arm64" class="nav-cta">Get FarryOn</a>
   <button class="hamburger" onclick="toggleMenu()"><span></span><span></span><span></span></button>
@@ -688,6 +687,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
             <div class="spec-row"><span class="spec-key">WiFi</span><span class="spec-val">Yes · media sync</span></div>
             <div class="spec-row"><span class="spec-key">Best for</span><span class="spec-val">Office · All-day wear</span></div>
           </div>
+          <!--WHATSAPP_CARD:l801-->
         </div>
       </div>
       <div class="spec-card featured reveal d1">
@@ -708,6 +708,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
             <div class="spec-row"><span class="spec-key">WiFi</span><span class="spec-val">Yes · media sync</span></div>
             <div class="spec-row"><span class="spec-key">Best for</span><span class="spec-val">Business · Style</span></div>
           </div>
+          <!--WHATSAPP_CARD:l802-->
         </div>
       </div>
     </div>
@@ -777,7 +778,8 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
         Start free trial →
       </a>
     </div>
-    <p style="margin-top:20px;font-size:.78rem;color:var(--td)">Questions? WhatsApp us · Free shipping on orders over AED 1,000</p>
+    <!--WHATSAPP_CTA-->
+    <p style="margin-top:20px;font-size:.78rem;color:var(--td)">Free shipping on orders over AED 1,000</p>
   </div>
 </div>
 
@@ -790,14 +792,10 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
           <img src="/farryon-logo.png" alt="FarryOn" style="height:150px;width:auto;filter:drop-shadow(0 0 14px rgba(0,212,170,.25))">
         </div>
         <p>AI-powered smart glasses for the UAE. Voice, camera, memory, and action — from a pair of glasses.</p>
-        <div class="footer-social">
-          <a class="s-link" href="#">📷</a><a class="s-link" href="#">💼</a>
-          <a class="s-link" href="#">💬</a><a class="s-link" href="#">▶</a>
-        </div>
+        <div class="footer-social"><!--SOCIAL_LINKS--></div>
       </div>
-      <div class="footer-col"><h4>Product</h4><ul><li><a href="#features">Features</a></li><li><a href="#glasses">Glasses</a></li><li><a href="#pricing">Pricing</a></li><li><a href="/download/arm64">Download App</a></li><li><a href="#">Changelog</a></li></ul></div>
-      <div class="footer-col"><h4>Company</h4><ul><li><a href="#">About</a></li><li><a href="#">Blog</a></li><li><a href="#">Careers</a></li><li><a href="#">Press</a></li></ul></div>
-      <div class="footer-col"><h4>Support</h4><ul><li><a href="#faq">FAQ</a></li><li><a href="/login">Sign in</a></li><li><a href="#">SDK Docs</a></li><li><a href="#">WhatsApp</a></li><li><a href="/privacy">Privacy Policy</a></li><li><a href="/terms">Terms &amp; Refunds</a></li></ul></div>
+      <div class="footer-col"><h4>Product</h4><ul><li><a href="#features">Features</a></li><li><a href="#glasses">Glasses</a></li><li><a href="#pricing">Pricing</a></li><li><a href="/download/arm64">Download App</a></li></ul></div>
+      <div class="footer-col"><h4>Support</h4><ul><li><a href="#faq">FAQ</a></li><!--WHATSAPP_FOOTER--><li><a href="/privacy">Privacy Policy</a></li><li><a href="/terms">Terms &amp; Refunds</a></li></ul></div>
     </div>
     <div class="footer-bottom">
       <p>© 2026 FarryOn. Dubai, UAE.</p>
@@ -963,6 +961,6 @@ document.querySelectorAll('a[href^="#"]').forEach(a=>
       (b.commit?' · '+b.commit:'')+(day?' · '+day:'');
   }).catch(function(){});
 })();
-</script><!--PRODUCT_MEDIA_JS-->
+</script><!--PRODUCT_MEDIA_JS--><!--WHATSAPP_FAB--><!--CONTACT_JS-->
 </body>
 </html>

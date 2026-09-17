@@ -34,6 +34,7 @@ modular, testable codebase.
 | `mobile/`     | Flutter app (Android + iOS) · camera · mic · playback · WS      |
 | `docs/`       | Architecture, data-flow, prompts, deployment plan, diagrams     |
 | `docs/MEDIA.md` | How product photos/video reach the site's glasses galleries.  |
+| `docs/SITE_CONTACT.md` | Website WhatsApp buttons, social icons, dead-link policy. |
 | `docker-compose.yml` | Local stack (backend + Postgres + Prometheus + Grafana) |
 
 ## Quick start
