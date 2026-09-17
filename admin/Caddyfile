@@ -31,7 +31,10 @@
 	# mounted at the root, not under /api). Left off this list they were
 	# answered with the SPA's index.html — 200, 407 bytes of HTML — and the
 	# app showed empty notes and reminders on the cloud only (2026-09-17).
-	@backend path /api /api/* /ws/* /healthz /readyz /detect / /download /download/* /notes /notes/* /tasks /tasks/* /farry-icon.png /farryon-logo.png /favicon.ico /verify-email /reset-password /terms /privacy
+	# /media/* is the glasses product photography on the landing page. It has
+	# to be listed here: everything not matched falls through to the SPA, which
+	# would answer an <img> request with index.html and break every gallery.
+	@backend path /api /api/* /ws/* /healthz /readyz /detect / /download /download/* /notes /notes/* /tasks /tasks/* /media/* /farry-icon.png /farryon-logo.png /favicon.ico /verify-email /reset-password /terms /privacy /about
 	handle @backend {
 		reverse_proxy backend:8000
 	}

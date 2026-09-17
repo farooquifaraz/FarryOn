@@ -611,6 +611,42 @@ class Settings(BaseSettings):
     # docker-compose.prod.yml + deploy/hostinger/env.production.example).
     apk_dir: str | None = Field(default=None)
 
+    # Where the product photography and video for the glasses live, for the
+    # gallery on the spec cards and the /media routes. Unset means the
+    # package's own app/web/media/ folder, which is right for a local run.
+    # Photographs are heavy and change on their own schedule, so production
+    # mounts a volume and points this at it rather than baking them into the
+    # image. Missing directory or missing files is not an error: the cards
+    # simply render without a gallery, exactly as they did before.
+    media_dir: str | None = Field(default=None)
+
+    # -- Contact + social (the public site) --------------------------------------
+    # Not to be confused with `whatsapp_token` / `whatsapp_phone_id` above:
+    # those are Business API credentials the *agent* sends messages with, on
+    # behalf of a user. This is just the number printed on the marketing page
+    # for a visitor to start a chat with — no API, no credentials.
+    #
+    # The WhatsApp number every "chat with us" button on the landing page opens,
+    # with country code. Written however you like — "+971 50 123 4567" and
+    # "971501234567" both work; everything that is not a digit is stripped. The
+    # page promises WhatsApp support in its copy, so leaving this unset is the
+    # one setting a visitor actually notices: no number, no buttons at all
+    # (better than a button that opens a chat with nobody).
+    whatsapp_number: str | None = Field(default=None)
+    # When someone actually replies, shown under the button — e.g.
+    # "We reply within a few hours, Sun-Thu 9am-6pm GST". A button with no
+    # stated hours sets no expectation, and a slow reply then reads as silence.
+    whatsapp_hours: str | None = Field(default=None)
+
+    # Full profile URLs for the footer icons. Each one is independent: set the
+    # ones that exist and only those icons appear. Anything that is not an
+    # http(s) URL is ignored rather than rendered into an href.
+    social_instagram: str | None = Field(default=None)
+    social_linkedin: str | None = Field(default=None)
+    social_youtube: str | None = Field(default=None)
+    social_facebook: str | None = Field(default=None)
+    social_x: str | None = Field(default=None)
+
     # -- Camera capture (identify_image / capture_photo) ------------------------
     # How long a vision tool waits for a fresh camera frame before giving up.
     # Phone cameras stream ~1 fps, so the wait normally resolves in ~1 s and
