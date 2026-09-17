@@ -68,12 +68,12 @@ void main() {
           ),
         ));
 
-    testWidgets('at the cap it leads with Upgrade and explains why',
+    testWidgets('at the cap it leads with See plans and explains why',
         (tester) async {
       await pump(tester, capReached: true);
 
-      expect(find.text('Upgrade'), findsOneWidget);
-      expect(find.textContaining('free minutes'), findsOneWidget);
+      expect(find.text('See plans'), findsOneWidget);
+      expect(find.textContaining('talk time is used up'), findsOneWidget);
       // The bare fault wording must NOT be the headline here.
       expect(find.text('Session ended'), findsNothing);
     });
@@ -84,14 +84,14 @@ void main() {
 
       expect(find.text('Session ended'), findsOneWidget);
       expect(find.text('Start session'), findsOneWidget);
-      expect(find.text('Upgrade'), findsNothing);
+      expect(find.text('See plans'), findsNothing);
     });
 
-    testWidgets('tapping Upgrade calls the handler', (tester) async {
+    testWidgets('tapping See plans calls the handler', (tester) async {
       var upgrades = 0;
       await pump(tester, capReached: true, onUpgrade: () => upgrades++);
 
-      await tester.tap(find.text('Upgrade'));
+      await tester.tap(find.text('See plans'));
       expect(upgrades, 1);
     });
 

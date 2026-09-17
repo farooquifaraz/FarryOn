@@ -1943,7 +1943,13 @@ class Session:
         await self._send_error(code, message, fatal=True)
         to = getattr(self._settings, "first_super_admin_email", None)
         now = time.monotonic()
-        if to and now - _OUTAGE_ALERTED_AT >= _OUTAGE_ALERT_INTERVAL_S:
+        # 0.0 means "never": monotonic() counts from boot, so on a machine up
+        # for under 30 minutes (a fresh VPS, every CI runner) `now - 0.0` is
+        # below the interval and the first outage after boot went unmailed.
+        if to and (
+            _OUTAGE_ALERTED_AT == 0.0
+            or now - _OUTAGE_ALERTED_AT >= _OUTAGE_ALERT_INTERVAL_S
+        ):
             _OUTAGE_ALERTED_AT = now
             try:
                 from app.modules.auth.notifications import send_outage_alert
