@@ -611,6 +611,15 @@ class Settings(BaseSettings):
     # docker-compose.prod.yml + deploy/hostinger/env.production.example).
     apk_dir: str | None = Field(default=None)
 
+    # Where the product photography and video for the glasses live, for the
+    # gallery on the spec cards and the /media routes. Unset means the
+    # package's own app/web/media/ folder, which is right for a local run.
+    # Photographs are heavy and change on their own schedule, so production
+    # mounts a volume and points this at it rather than baking them into the
+    # image. Missing directory or missing files is not an error: the cards
+    # simply render without a gallery, exactly as they did before.
+    media_dir: str | None = Field(default=None)
+
     # -- Camera capture (identify_image / capture_photo) ------------------------
     # How long a vision tool waits for a fresh camera frame before giving up.
     # Phone cameras stream ~1 fps, so the wait normally resolves in ~1 s and

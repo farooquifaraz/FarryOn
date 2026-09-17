@@ -52,6 +52,16 @@ mobile-get: ## Fetch Flutter package dependencies.
 mobile: mobile-get ## Run the Flutter app on the default device.
 	cd mobile && flutter run
 
+## ------------------------------------------------------------------ media
+
+media: ## Build every web rendition from originals/ (see docs/MEDIA.md). SRC=... DEST=...
+	cd backend && python scripts/optimize_media.py $(or $(SRC),../originals) \
+		$(or $(DEST),app/web/media)
+
+media-check: ## Show what `make media` would write, without writing it.
+	cd backend && python scripts/optimize_media.py $(or $(SRC),../originals) \
+		$(or $(DEST),app/web/media) --dry-run
+
 ## ---------------------------------------------------------------- quality
 
 fmt: ## Format + lint backend (ruff) and mobile (dart format).

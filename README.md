@@ -33,6 +33,7 @@ modular, testable codebase.
 | `backend/`    | Python · FastAPI · WebSockets · AI gateway · agent · tools · DB |
 | `mobile/`     | Flutter app (Android + iOS) · camera · mic · playback · WS      |
 | `docs/`       | Architecture, data-flow, prompts, deployment plan, diagrams     |
+| `docs/MEDIA.md` | How product photos/video reach the site's glasses galleries.  |
 | `docker-compose.yml` | Local stack (backend + Postgres + Prometheus + Grafana) |
 
 ## Quick start

@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from app.config import get_settings
-from app.web import pricing
+from app.web import pricing, products
 from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -39,6 +39,8 @@ APP_VERSION = "1.0.0"
 _SITE_CSP = (
     "default-src 'self'; "
     "img-src 'self' data:; "
+    # Product video on the spec cards. Same-origin, served by /media below.
+    "media-src 'self'; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com; "
     "script-src 'self' 'unsafe-inline'; "
@@ -79,7 +81,11 @@ async def landing() -> HTMLResponse:
     try:
         # Prices and allowances are filled in from Settings.plan_catalog, so the
         # page can never quote a plan the API would refuse to sell.
-        page = pricing.render(_INDEX.read_text(encoding="utf-8"), get_settings())
+        settings = get_settings()
+        page = pricing.render(_INDEX.read_text(encoding="utf-8"), settings)
+        # Fills the gallery slots on the spec cards from whatever photography
+        # is on disk, and resolves to nothing at all when there is none.
+        page = products.render(page, settings)
         return HTMLResponse(
             page, headers={"Content-Security-Policy": _SITE_CSP}
         )
@@ -106,6 +112,62 @@ def _brand_file(name: str) -> FileResponse:
     if not path.is_file():  # pragma: no cover - asset ships with the package
         raise HTTPException(status_code=404, detail="asset not found")
     return FileResponse(path, media_type="image/png")
+
+
+@router.get("/media/{model}/{filename}", include_in_schema=False)
+async def product_media(model: str, filename: str) -> FileResponse:
+    """A product photo or video for one glasses model.
+
+    Everything here is served from a directory an operator controls, so the
+    path is rebuilt from validated parts rather than trusted: the model must be
+    one we actually sell, the filename must be a plain name with an extension
+    the gallery knows how to use, and the resolved path must still sit inside
+    the media root once symlinks have been followed. A request that fails any
+    of those gets the same 404 as a file that simply is not there — a probe
+    learns nothing about the filesystem either way.
+    """
+    if model not in products.MODELS:
+        raise HTTPException(status_code=404, detail="not found")
+
+    # No separators, no traversal, no dotfiles, nothing but a name.
+    if (
+        not filename
+        or filename.startswith(".")
+        or "/" in filename
+        or "\\" in filename
+        or "\x00" in filename
+        or Path(filename).name != filename
+    ):
+        raise HTTPException(status_code=404, detail="not found")
+
+    suffix = Path(filename).suffix.lower()
+    if suffix not in products.ALLOWED_SUFFIXES:
+        raise HTTPException(status_code=404, detail="not found")
+
+    root = products.media_root(get_settings())
+    try:
+        base = root.resolve(strict=True)
+        path = (base / model / filename).resolve(strict=True)
+        path.relative_to(base)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="not found") from None
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+
+    return FileResponse(
+        path,
+        media_type=products.MEDIA_TYPES.get(suffix, "application/octet-stream"),
+        # A day in the browser, a week of serving the old copy while the new
+        # one is fetched behind it. Deliberately NOT `immutable`: these names
+        # are stable (`front-800.webp` is always the 800px front shot), so a
+        # better photograph will be saved over an existing name sooner or
+        # later, and `immutable` would tell every browser that already has it
+        # never to ask again. FileResponse still sends an ETag, so the
+        # revalidation this allows costs one 304 and no bytes.
+        headers={
+            "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800"
+        },
+    )
 
 
 @router.get("/download/info", include_in_schema=False)
