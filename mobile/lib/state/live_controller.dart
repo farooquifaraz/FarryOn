@@ -1751,11 +1751,18 @@ class LiveController {
       case ErrorMessage():
         _log.warn('server error ${msg.code}: ${msg.message}');
         if (msg.code == 'quota_exceeded') {
-          // The session is ending because the daily cap is spent — not because
-          // anything broke. Say so where the user is looking (a notice in the
-          // transcript, the same amber line reminders use), and remember it so
-          // the reconnect overlay can offer Upgrade instead of a bare Retry that
+          // The session is ending because the talk budget is spent — not
+          // because anything broke. Say so where the user is looking (a notice
+          // in the transcript, the same amber line reminders use), and remember
+          // it so the overlay can offer Upgrade instead of a bare Retry that
           // would just hit the cap again.
+          //
+          // The server closes the socket next. That close must NOT look like a
+          // network drop: the overlay only appears once the connection is
+          // `disconnected`, and an auto-reconnect keeps it `reconnecting` —
+          // the cap is refused again at connect, another notice lands, and
+          // the user watches a spinner and a growing amber column instead of
+          // the Upgrade button (same shape as the provider outage below).
           _emit(_state.copyWith(
             capReached: true,
             transcripts: [
@@ -1763,6 +1770,10 @@ class LiveController {
               TranscriptEntry(role: 'notice', text: msg.message, isFinal: true),
             ],
           ));
+          if (msg.fatal) {
+            _client.endedByServer();
+            unawaited(disconnect());
+          }
         } else if (msg.fatal &&
             (msg.code == 'provider_credits' ||
                 msg.code == 'provider_unavailable')) {
@@ -1808,6 +1819,13 @@ class LiveController {
           // the close is deliberate — or it reconnects into a fresh (billed)
           // session while disconnect() is still stopping the mic.
           _client.endedByServer();
+          if (reason == 'quota_exceeded') {
+            // The cap notice and the end of the session were already handled
+            // by the `quota_exceeded` error that precedes this message; a
+            // second "session ended" line would only bury it.
+            unawaited(disconnect());
+            return;
+          }
           _emit(_state.copyWith(transcripts: [
             ..._state.transcripts,
             TranscriptEntry(

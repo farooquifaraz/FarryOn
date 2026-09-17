@@ -21,6 +21,8 @@ import asyncio
 
 from datetime import datetime, timezone
 
+import time
+
 import pytest
 
 from app.config import get_settings
@@ -56,6 +58,18 @@ def _session(user_id: int | None = 11) -> Session:
 
     async def _send_error(code, message, fatal=False):  # noqa: ANN001
         s._sent.append((code, message, fatal))
+
+    s._session_started = time.monotonic()
+
+    s._sent_json = []
+
+
+    async def _send_json(payload):  # noqa: ANN001
+
+        s._sent_json.append(payload)
+
+
+    s._send_json = _send_json
 
     s._send_error = _send_error
     return s

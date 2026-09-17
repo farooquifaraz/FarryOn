@@ -347,6 +347,54 @@ void main() {
         reason: 'no reconnect loop into the same failure');
   });
 
+  test('a spent talk budget ends the session with Upgrade on offer, no reconnect',
+      () async {
+    // Refused at connect (before `ready`): the server sends the fatal error
+    // and closes. The overlay that offers Upgrade only shows once the
+    // connection is `disconnected`; an auto-reconnect would keep it
+    // `reconnecting`, be refused again, and stack another notice each time.
+    await controller.connect();
+    await tick();
+    fake.pushJson({
+      'type': 'error',
+      'code': 'quota_exceeded',
+      'message': "You've used your free trial's 30 minutes of talk time.",
+      'fatal': true,
+    });
+    await tick();
+    fake.drop();
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+
+    expect(controller.state.capReached, isTrue);
+    expect(controller.state.transcripts.last.role, 'notice');
+    expect(controller.state.transcripts.where((t) => t.role == 'notice').length, 1,
+        reason: 'one notice, not one per reconnect attempt');
+    expect(controller.state.connection, ConnectionStatus.disconnected,
+        reason: 'the overlay with Upgrade needs a disconnected state');
+  });
+
+  test('the session_expired that follows a quota refusal adds no second notice',
+      () async {
+    // The server sends the fatal error, then session_expired (so builds that
+    // predate the fix stop reconnecting too), then closes. One amber line.
+    await controller.connect();
+    await tick();
+    fake.pushJson({
+      'type': 'error',
+      'code': 'quota_exceeded',
+      'message': "You've used your free trial's 30 minutes of talk time.",
+      'fatal': true,
+    });
+    fake.pushJson({'type': 'session_expired', 'reason': 'quota_exceeded'});
+    await tick();
+    fake.drop();
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+
+    expect(controller.state.capReached, isTrue);
+    expect(controller.state.transcripts.where((t) => t.role == 'notice').length, 1);
+    expect(controller.state.connection, ConnectionStatus.disconnected);
+  });
+
   test('a cascade session speaks assistant replies with the phone voice',
       () async {
     // The `ready.model` label starting with `cascade:` is the whole signal:

@@ -1101,9 +1101,7 @@ class Session:
                 # The talk budget is spent: typing is not a way around it.
                 # Same message, same code — the app shows the cap notice and
                 # the Upgrade overlay.
-                await self._send_error(
-                    "quota_exceeded", self._quota_message(), fatal=True
-                )
+                await self._refuse_over_quota(self._quota_message())
                 return
             if text:
                 # A typed turn never produces user-transcript deltas, so
@@ -2031,9 +2029,7 @@ class Session:
                     used_s=round(total, 1),
                     cap_s=cap,
                 )
-                await self._send_error(
-                    "quota_exceeded", self._quota_message(), fatal=True
-                )
+                await self._refuse_over_quota(self._quota_message())
                 return False
             if self._voice_capped:
                 return False
@@ -2057,6 +2053,17 @@ class Session:
         )
         return f"You've used {window} {budget} of voice on the {plan} plan.{upsell}"
 
+    async def _refuse_over_quota(self, message: str) -> None:
+        """The one way a spent budget is told: the fatal ``quota_exceeded``
+        (the app shows the notice and remembers to offer Upgrade), then
+        ``session_expired`` — which every shipped build treats as a
+        deliberate end and does NOT auto-reconnect from. Without the second
+        message the close that follows looks like a network drop, and a
+        capped app reconnects, is refused again, and stacks another notice
+        every few seconds instead of showing the Upgrade overlay."""
+        await self._send_error("quota_exceeded", message, fatal=True)
+        await self._expire_session("quota_exceeded")
+
     async def _refuse_if_budget_spent(self) -> bool:
         """True — and the session told, fatally — when the talk budget
         loaded by :meth:`_load_voice_usage` is already spent. Nothing is
@@ -2075,7 +2082,7 @@ class Session:
             cap_s=cap,
             plan=self._plan_name,
         )
-        await self._send_error("quota_exceeded", self._quota_message(), fatal=True)
+        await self._refuse_over_quota(self._quota_message())
         return True
 
     def _usage_key(self) -> str:
@@ -2168,11 +2175,9 @@ class Session:
             plan = self._plan_name or get_settings().default_plan
             upsell = "" if plan == "pro" else " Upgrade for more."
             budget = f"{cap // 60} minutes" if cap >= 60 else f"{cap} seconds"
-            await self._send_error(
-                "quota_exceeded",
+            await self._refuse_over_quota(
                 f"You've used today's {budget} of live translation on the "
-                f"{plan} plan.{upsell}",
-                fatal=True,
+                f"{plan} plan.{upsell}"
             )
             return False
         if self._translate_capped:

@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import time
+
 import pytest
 
 from app.config import get_settings
@@ -53,11 +55,17 @@ def _session(user_id: int | None = 7) -> Session:
     # A failed write backs off before retrying, so the meter needs its clock.
     s._voice_flush_retry_at = 0.0
     s._sent = []
+    s._sent_json = []
+    s._session_started = time.monotonic()
 
     async def _send_error(code, message, fatal=False):  # noqa: ANN001
         s._sent.append((code, message))
 
+    async def _send_json(payload):  # noqa: ANN001
+        s._sent_json.append(payload)
+
     s._send_error = _send_error
+    s._send_json = _send_json
     return s
 
 
@@ -231,6 +239,10 @@ async def test_a_spent_budget_is_refused_at_connect_before_any_model(cap_of) -> 
     code, message = s._sent[-1]
     assert code == "quota_exceeded"
     assert "trial" in message.lower() or "month" in message.lower()
+    # ...and then told the session is over ON PURPOSE. Every shipped build
+    # treats session_expired as a deliberate end and does not reconnect; the
+    # error alone would be followed by a close that looks like a drop.
+    assert s._sent_json[-1] == {"type": "session_expired", "reason": "quota_exceeded"}
 
     fresh = _session()
     fresh._voice_used_s = 4.0
@@ -250,3 +262,4 @@ async def test_typing_is_not_a_way_around_a_spent_budget(cap_of) -> None:
     s._t_user_last = 0.0
     await s._dispatch_control({"type": "text", "text": "hello?"})
     assert s._sent[-1][0] == "quota_exceeded"
+    assert s._sent_json[-1]["type"] == "session_expired"
