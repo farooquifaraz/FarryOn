@@ -19,6 +19,7 @@ import '../finder/finder_screen.dart';
 import '../glasses/glasses_connect_flow.dart';
 import '../glasses_lab/glasses_lab_screen.dart';
 import '../settings/settings_screen.dart';
+import '../settings/subscription_screen.dart';
 import '../translate/translate_screen.dart';
 import 'mic_status.dart';
 import 'widgets/aurora_orb.dart';
@@ -172,16 +173,12 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
     }
   }
 
-  Future<void> _startUpgrade(BuildContext context, LiveNotifier notifier) async {
-    // Default the upgrade to Plus — the cheapest paid tier that lifts the cap.
-    // A plan picker can come later; the point at the cap is to get them moving.
-    final problem = await notifier.startUpgrade('plus');
-    if (problem != null && context.mounted) {
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(SnackBar(content: Text(problem)));
-    }
-  }
+  /// The cap overlay's button opens Settings → Subscription: the plan the
+  /// user is on, what they used, and every plan they can move to with its
+  /// price (monthly and yearly). They choose; checkout starts from the plan
+  /// they tap. It used to start a Plus checkout straight away — a decision
+  /// made for them, with nothing to compare it against (Faraz, 2026-09-17).
+  void _showPlans() => SubscriptionScreen.open(context);
 
   void _showPermissionDialog(PermissionOutcome outcome) {
     final permanent = outcome == PermissionOutcome.permanentlyDenied;
@@ -409,7 +406,7 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                 onReconnect: notifier.connect,
                 capReached: state.capReached,
                 serviceDown: state.serviceDown,
-                onUpgrade: () => _startUpgrade(context, notifier),
+                onUpgrade: _showPlans,
               ),
             ),
         ],
@@ -1064,8 +1061,8 @@ class ReconnectOverlay extends StatelessWidget {
           if (capReached) ...[
             const SizedBox(height: 8),
             const Text(
-              'Upgrade to keep talking with Farry — a monthly plan with more '
-              'talk time, cancel anytime.',
+              'Pick a plan to keep talking with Farry — more talk time, '
+              'monthly or yearly, cancel anytime.',
               style: TextStyle(color: Aurora.textMuted, fontSize: 14),
               textAlign: TextAlign.center,
             ),
@@ -1075,7 +1072,7 @@ class ReconnectOverlay extends StatelessWidget {
             FilledButton.icon(
               onPressed: onUpgrade,
               icon: const Icon(Icons.workspace_premium_rounded),
-              label: const Text('Upgrade'),
+              label: const Text('See plans'),
               style: FilledButton.styleFrom(
                 backgroundColor: Aurora.amber,
                 foregroundColor: Colors.black,
