@@ -1045,7 +1045,7 @@ class ReconnectOverlay extends StatelessWidget {
           const SizedBox(height: 12),
           Text(
             capReached
-                ? "That's today's free minutes"
+                ? 'Your talk time is used up'
                 : serviceDown
                     ? 'Service temporarily unavailable'
                     : 'Session ended',
@@ -1064,7 +1064,8 @@ class ReconnectOverlay extends StatelessWidget {
           if (capReached) ...[
             const SizedBox(height: 8),
             const Text(
-              'Upgrade for more voice time each day, or come back tomorrow.',
+              'Upgrade to keep talking with Farry — a monthly plan with more '
+              'talk time, cancel anytime.',
               style: TextStyle(color: Aurora.textMuted, fontSize: 14),
               textAlign: TextAlign.center,
             ),
