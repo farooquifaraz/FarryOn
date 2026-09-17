@@ -336,6 +336,16 @@ class Session:
                 reason = "handshake_failed"
                 return
 
+            # A spent budget is answered BEFORE any provider is connected: a
+            # user past their trial used to get a full Gemini session (paid
+            # for by the operator) that died on its first audio frame, and
+            # could type to it for free for as long as they liked.
+            if self._mode != "translate":
+                await self._load_voice_usage()
+                if await self._refuse_if_budget_spent():
+                    reason = "quota_exceeded"
+                    return
+
             # Now that hello has arrived, build the gateway for the requested
             # provider (or the server default), giving the model the user's
             # local time so reminders resolve in their timezone.
@@ -506,8 +516,6 @@ class Session:
                 ).inc()
                 metrics.TRANSLATE_ACTIVE.inc()
                 self._translate_gauge_held = True
-            else:
-                await self._load_voice_usage()
             await self._send_json(
                 {
                     "type": "ready",
@@ -1089,6 +1097,14 @@ class Session:
             self._last_activity = time.monotonic()
         if mtype == "text":
             text = (message.get("text") or "").strip()
+            if text and self._voice_capped:
+                # The talk budget is spent: typing is not a way around it.
+                # Same message, same code — the app shows the cap notice and
+                # the Upgrade overlay.
+                await self._send_error(
+                    "quota_exceeded", self._quota_message(), fatal=True
+                )
+                return
             if text:
                 # A typed turn never produces user-transcript deltas, so
                 # anchor the turn clock here — response_ms then measures
@@ -2015,15 +2031,8 @@ class Session:
                     used_s=round(total, 1),
                     cap_s=cap,
                 )
-                plan = self._plan_name or get_settings().default_plan
-                upsell = "" if plan == "pro" else " Upgrade for more."
-                # A sub-minute cap (tests, demos) must not read "0 minutes".
-                budget = f"{cap // 60} minutes" if cap >= 60 else f"{cap} seconds"
                 await self._send_error(
-                    "quota_exceeded",
-                    f"You've used today's {budget} of voice on the "
-                    f"{plan} plan.{upsell}",
-                    fatal=True,
+                    "quota_exceeded", self._quota_message(), fatal=True
                 )
                 return False
             if self._voice_capped:
@@ -2031,6 +2040,42 @@ class Session:
 
         if self._voice_pending_s >= _VOICE_FLUSH_EVERY_S:
             self._schedule_voice_flush()
+        return True
+
+    def _quota_message(self) -> str:
+        """The one sentence a spent talk budget gets, wherever it is met."""
+        settings = get_settings()
+        plan = self._plan_name or settings.default_plan
+        cap = plan_cap("voice_seconds", plan)
+        upsell = "" if plan == "pro" else " Upgrade for more."
+        # A sub-minute cap (tests, demos) must not read "0 minutes".
+        budget = f"{cap // 60} minutes" if cap >= 60 else f"{cap} seconds"
+        window = (
+            "your free trial's"
+            if settings.usage_window(plan) == "lifetime"
+            else "this month's"
+        )
+        return f"You've used {window} {budget} of voice on the {plan} plan.{upsell}"
+
+    async def _refuse_if_budget_spent(self) -> bool:
+        """True — and the session told, fatally — when the talk budget
+        loaded by :meth:`_load_voice_usage` is already spent. Nothing is
+        connected upstream in that case: no model, no cost."""
+        if not get_settings().quota_enforcement_enabled:
+            return False
+        cap = plan_cap("voice_seconds", self._plan_name)
+        if cap < 0 or self._voice_used_s < cap:
+            return False
+        self._voice_capped = True
+        logger.info(
+            "quota.refused_at_connect",
+            session_id=self.session_id,
+            user_key=self._usage_key(),
+            used_s=round(self._voice_used_s, 1),
+            cap_s=cap,
+            plan=self._plan_name,
+        )
+        await self._send_error("quota_exceeded", self._quota_message(), fatal=True)
         return True
 
     def _usage_key(self) -> str:

@@ -217,3 +217,36 @@ async def test_the_session_meters_the_same_person_the_tools_do() -> None:
     s = _session(user_id=42)
     ctx = ToolContext(session=None, user_id=42, session_id="test-session")
     assert s._usage_key() == _user_key(ctx) == "u42"
+
+
+async def test_a_spent_budget_is_refused_at_connect_before_any_model(cap_of) -> None:
+    """A user past their trial used to get a full provider session that died
+    on its first audio frame. The budget is checked first now: spent → told
+    once, fatally, and nothing upstream is ever connected."""
+    cap_of(5)
+    s = _session()
+    s._voice_used_s = 5.0  # exactly the cap: spent
+    assert await s._refuse_if_budget_spent() is True
+    assert s._voice_capped is True
+    code, message = s._sent[-1]
+    assert code == "quota_exceeded"
+    assert "trial" in message.lower() or "month" in message.lower()
+
+    fresh = _session()
+    fresh._voice_used_s = 4.0
+    assert await fresh._refuse_if_budget_spent() is False
+    assert fresh._sent == []
+
+
+async def test_typing_is_not_a_way_around_a_spent_budget(cap_of) -> None:
+    cap_of(5)
+    s = _session()
+    s._voice_capped = True
+    s._mode = "agent"
+    s._orchestrator = None
+    s._gateway = None
+    s._last_activity = 0.0
+    s._t_user_first = 0.0
+    s._t_user_last = 0.0
+    await s._dispatch_control({"type": "text", "text": "hello?"})
+    assert s._sent[-1][0] == "quota_exceeded"
