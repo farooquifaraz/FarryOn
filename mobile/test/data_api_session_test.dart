@@ -76,6 +76,22 @@ void main() {
       expect(notes.single.text, 'hi');
     });
 
+    test('a web page in place of data is a clear error, not an empty list',
+        () async {
+      // Cloud 2026-09-17: the edge proxy answered /notes with the admin
+      // site's index.html (200) and the screen showed nothing.
+      final api = apiThat((_) => http.Response(
+            '<!doctype html><html><body>admin</body></html>',
+            200,
+            headers: {'content-type': 'text/html; charset=utf-8'},
+          ));
+      await expectLater(
+        api.notes(),
+        throwsA(isA<http.ClientException>().having(
+            (e) => e.message, 'message', contains('web page'))),
+      );
+    });
+
     test('a 500 does NOT sign the user out', () async {
       // The distinction that matters: a broken backend is not a dead session.
       // Signing out on a 500 would log people out over a blip.

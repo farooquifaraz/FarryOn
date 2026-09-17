@@ -235,6 +235,19 @@ class DataApi {
     if (r.statusCode >= 400) {
       throw http.ClientException('HTTP ${r.statusCode}', r.request?.url);
     }
+    // A 200 that is a web page is not our API: the edge proxy answered a
+    // path it does not forward with the admin site's index.html (cloud,
+    // 2026-09-17: /notes and /tasks came back as 407 bytes of HTML, and the
+    // screens showed nothing at all, no error). Say what happened instead
+    // of failing inside jsonDecode with a message nobody can act on.
+    final type = r.headers['content-type'] ?? '';
+    if (type.contains('text/html')) {
+      throw http.ClientException(
+        'the server answered ${r.request?.url.path} with a web page, not '
+        'data — the proxy is not forwarding this path to the backend',
+        r.request?.url,
+      );
+    }
     return r;
   }
 
