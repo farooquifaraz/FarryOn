@@ -369,7 +369,19 @@ section{padding:100px 5%;position:relative;overflow:hidden}
 .toggle-thumb{width:22px;height:22px;border-radius:50%;background:#fff;
   position:absolute;top:2px;left:3px;transition:.3s;box-shadow:0 2px 6px rgba(0,0,0,.4)}
 .toggle-track.on .toggle-thumb{left:27px}
-.t-label{color:var(--tm)}.t-label.on{color:var(--t);font-weight:600}
+.t-label{color:var(--tm)}
+/* Currency picker: three pills, one selection shared by the plans and the glasses. */
+.fx-pick{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:18px}
+.fx-lbl{font-size:.78rem;color:var(--td);margin-right:4px}
+.fx-btn{border:1px solid rgba(0,212,170,.2);background:rgba(0,212,170,.05);color:var(--tm);
+  border-radius:999px;padding:6px 14px;font-size:.8rem;font-weight:600;cursor:pointer;
+  font-family:var(--fb);transition:.2s}
+.fx-btn:hover{border-color:rgba(0,212,170,.45);color:var(--t)}
+.fx-btn.on{background:rgba(0,212,170,.18);color:var(--t);border-color:rgba(0,212,170,.55)}
+.fx-btn:focus-visible{outline:2px solid var(--pl);outline-offset:2px}
+.fx-note{margin-top:12px;text-align:center;font-size:.76rem;color:var(--td);min-height:1em}
+/* A three-letter code in the superscript slot needs air; a symbol does not. */
+.plan-amount sup.code{font-size:1rem;margin-right:6px;letter-spacing:.02em}.t-label.on{color:var(--t);font-weight:600}
 .save-b{background:rgba(244,196,58,.1);color:var(--gold);
   border:1px solid rgba(244,196,58,.2);font-size:.66rem;font-weight:700;
   padding:3px 9px;border-radius:50px}
@@ -669,6 +681,13 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
       <span class="sec-tag">Choose your glasses</span>
       <h2 class="sec-heading g2">Four models. Same AI.</h2>
       <p class="sec-sub">All four run the full FarryOn intelligence engine. Choose by style, lenses and how long you need the battery to last.</p>
+      <div class="fx-pick" role="group" aria-label="Show prices in">
+        <span class="fx-lbl">Show prices in</span>
+        <button type="button" class="fx-btn on" data-fx="USD" onclick="fxSet('USD')">$ USD</button>
+        <button type="button" class="fx-btn" data-fx="AED" onclick="fxSet('AED')">AED</button>
+        <button type="button" class="fx-btn" data-fx="INR" onclick="fxSet('INR')">₹ INR</button>
+      </div>
+      <p class="fx-note" data-fx-note></p>
     </div>
     <div class="specs-grid">
       <div class="spec-card reveal">
@@ -676,7 +695,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
           <div class="spec-head">
             <span class="spec-icon">🕶</span>
             <div><div class="spec-model">L801 Business</div><div class="spec-type">Classic black frame · Everyday</div></div>
-            <div class="spec-price">AED 300<small>glasses only</small></div>
+            <div class="spec-price"><span class="fx" data-aed="300">AED 300</span><small>glasses only</small></div>
           </div>
           <div class="spec-rows">
             <div class="spec-row"><span class="spec-key">Camera</span><span class="spec-val hi">8MP · 1200P video</span></div>
@@ -697,7 +716,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
           <div class="spec-head">
             <span class="spec-icon">🥽</span>
             <div><div class="spec-model">L802 Premium</div><div class="spec-type">Black browline frame</div></div>
-            <div class="spec-price">AED 350<small>glasses only</small></div>
+            <div class="spec-price"><span class="fx" data-aed="350">AED 350</span><small>glasses only</small></div>
           </div>
           <div class="spec-rows">
             <div class="spec-row"><span class="spec-key">Camera</span><span class="spec-val hi">8MP · 4K video</span></div>
@@ -718,7 +737,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
           <div class="spec-head">
             <span class="spec-icon">🕶</span>
             <div><div class="spec-model">Farry-GS4</div><div class="spec-type">Matte black TR frame · 35 g</div></div>
-            <div class="spec-price">AED 350<small>glasses only</small></div>
+            <div class="spec-price"><span class="fx" data-aed="350">AED 350</span><small>glasses only</small></div>
           </div>
           <div class="spec-rows">
             <div class="spec-row"><span class="spec-key">Camera</span><span class="spec-val hi">8MP · 4K video</span></div>
@@ -740,7 +759,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
           <div class="spec-head">
             <span class="spec-icon">🕶</span>
             <div><div class="spec-model">GS5 MAX</div><div class="spec-type">Metal frame · 3 colours · case</div></div>
-            <div class="spec-price">AED 450<small>glasses only</small></div>
+            <div class="spec-price"><span class="fx" data-aed="450">AED 450</span><small>glasses only</small></div>
           </div>
           <div class="spec-rows">
             <div class="spec-row"><span class="spec-key">Camera</span><span class="spec-val hi">Sony 8MP · 4K video</span></div>
@@ -773,6 +792,13 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
         <div class="toggle-track" id="bt" onclick="toggleBilling()"><div class="toggle-thumb"></div></div>
         <span class="t-label" id="al">Annual <span class="save-b"><!--ANNUAL_SAVING--></span></span>
       </div>
+      <div class="fx-pick" role="group" aria-label="Show prices in">
+        <span class="fx-lbl">Show prices in</span>
+        <button type="button" class="fx-btn on" data-fx="USD" onclick="fxSet('USD')">$ USD</button>
+        <button type="button" class="fx-btn" data-fx="AED" onclick="fxSet('AED')">AED</button>
+        <button type="button" class="fx-btn" data-fx="INR" onclick="fxSet('INR')">₹ INR</button>
+      </div>
+      <p class="fx-note" data-fx-note></p>
     </div>
     <!--PLAN_CARDS-->
 
@@ -781,19 +807,19 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
       <div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:center">
         <div style="flex:1;min-width:250px;max-width:360px;background:rgba(0,212,170,.05);border:1px solid rgba(0,212,170,.18);border-radius:16px;padding:18px 22px;display:flex;justify-content:space-between;align-items:center;gap:12px">
           <div><div style="font-weight:700;font-family:var(--fd)">🕶 L801 Business</div><div style="font-size:.78rem;color:var(--tm)">Classic black frame · 8MP camera</div></div>
-          <div style="text-align:right;white-space:nowrap"><div style="font-weight:700;color:var(--pl);font-size:1.2rem">AED 300</div><div style="font-size:.7rem;color:var(--td)">one-time</div></div>
+          <div style="text-align:right;white-space:nowrap"><div style="font-weight:700;color:var(--pl);font-size:1.2rem"><span class="fx" data-aed="300">AED 300</span></div><div style="font-size:.7rem;color:var(--td)">one-time</div></div>
         </div>
         <div style="flex:1;min-width:250px;max-width:360px;background:rgba(0,212,170,.05);border:1px solid rgba(0,212,170,.18);border-radius:16px;padding:18px 22px;display:flex;justify-content:space-between;align-items:center;gap:12px">
           <div><div style="font-weight:700;font-family:var(--fd)">🥽 L802 Premium</div><div style="font-size:.78rem;color:var(--tm)">Browline frame · 4K video · IP67</div></div>
-          <div style="text-align:right;white-space:nowrap"><div style="font-weight:700;color:var(--pl);font-size:1.2rem">AED 350</div><div style="font-size:.7rem;color:var(--td)">one-time</div></div>
+          <div style="text-align:right;white-space:nowrap"><div style="font-weight:700;color:var(--pl);font-size:1.2rem"><span class="fx" data-aed="350">AED 350</span></div><div style="font-size:.7rem;color:var(--td)">one-time</div></div>
         </div>
         <div style="flex:1;min-width:250px;max-width:360px;background:rgba(0,212,170,.05);border:1px solid rgba(0,212,170,.18);border-radius:16px;padding:18px 22px;display:flex;justify-content:space-between;align-items:center;gap:12px">
           <div><div style="font-weight:700;font-family:var(--fd)">🕶 Farry-GS4</div><div style="font-size:.78rem;color:var(--tm)">Matte TR frame · 35 g · 4 lens options</div></div>
-          <div style="text-align:right;white-space:nowrap"><div style="font-weight:700;color:var(--pl);font-size:1.2rem">AED 350</div><div style="font-size:.7rem;color:var(--td)">one-time</div></div>
+          <div style="text-align:right;white-space:nowrap"><div style="font-weight:700;color:var(--pl);font-size:1.2rem"><span class="fx" data-aed="350">AED 350</span></div><div style="font-size:.7rem;color:var(--td)">one-time</div></div>
         </div>
         <div style="flex:1;min-width:250px;max-width:360px;background:rgba(0,212,170,.05);border:1px solid rgba(0,212,170,.28);border-radius:16px;padding:18px 22px;display:flex;justify-content:space-between;align-items:center;gap:12px">
           <div><div style="font-weight:700;font-family:var(--fd)">🕶 GS5 MAX</div><div style="font-size:.78rem;color:var(--tm)">Charging case · 3 colours · Sony 8MP</div></div>
-          <div style="text-align:right;white-space:nowrap"><div style="font-weight:700;color:var(--pl);font-size:1.2rem">AED 450</div><div style="font-size:.7rem;color:var(--td)">one-time</div></div>
+          <div style="text-align:right;white-space:nowrap"><div style="font-weight:700;color:var(--pl);font-size:1.2rem"><span class="fx" data-aed="450">AED 450</span></div><div style="font-size:.7rem;color:var(--td)">one-time</div></div>
         </div>
       </div>
     </div>
@@ -856,6 +882,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
   </div>
 </footer>
 
+<!--PRICING_RATES-->
 <script>
 /* ═══════════════════════════════════════════════════════════════
    NEURAL NETWORK — fixed overlay, mix-blend-mode:screen
@@ -945,6 +972,79 @@ document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
    BILLING TOGGLE
 ═══════════════════════════════════════════ */
 let ann=false;
+/* ═══════════════════════════════════════════
+   CURRENCY — USD / AED / INR, converted in the browser
+   Rates come from #fx-rates (embedded at render, ECB-style daily rates,
+   cached 12 h server-side). App plans are billed in USD and the glasses are
+   priced in AED; every other figure is a conversion and the note says so.
+═══════════════════════════════════════════ */
+var FX=(function(){try{return JSON.parse(document.getElementById('fx-rates').textContent)}catch(e){return null}})();
+var fxCur='USD';
+var FX_SYM={USD:'$',AED:'AED ',INR:'₹'};
+var FX_ZONES={'Asia/Kolkata':'INR','Asia/Calcutta':'INR','Asia/Dubai':'AED','Asia/Muscat':'AED',
+  'Asia/Riyadh':'AED','Asia/Qatar':'AED','Asia/Bahrain':'AED','Asia/Kuwait':'AED'};
+function fxDetect(){
+  /* The visitor's own choice first; then where their clock says they are
+     (no permission prompt, unlike GPS); then the browser's language region. */
+  try{var s=localStorage.getItem('fx-cur');if(s&&FX&&FX.rates[s])return s}catch(e){}
+  try{var tz=Intl.DateTimeFormat().resolvedOptions().timeZone;if(FX_ZONES[tz])return FX_ZONES[tz]}catch(e){}
+  var l=(navigator.language||'').toUpperCase();
+  if(/-IN$/.test(l))return 'INR';
+  if(/-(AE|SA|QA|BH|KW|OM)$/.test(l))return 'AED';
+  return 'USD';
+}
+function fxConv(amount,from,to){
+  if(!FX||from===to)return amount;
+  var r=FX.rates;return amount/(r[from]||1)*(r[to]||1);
+}
+function fxNum(v,cur){
+  return new Intl.NumberFormat(cur==='INR'?'en-IN':'en-US',{maximumFractionDigits:0}).format(Math.round(v));
+}
+function fxMoney(amount,from,cur){
+  return FX_SYM[cur]+fxNum(fxConv(amount,from,cur),cur);
+}
+function fxApply(){
+  var cur=fxCur, has=!!(FX&&FX.rates[cur]);
+  if(!has)cur='USD';
+  /* Plan cards: the number keeps its USD data (the annual toggle reads it),
+     only what is shown changes. In USD the original text is kept exactly —
+     "$5.42" must not become "$5". */
+  document.querySelectorAll('.plan-amount').forEach(function(el){
+    var sup=el.querySelector('sup'),pv=el.querySelector('.pv');if(!sup||!pv)return;
+    var usd=parseFloat(ann?pv.dataset.a:pv.dataset.m);
+    if(cur==='USD'){sup.textContent='$';pv.textContent=ann?pv.dataset.a:pv.dataset.m}
+    else{sup.textContent=FX_SYM[cur].trim();pv.textContent=fxNum(fxConv(usd,'USD',cur),cur)}
+    sup.classList.toggle('code',sup.textContent.length>1);
+  });
+  document.querySelectorAll('.fx-usd[data-usd]').forEach(function(el){
+    el.textContent=cur==='USD'?'$'+el.dataset.usd:fxMoney(parseFloat(el.dataset.usd),'USD',cur);
+  });
+  document.querySelectorAll('.fx[data-aed]').forEach(function(el){
+    el.textContent=cur==='AED'?'AED '+el.dataset.aed:fxMoney(parseFloat(el.dataset.aed),'AED',cur);
+  });
+  document.querySelectorAll('.fx-btn').forEach(function(b){
+    b.classList.toggle('on',b.dataset.fx===cur);b.setAttribute('aria-pressed',b.dataset.fx===cur?'true':'false');
+  });
+  var note='';
+  if(FX){
+    var r=FX.rates,approx=FX.source==='fallback'?'approximate ':'';
+    if(cur==='USD')note='App plans are billed in USD · glasses are priced in AED (1 USD = '+r.AED.toFixed(2)+' AED, '+approx+'rate of '+FX.asOf+')';
+    else if(cur==='AED')note='App plans are billed in USD — shown in AED at the '+approx+'rate of '+FX.asOf+' (1 USD = '+r.AED.toFixed(2)+' AED) · glasses are priced in AED';
+    else note='Converted at the '+approx+'rate of '+FX.asOf+' (1 USD = ₹'+r.INR.toFixed(2)+', 1 AED = ₹'+(r.INR/r.AED).toFixed(2)+') · app plans are billed in USD, glasses are priced in AED';
+  }
+  document.querySelectorAll('[data-fx-note]').forEach(function(el){el.textContent=note});
+}
+function fxSet(cur){
+  if(!FX||!FX.rates[cur])return;
+  fxCur=cur;try{localStorage.setItem('fx-cur',cur)}catch(e){}
+  fxApply();
+}
+(function(){
+  if(!FX){document.querySelectorAll('.fx-pick').forEach(function(el){el.style.display='none'});return}
+  fxCur=fxDetect();
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',fxApply);else fxApply();
+})();
+
 function toggleBilling(){
   ann=!ann;
   document.getElementById('bt').classList.toggle('on',ann);
@@ -954,6 +1054,7 @@ function toggleBilling(){
   // The word has to follow the number: a yearly total under "per month" is a lie.
   document.querySelectorAll('.per').forEach(el=>el.textContent=ann?el.dataset.a:el.dataset.m);
   document.querySelectorAll('.ann').forEach(el=>el.style.display=ann?'inline':'none');
+  fxApply();
 }
 
 /* ═══════════════════════════════════════════

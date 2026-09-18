@@ -87,7 +87,8 @@ def _card(
             f'<div class="plan-period">'
             f'<span class="per" data-m="per month" data-a="per year">per month</span>'
             f'<span class="ann" style="display:none"> · works out at '
-            f'${per_month:.2f}/mo</span></div>'
+            f'<span class="fx-usd" data-usd="{per_month:.2f}">${per_month:.2f}</span>'
+            f'/mo</span></div>'
         )
 
     popular = bool(copy.get("popular"))

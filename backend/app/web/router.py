@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from app.config import get_settings
-from app.web import contact, pricing, products
+from app.web import contact, pricing, products, rates
 from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -91,6 +91,9 @@ async def landing() -> HTMLResponse:
         # nothing when their settings are unset — which is the point: the page
         # used to ship a WhatsApp link and four social icons that went nowhere.
         page = contact.render(page, settings)
+        # USD / AED / INR rates for the currency picker — one JSON block, so
+        # the browser converts locally and no third-party script is loaded.
+        page = rates.render(page, await rates.current())
         return HTMLResponse(
             page, headers={"Content-Security-Policy": _SITE_CSP}
         )

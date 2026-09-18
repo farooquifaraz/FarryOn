@@ -47,7 +47,7 @@ def test_the_card_price_is_the_catalog_price(settings) -> None:
 
 def test_the_annual_note_is_the_yearly_price_divided_by_twelve(settings) -> None:
     html = _cards(settings)
-    notes = re.findall(r"works out at \$([0-9.]+)/mo", html)
+    notes = re.findall(r"works out at (?:<[^>]+>)?\$([0-9.]+)(?:</span>)?/mo", html)
     expected = [
         f"{float(p['price_usd']) / 12:.2f}"
         for n, p in settings.plan_catalog.items()
