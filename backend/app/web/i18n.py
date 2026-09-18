@@ -168,7 +168,8 @@ def _switch_html(lang: str, path_en: str) -> str:
                 f'<a href="{href}" hreflang="{code}" lang="{code}" '
                 f'onclick="try{{localStorage.setItem(\'site-lang\',\'{code}\')}}catch(e){{}}">{label}</a>'
             )
-    return f'<li class="lang-switch" aria-label="Language">{" <span class=\"lang-sep\">|</span> ".join(parts)}</li>'
+    sep = ' <span class="lang-sep">|</span> '
+    return f'<li class="lang-switch" aria-label="Language">{sep.join(parts)}</li>'
 
 
 _SWITCH_CSS = """
