@@ -15,11 +15,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from app.config import get_settings
-from app.web import contact, pricing, products, rates
+from app.web import contact, i18n, pricing, products, rates
 from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -76,9 +76,15 @@ def _build_path(abi: str) -> Path | None:
     return path if path.is_file() else None
 
 
-@router.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def landing() -> HTMLResponse:
-    """The public marketing / download page."""
+def _site_origin(request: Request) -> str:
+    """The absolute origin for hreflang links — the host the visitor used."""
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "farryon.izylrn.com"
+    scheme = request.headers.get("x-forwarded-proto") or ("https" if "localhost" not in host else "http")
+    return f"{scheme}://{host}"
+
+
+async def _landing(lang: str, request: Request) -> HTMLResponse:
+    """The public marketing / download page, in one language."""
     try:
         # Prices and allowances are filled in from Settings.plan_catalog, so the
         # page can never quote a plan the API would refuse to sell.
@@ -94,16 +100,28 @@ async def landing() -> HTMLResponse:
         # USD / AED / INR rates for the currency picker — one JSON block, so
         # the browser converts locally and no third-party script is loaded.
         page = rates.render(page, await rates.current())
+        # Last: the language. Everything above rendered English; this
+        # translates the finished page text node by text node.
+        page = i18n.localize(page, lang, path_en="/", site=_site_origin(request))
         return HTMLResponse(
             page, headers={"Content-Security-Policy": _SITE_CSP}
         )
-    except OSError as exc:  # pragma: no cover - only if the asset is missing
+    except OSError as exc:  # pragma: no cover - the template ships with the package
         logger.warning("site.index_missing", error=str(exc))
-        raise HTTPException(status_code=404, detail="site not found") from exc
+        raise HTTPException(status_code=404, detail="page not found") from exc
 
 
-@router.get("/about", response_class=HTMLResponse, include_in_schema=False)
-async def about_page() -> HTMLResponse:
+@router.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def landing(request: Request) -> HTMLResponse:
+    return await _landing("en", request)
+
+
+@router.get("/hi", response_class=HTMLResponse, include_in_schema=False)
+async def landing_hi(request: Request) -> HTMLResponse:
+    return await _landing("hi", request)
+
+
+async def _about(lang: str, request: Request) -> HTMLResponse:
     """Who FarryOn is.
 
     The page a visitor opens before trusting an unfamiliar brand with AED 350 —
@@ -116,7 +134,18 @@ async def about_page() -> HTMLResponse:
     except OSError as exc:  # pragma: no cover - the template ships with the package
         logger.warning("site.about_missing", error=str(exc))
         raise HTTPException(status_code=404, detail="page not found") from exc
+    page = i18n.localize(page, lang, path_en="/about", site=_site_origin(request))
     return HTMLResponse(page, headers={"Content-Security-Policy": _SITE_CSP})
+
+
+@router.get("/about", response_class=HTMLResponse, include_in_schema=False)
+async def about_page(request: Request) -> HTMLResponse:
+    return await _about("en", request)
+
+
+@router.get("/hi/about", response_class=HTMLResponse, include_in_schema=False)
+async def about_page_hi(request: Request) -> HTMLResponse:
+    return await _about("hi", request)
 
 
 @router.get("/farry-icon.png", include_in_schema=False)

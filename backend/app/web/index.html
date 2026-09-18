@@ -1027,10 +1027,18 @@ function fxApply(){
   });
   var note='';
   if(FX){
-    var r=FX.rates,approx=FX.source==='fallback'?'approximate ':'';
-    if(cur==='USD')note='App plans are billed in USD · glasses are priced in AED (1 USD = '+r.AED.toFixed(2)+' AED, '+approx+'rate of '+FX.asOf+')';
-    else if(cur==='AED')note='App plans are billed in USD — shown in AED at the '+approx+'rate of '+FX.asOf+' (1 USD = '+r.AED.toFixed(2)+' AED) · glasses are priced in AED';
-    else note='Converted at the '+approx+'rate of '+FX.asOf+' (1 USD = ₹'+r.INR.toFixed(2)+', 1 AED = ₹'+(r.INR/r.AED).toFixed(2)+') · app plans are billed in USD, glasses are priced in AED';
+    var r=FX.rates,hi=document.documentElement.lang==='hi';
+    var approx=FX.source==='fallback'?(hi?'अनुमानित ':'approximate '):'';
+    var aed=r.AED.toFixed(2),inr=r.INR.toFixed(2),inrAed=(r.INR/r.AED).toFixed(2);
+    if(hi){
+      if(cur==='USD')note='ऐप प्लान USD में बिल होते हैं · ग्लासेस की कीमत AED में है (1 USD = '+aed+' AED, '+FX.asOf+' का '+approx+'रेट)';
+      else if(cur==='AED')note='ऐप प्लान USD में बिल होते हैं — यहाँ '+FX.asOf+' के '+approx+'रेट पर AED में दिखाए गए हैं (1 USD = '+aed+' AED) · ग्लासेस की कीमत AED में है';
+      else note=FX.asOf+' के '+approx+'रेट पर बदला गया (1 USD = ₹'+inr+', 1 AED = ₹'+inrAed+') · ऐप प्लान USD में बिल होते हैं, ग्लासेस की कीमत AED में है';
+    }else{
+      if(cur==='USD')note='App plans are billed in USD · glasses are priced in AED (1 USD = '+aed+' AED, '+approx+'rate of '+FX.asOf+')';
+      else if(cur==='AED')note='App plans are billed in USD — shown in AED at the '+approx+'rate of '+FX.asOf+' (1 USD = '+aed+' AED) · glasses are priced in AED';
+      else note='Converted at the '+approx+'rate of '+FX.asOf+' (1 USD = ₹'+inr+', 1 AED = ₹'+inrAed+') · app plans are billed in USD, glasses are priced in AED';
+    }
   }
   document.querySelectorAll('[data-fx-note]').forEach(function(el){el.textContent=note});
 }
