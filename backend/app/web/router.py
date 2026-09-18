@@ -77,10 +77,16 @@ def _build_path(abi: str) -> Path | None:
 
 
 def _site_origin(request: Request) -> str:
-    """The absolute origin for hreflang links — the host the visitor used."""
+    """The absolute origin for hreflang links — the host the visitor used.
+
+    Always https except on a developer's localhost: the public site is only
+    ever reached over TLS, but the backend sits behind two proxies (NPM ->
+    Caddy) and the X-Forwarded-Proto that reaches it says "http" — the leg
+    between them — which put http:// alternates on the live page (2026-09-18).
+    """
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "farryon.izylrn.com"
-    scheme = request.headers.get("x-forwarded-proto") or ("https" if "localhost" not in host else "http")
-    return f"{scheme}://{host}"
+    local = host.split(":")[0] in ("localhost", "127.0.0.1")
+    return f"{'http' if local else 'https'}://{host}"
 
 
 async def _landing(lang: str, request: Request) -> HTMLResponse:

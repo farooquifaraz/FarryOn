@@ -116,6 +116,8 @@ async def test_the_hindi_routes_serve_hindi_pages() -> None:
     assert about.status_code == 200 and "ग्लासेस जो देखते हैं।" in about.text
     assert 'href="/hi"' in about.text  # the About page's links stay in Hindi
     assert '<html lang="en">' in english.text and "site-lang" in english.text
+    # hreflang alternates are always https off localhost, whatever the proxy leg says
+    assert 'hreflang="hi" href="https://t/hi"' in english.text
     # every internal link on the Hindi pages has a route
     routes = [r for r in web.router.routes if hasattr(r, "path_regex")]
     for html in (home.text, about.text):
