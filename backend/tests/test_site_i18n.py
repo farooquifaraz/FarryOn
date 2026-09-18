@@ -124,14 +124,24 @@ async def test_the_hindi_routes_serve_hindi_pages() -> None:
             assert any(r.path_regex.match(path) for r in routes), f"{path} has no backend route"
 
 
-def test_every_hindi_key_is_still_on_the_page_or_a_rule() -> None:
+def test_every_hindi_key_is_still_on_the_page_or_a_rule(tmp_path, monkeypatch) -> None:
     """A translation for text that no longer exists is dead weight — and a
-    sign the English changed and the Hindi silently fell back."""
+    sign the English changed and the Hindi silently fell back.
+
+    Rendered with every optional part switched on (a WhatsApp number, a
+    network marked "soon", a catalog on disk) so their strings count as
+    present whatever this machine's .env and media directory hold."""
     tr = i18n.load("hi")
     assert tr is not None
-    settings = get_settings().model_copy(update={"whatsapp_number": "+971558167757", "social_linkedin": "soon"})
-    landing = _english_landing()
-    landing = contact.render(landing, settings)
+    settings = get_settings().model_copy(
+        update={"whatsapp_number": "+971558167757", "social_linkedin": "soon", "social_instagram": None}
+    )
+    (tmp_path / "catalogs").mkdir()
+    (tmp_path / "catalogs" / "l801.pdf").write_bytes(b"%PDF-1.4 x")
+    monkeypatch.setattr(products, "media_root", lambda _s: tmp_path)
+    products._cache.clear()
+    page = web._INDEX.read_text(encoding="utf-8")
+    landing = contact.render(products.render(pricing.render(page, settings), settings), settings)
     about = contact.render(web._ABOUT.read_text(encoding="utf-8"), settings)
     present = set(_text_nodes(landing)) | set(_text_nodes(about))
     for html in (landing, about):
