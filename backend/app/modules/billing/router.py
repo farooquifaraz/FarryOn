@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.core.deps import get_current_user, get_db, require_permission
+from app.core.region import region_from_headers
 from app.core.responses import AppError, ok
 from app.db.models import User
 from app.modules.audit.service import write_audit
@@ -78,24 +79,36 @@ async def checkout_cancel_page() -> "HTMLResponse":
 
 @me_router.get("/me")
 async def subscription_overview_endpoint(
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """The caller's plan, today's usage against its caps, and what they could
-    upgrade to. Backs the app's Settings → Subscription screen."""
-    return ok(await service.subscription_overview(db, user=user))
+    upgrade to. Backs the app's Settings → Subscription screen. The plans
+    offered are the caller's region's (core/region.py: X-Region / X-Timezone
+    headers from the app; global otherwise)."""
+    return ok(
+        await service.subscription_overview(
+            db, user=user, region=region_from_headers(request.headers)
+        )
+    )
 
 
 @me_router.post("/checkout")
 async def create_checkout_endpoint(
     body: CheckoutRequest,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Start a Stripe Checkout Session for the caller. Returns ``{url}`` to
     redirect to. Authenticated as the user themselves — no admin permission;
-    anyone signed in may subscribe."""
-    return ok(await service.create_checkout(db, user=user, plan_name=body.plan))
+    anyone signed in may subscribe (to a plan of their region)."""
+    return ok(
+        await service.create_checkout(
+            db, user=user, plan_name=body.plan, region=region_from_headers(request.headers)
+        )
+    )
 
 
 def _client_ip(request: Request) -> str | None:

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,25 +72,38 @@ async def active_plan_name(db: AsyncSession, user_id: int | None) -> str:
     if user_id is None:
         return default
 
-    row = (
+    rows = (
         await db.execute(
-            select(Plan.name)
+            select(Plan.name, Subscription.current_period_end)
             .join(Subscription, Subscription.plan_id == Plan.id)
             .where(
                 Subscription.user_id == user_id,
                 Subscription.status.in_(ACTIVE_STATUSES),
             )
             .order_by(Subscription.started_at.desc())
-            .limit(1)
         )
-    ).scalar_one_or_none()
-    return row or default
+    ).all()
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    for name, period_end in rows:
+        # A one-time plan has nobody renewing it: once the period it bought is
+        # over, it is over, and the caps fall back to the default tier. A
+        # renewing plan is left to its provider's events (past_due, deleted)
+        # — its period end moves on every invoice and must not be judged here.
+        if settings.plan_is_one_time(name) and period_end is not None:
+            end = period_end if period_end.tzinfo else period_end.replace(tzinfo=timezone.utc)
+            if end <= now:
+                continue
+        return name
+    return default
 
 
 # ---- The signed-in user's own view ----------------------------------------
 
 
-async def subscription_overview(db: AsyncSession, *, user: User) -> dict:
+async def subscription_overview(
+    db: AsyncSession, *, user: User, region: str | None = None
+) -> dict:
     """What the app's Subscription screen shows: my plan, this month's usage,
     and what I could upgrade to.
 
@@ -131,11 +144,33 @@ async def subscription_overview(db: AsyncSession, *, user: User) -> dict:
             )
         usage[metric] = {"used": int(used), "cap": cap}
 
+    # Only this region's price list: the India tiers to a request from India,
+    # the USD tiers to everyone else. A plan the DB knows but the catalog
+    # does not has no region and is treated as global.
     sellable = [
         p
         for p in await list_plans(db)
-        if p["is_active"] and p["name"] != plan_name
+        if p["is_active"]
+        and p["name"] != plan_name
+        and settings.plan_region(p["name"]) == region
     ]
+    # When the current plan was bought outright, say until when it runs: the
+    # screen shows "valid till" and offers to buy the next period.
+    period_end = None
+    if settings.plan_is_one_time(plan_name):
+        period_end = (
+            await db.execute(
+                select(Subscription.current_period_end)
+                .join(Plan, Subscription.plan_id == Plan.id)
+                .where(
+                    Subscription.user_id == user.id,
+                    Plan.name == plan_name,
+                    Subscription.status.in_(ACTIVE_STATUSES),
+                )
+                .order_by(Subscription.current_period_end.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
     return {
         "plan": plan_name,
         "plan_title": settings.plan_title(plan_name),
@@ -149,6 +184,9 @@ async def subscription_overview(db: AsyncSession, *, user: User) -> dict:
         "interval": plan_row.interval if plan_row else "month",
         "usage": usage,
         "upgrades": sellable,
+        "region": region,
+        "one_time": settings.plan_is_one_time(plan_name),
+        "period_end": period_end.isoformat() if period_end else None,
         "checkout_available": bool(
             settings.stripe_secret_key and settings.stripe_price_ids
         ),
@@ -158,7 +196,9 @@ async def subscription_overview(db: AsyncSession, *, user: User) -> dict:
 # ---- Checkout ------------------------------------------------------------
 
 
-async def create_checkout(db: AsyncSession, *, user: User, plan_name: str) -> dict:
+async def create_checkout(
+    db: AsyncSession, *, user: User, plan_name: str, region: str | None = None
+) -> dict:
     """Start a Stripe Checkout Session for ``user`` to subscribe to ``plan_name``.
 
     Returns ``{"url": <hosted checkout url>}``. The caller (the user's own
@@ -186,8 +226,21 @@ async def create_checkout(db: AsyncSession, *, user: User, plan_name: str) -> di
     # a second live subscription in Stripe and BOTH would charge every month —
     # the customer pays twice and finds out on a bank statement. Plan changes go
     # through cancel-then-subscribe (or a Stripe portal later), not stacking.
+    # A regional plan is only sold to its region, and a global plan only
+    # outside every region — the two lists never mix on one screen or in one
+    # checkout. (Which region a request is in: core/region.py.)
+    if settings.plan_region(plan_name) != region:
+        raise AppError(
+            "REGION_MISMATCH",
+            "That plan isn't available where you are.",
+            status_code=400,
+        )
     current = await active_plan_name(db, user.id)
-    if current != settings.default_plan:
+    # Buying the SAME one-time plan again is how it is extended (the new
+    # period starts when the current one ends); anything else while a plan is
+    # live is still cancel-then-subscribe.
+    same_one_time = current == plan_name and settings.plan_is_one_time(plan_name)
+    if current != settings.default_plan and not same_one_time:
         raise AppError(
             "ALREADY_SUBSCRIBED",
             f"You're already on the {settings.plan_title(current)} plan. To "
@@ -211,6 +264,7 @@ async def create_checkout(db: AsyncSession, *, user: User, plan_name: str) -> di
             client_reference_id=str(user.id),
             customer_email=user.email,
             metadata={"user_id": str(user.id), "plan": plan_name},
+            mode="payment" if settings.plan_is_one_time(plan_name) else "subscription",
         )
     except StripeError as e:
         raise AppError(
@@ -534,11 +588,55 @@ async def _handle_subscription_event(
         ).scalar_one_or_none()
         if plan is None:
             raise AppError("NOT_FOUND", f"Unknown plan: {event.plan_name}", status_code=404)
+        from app.config import get_settings
+
+        settings = get_settings()
+        period_end = event.period_end
+        if settings.plan_is_one_time(plan.name):
+            # One payment buys one period, counted from the end of the period
+            # already bought if there is one still running — paying again on
+            # day 20 of 30 gives 40 days, not a restart. Nobody renews this;
+            # active_plan_name() lets it lapse when the date passes.
+            length = timedelta(days=365 if settings.plan_interval(plan.name) == "year" else 30)
+            running = (
+                await db.execute(
+                    select(Subscription)
+                    .where(
+                        Subscription.user_id == event.user_id,
+                        Subscription.plan_id == plan.id,
+                        Subscription.status.in_(ACTIVE_STATUSES),
+                        Subscription.current_period_end.is_not(None),
+                    )
+                    .order_by(Subscription.current_period_end.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            start = now
+            if running is not None and running.current_period_end is not None:
+                end = running.current_period_end
+                end = end if end.tzinfo else end.replace(tzinfo=timezone.utc)
+                if end > now:
+                    start = end
+            period_end = start + length
+            if running is not None and start != now:
+                running.current_period_end = period_end
+                running.status = "active"
+                # The new payment is remembered on the row so a redelivery of
+                # this event is a duplicate, not a second extension.
+                running.provider_subscription_id = event.provider_subscription_id
+                await db.flush()
+                logger.info(
+                    "billing.subscription_extended",
+                    user_id=event.user_id,
+                    plan=plan.name,
+                    until=period_end.isoformat(),
+                )
+                return {"subscription_id": running.id, "status": running.status, "extended": True}
         sub = Subscription(
             user_id=event.user_id,
             plan_id=plan.id,
             status="active",
-            current_period_end=event.period_end,
+            current_period_end=period_end,
             provider=provider,
             provider_subscription_id=event.provider_subscription_id,
         )

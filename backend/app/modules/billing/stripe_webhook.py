@@ -110,11 +110,16 @@ def to_events(event: dict[str, Any]) -> list[WebhookEvent]:
             {"user_id": obj.get("client_reference_id")}
         )
         plan = meta.get("plan")
-        sub_id = obj.get("subscription")
+        # A renewing plan completes with a subscription id; a one-time plan
+        # (mode "payment") with a payment intent. The intent id becomes the
+        # "subscription" id of the period it bought — the same idempotency
+        # key on redelivery, and what the payment row links to.
+        one_time = obj.get("mode") == "payment"
+        sub_id = obj.get("payment_intent") if one_time else obj.get("subscription")
         if uid is None or not plan or not sub_id:
             logger.warning("stripe.checkout_completed_missing_fields", have=list(meta))
             return []
-        return [
+        events = [
             WebhookEvent(
                 event_type="subscription.created",
                 user_id=uid,
@@ -122,6 +127,21 @@ def to_events(event: dict[str, Any]) -> list[WebhookEvent]:
                 provider_subscription_id=str(sub_id),
             )
         ]
+        if one_time and obj.get("amount_total") is not None:
+            # No invoice ever follows a one-time checkout, so the money is
+            # recorded from the session itself.
+            events.append(
+                WebhookEvent(
+                    event_type="payment.succeeded",
+                    user_id=uid,
+                    plan_name=plan,
+                    provider_subscription_id=str(sub_id),
+                    provider_payment_id=str(sub_id),
+                    amount_cents=int(obj.get("amount_total") or 0),
+                    currency=str(obj.get("currency") or "usd").upper(),
+                )
+            )
+        return events
 
     if kind == "customer.subscription.deleted":
         uid = _user_id(obj.get("metadata") or {})

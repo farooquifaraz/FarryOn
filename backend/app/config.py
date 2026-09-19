@@ -576,6 +576,20 @@ class Settings(BaseSettings):
             "lite_yearly": {"price_usd": 60.0,  "period": "year", "talk_minutes": 200,  "image_scans": 150,  "web_searches": 200},   # noqa: E501
             "plus_yearly": {"price_usd": 150.0, "period": "year", "talk_minutes": 500,  "image_scans": 500,  "web_searches": 800},   # noqa: E501
             "pro_yearly":  {"price_usd": 250.0, "period": "year", "talk_minutes": 1000, "image_scans": 1000, "web_searches": 1000},  # noqa: E501
+            # India price list (Faraz, 2026-09-20): priced in INR, sold as a
+            # ONE-TIME payment for the period (no auto-renew — Indian cards
+            # need an RBI e-mandate for recurring charges to a foreign
+            # merchant, and most refuse it), shown only to requests from
+            # India (core/region.py). Caps stay monthly. Prices are GST-
+            # inclusive; at the measured costs every tier stays profitable
+            # even at 100% use (docs/REVENUE_PLAN.md, India table).
+            #                   price   period    talk  scans searches
+            "sathi_in": {"title": "साथी", "currency": "INR", "region": "IN", "billing": "one_time", "price_inr": 299.0,   "period": "month", "talk_minutes": 120, "image_scans": 70,  "web_searches": 110},
+            "plus_in":  {"title": "Plus", "currency": "INR", "region": "IN", "billing": "one_time", "price_inr": 599.0,   "period": "month", "talk_minutes": 250, "image_scans": 130, "web_searches": 225},
+            "pro_in":   {"title": "Pro",  "currency": "INR", "region": "IN", "billing": "one_time", "price_inr": 999.0,   "period": "month", "talk_minutes": 400, "image_scans": 240, "web_searches": 400},
+            "sathi_in_yearly": {"title": "साथी", "currency": "INR", "region": "IN", "billing": "one_time", "price_inr": 3300.0,  "period": "year", "talk_minutes": 120, "image_scans": 70,  "web_searches": 110},
+            "plus_in_yearly":  {"title": "Plus", "currency": "INR", "region": "IN", "billing": "one_time", "price_inr": 5500.0,  "period": "year", "talk_minutes": 250, "image_scans": 130, "web_searches": 225},
+            "pro_in_yearly":   {"title": "Pro",  "currency": "INR", "region": "IN", "billing": "one_time", "price_inr": 11000.0, "period": "year", "talk_minutes": 400, "image_scans": 240, "web_searches": 400},
         }
     )
     # Days used to spread a monthly voice budget into a daily cap. 30 is the
@@ -756,8 +770,31 @@ class Settings(BaseSettings):
         return bool(row) and str(row.get("period", "month")) == "trial"
 
     def plan_price_cents(self, name: str) -> int:
-        """The plan's monthly price in cents (0 for free/unsold)."""
-        return int(round(float(self._plan(name).get("price_usd", 0)) * 100))
+        """The plan's price in minor units of its own currency (0 for
+        free/unsold): cents for a USD plan, paise for an INR one."""
+        row = self._plan(name)
+        field = "price_inr" if self.plan_currency(name) == "INR" else "price_usd"
+        return round(float(row.get(field, 0)) * 100)
+
+    def plan_currency(self, name: str | None) -> str:
+        """``"USD"`` unless the catalog row says otherwise (``"INR"``)."""
+        return str(self._plan(name).get("currency", "USD")).upper()
+
+    def plan_region(self, name: str | None) -> str | None:
+        """The region a plan is sold in — ``"IN"`` — or ``None`` for the
+        global list. Regional plans are offered only to requests from that
+        region (core/region.py); global plans only to everyone else."""
+        region = self._plan(name).get("region")
+        return str(region).upper() if region else None
+
+    def plan_is_one_time(self, name: str | None) -> bool:
+        """True when the plan is bought as a single payment for its period
+        rather than a renewing subscription (the India plans)."""
+        return str(self._plan(name).get("billing", "recurring")) == "one_time"
+
+    def plans_for_region(self, region: str | None) -> list[str]:
+        """Catalog names sold to ``region`` (``None`` = the global list)."""
+        return [n for n in self.plan_catalog if self.plan_region(n) == region]
 
     def _derive_plan_limits(self) -> dict[str, dict[str, int]]:
         """Quota caps derived from :attr:`plan_catalog`.
@@ -800,7 +837,14 @@ class Settings(BaseSettings):
         """
         raw = name or self.default_plan
         base = raw.removesuffix("_yearly")
-        title = base[:1].upper() + base[1:]
+        # A catalog row may carry its own title (the India tiers: "साथी");
+        # otherwise the key is capitalised, minus a region suffix.
+        own = self.plan_catalog.get(raw, {}).get("title")
+        if own:
+            title = str(own)
+        else:
+            base = base.removesuffix("_in")
+            title = base[:1].upper() + base[1:]
         return f"{title} (yearly)" if raw.endswith("_yearly") else title
 
     def usage_window(self, plan: str | None) -> str:

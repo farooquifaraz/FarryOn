@@ -77,6 +77,33 @@ Stripe **2.9% + $0.30**।
 
 ---
 
+## 0-C. India price list (2026-09-20 से, config में set)
+
+India से आने वाले (timezone/IP से पहचान — `core/region.py`) को USD की जगह ये दिखते
+हैं; **one-time payment** (auto-renew नहीं — Indian cards पर विदेशी merchant का
+recurring RBI e-mandate माँगता है), GST-inclusive, Stripe Checkout `payment` mode,
+webhook पर 30/365 दिन की period; दोबारा खरीदने पर period आगे जुड़ता है; तारीख
+निकलते ही free पर। Caps monthly, वही quota मशीनरी।
+
+लागत: voice $0.0093/min (measured), scan $0.003, search $0.002, infra $0.25/user;
+Stripe 3.5% + $0.30; GST 18% price के अंदर; ₹95.96/$।
+
+| Plan | कीमत | मिनट / scan / search | हाथ में (GST+fee के बाद) | Cost @100% | Margin @100% | @60% use |
+|---|---|---|---|---|---|---|
+| साथी (`sathi_in`) | ₹299/माह | 120 / 70 / 110 | $2.25 | $1.80 | 20% | 48% |
+| Plus (`plus_in`) | ₹599/माह | 250 / 130 / 225 | $4.80 | $3.42 | 29% | 55% |
+| Pro (`pro_in`) | ₹999/माह | 400 / 240 / 400 | $8.21 | $5.49 | 33% | 59% |
+| साथी yearly | ₹3,300/साल (1 माह free) | वही | $2.32/माह | $1.80 | 23% | 49% |
+| Plus yearly | ₹5,500/साल (2.8 माह free) | वही | $3.88/माह | $3.42 | 12% | 45% |
+| Pro yearly | ₹11,000/साल (1 माह free) | वही | $7.79/माह | $5.49 | 29% | 56% |
+
+Breakeven minutes (scan+search पूरे use हों तब भी) हर plan में cap से ऊपर — कोई
+plan किसी हालत में घाटे में नहीं। Plus yearly सबसे पतला (Faraz का चुनाव, promo)।
+
+ध्यान: (1) Indian card पर "international" ON चाहिए, UPI/netbanking नहीं चलेगा
+(foreign Stripe account); (2) OIDAR — विदेशी supplier को Indian GST registration —
+CA से confirm; (3) card-country check अभी नहीं (Faraz: बाद में)।
+
 ## 0. एक मिनट में पूरी बात (TL;DR)
 
 - FarryOn **voice-first** है। हर live voice मिनट पर हमें **~$0.012** लगता है। यही ~95% खर्च है।

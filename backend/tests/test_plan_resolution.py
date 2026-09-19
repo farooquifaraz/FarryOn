@@ -44,7 +44,7 @@ class TestActivePlanName:
     async def test_no_user_gets_the_default(self, db_session, monkeypatch) -> None:
         monkeypatch.setattr(
             "app.config.get_settings",
-            lambda: SimpleNamespace(default_plan="free",
+            lambda: SimpleNamespace(default_plan="free", plan_is_one_time=lambda n: False, plan_region=lambda n: None,
             # Paid plans spend their caps over a month (Settings.usage_window).
             usage_window=lambda plan: "month",
         ),
@@ -56,7 +56,7 @@ class TestActivePlanName:
     ) -> None:
         monkeypatch.setattr(
             "app.config.get_settings",
-            lambda: SimpleNamespace(default_plan="free",
+            lambda: SimpleNamespace(default_plan="free", plan_is_one_time=lambda n: False, plan_region=lambda n: None,
             # Paid plans spend their caps over a month (Settings.usage_window).
             usage_window=lambda plan: "month",
         ),
@@ -71,7 +71,7 @@ class TestActivePlanName:
         # "pro". This was "free" for everyone before.
         monkeypatch.setattr(
             "app.config.get_settings",
-            lambda: SimpleNamespace(default_plan="free",
+            lambda: SimpleNamespace(default_plan="free", plan_is_one_time=lambda n: False, plan_region=lambda n: None,
             # Paid plans spend their caps over a month (Settings.usage_window).
             usage_window=lambda plan: "month",
         ),
@@ -83,7 +83,7 @@ class TestActivePlanName:
     async def test_trialing_counts_as_active(self, db_session, monkeypatch) -> None:
         monkeypatch.setattr(
             "app.config.get_settings",
-            lambda: SimpleNamespace(default_plan="free",
+            lambda: SimpleNamespace(default_plan="free", plan_is_one_time=lambda n: False, plan_region=lambda n: None,
             # Paid plans spend their caps over a month (Settings.usage_window).
             usage_window=lambda plan: "month",
         ),
@@ -102,7 +102,7 @@ class TestActivePlanName:
         # keep Pro's limits on a canceled subscription.
         monkeypatch.setattr(
             "app.config.get_settings",
-            lambda: SimpleNamespace(default_plan="free",
+            lambda: SimpleNamespace(default_plan="free", plan_is_one_time=lambda n: False, plan_region=lambda n: None,
             # Paid plans spend their caps over a month (Settings.usage_window).
             usage_window=lambda plan: "month",
         ),
@@ -120,7 +120,7 @@ class TestActivePlanName:
         # later one is the one whose caps should apply.
         monkeypatch.setattr(
             "app.config.get_settings",
-            lambda: SimpleNamespace(default_plan="free",
+            lambda: SimpleNamespace(default_plan="free", plan_is_one_time=lambda n: False, plan_region=lambda n: None,
             # Paid plans spend their caps over a month (Settings.usage_window).
             usage_window=lambda plan: "month",
         ),
@@ -143,6 +143,9 @@ class TestQuotaUsesTheUsersPlan:
             plan_limits={"free": {"image_scans": 1}, "pro": {"image_scans": -1}},
             # Paid plans spend their caps over a month (Settings.usage_window).
             usage_window=lambda plan: "month",
+            # The regional catalog helpers: this stub is the global, renewing list.
+            plan_is_one_time=lambda name: False,
+            plan_region=lambda name: None,
         )
         monkeypatch.setattr(quota, "get_settings", lambda: settings)
         monkeypatch.setattr("app.config.get_settings", lambda: settings)
@@ -161,6 +164,9 @@ class TestQuotaUsesTheUsersPlan:
             plan_limits={"free": {"image_scans": 1}, "pro": {"image_scans": -1}},
             # Paid plans spend their caps over a month (Settings.usage_window).
             usage_window=lambda plan: "month",
+            # The regional catalog helpers: this stub is the global, renewing list.
+            plan_is_one_time=lambda name: False,
+            plan_region=lambda name: None,
         )
         monkeypatch.setattr(quota, "get_settings", lambda: settings)
         monkeypatch.setattr("app.config.get_settings", lambda: settings)
@@ -183,6 +189,9 @@ class TestQuotaUsesTheUsersPlan:
             plan_limits={"free": {"image_scans": -1}, "pro": {"image_scans": -1}},
             # Paid plans spend their caps over a month (Settings.usage_window).
             usage_window=lambda plan: "month",
+            # The regional catalog helpers: this stub is the global, renewing list.
+            plan_is_one_time=lambda name: False,
+            plan_region=lambda name: None,
         )
         monkeypatch.setattr(quota, "get_settings", lambda: settings)
 

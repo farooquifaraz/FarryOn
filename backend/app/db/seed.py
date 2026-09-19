@@ -27,27 +27,33 @@ logger = get_logger(__name__)
 # is a fallback, not a billable row, so it is skipped.
 def sold_plans(
     settings: Settings | None = None,
-) -> dict[str, tuple[int, str, str]]:
-    """Billable plans as ``name -> (price_cents, interval, description)``.
+) -> dict[str, tuple[int, str, str, str]]:
+    """Billable plans as ``name -> (price_cents, interval, description,
+    currency)``.
 
     Sourced from ``Settings.plan_catalog`` so a price or cap change is a single
     edit there and reaches the DB on the next deploy.
     """
     settings = settings or get_settings()
-    out: dict[str, tuple[int, str, str]] = {}
+    out: dict[str, tuple[int, str, str, str]] = {}
     for name, plan in settings.plan_catalog.items():
         price_cents = settings.plan_price_cents(name)
         if price_cents <= 0:
             continue  # free/unsold tier is not a billable row
         minutes = int(plan.get("talk_minutes", 0))
         interval = settings.plan_interval(name)
+        currency = settings.plan_currency(name)
         # "talk" not "voice": the budget covers live translation too.
-        billing = "billed yearly" if interval == "year" else "billed monthly"
+        if settings.plan_is_one_time(name):
+            billing = "one-time payment for 12 months" if interval == "year" else "one-time payment for 30 days"
+        else:
+            billing = "billed yearly" if interval == "year" else "billed monthly"
+        where = f" ({settings.plan_region(name)})" if settings.plan_region(name) else ""
         description = (
-            f"{settings.plan_title(name)} — {minutes} talk minutes a month, "
+            f"{settings.plan_title(name)}{where} — {minutes} talk minutes a month, "
             f"{billing}."
         )
-        out[name] = (price_cents, interval, description)
+        out[name] = (price_cents, interval, description, currency)
     return out
 
 # code -> human description
@@ -200,7 +206,7 @@ async def seed_plans(
     is only set on create, so an operator can retire a catalog plan by
     deactivating it without this resurrecting it every deploy.
     """
-    for name, (price_cents, interval, description) in sold_plans(settings).items():
+    for name, (price_cents, interval, description, currency) in sold_plans(settings).items():
         existing = (
             await session.execute(select(Plan).where(Plan.name == name))
         ).scalar_one_or_none()
@@ -209,7 +215,7 @@ async def seed_plans(
                 Plan(
                     name=name,
                     price_cents=price_cents,
-                    currency="USD",
+                    currency=currency,
                     interval=interval,
                     description=description,
                     is_active=True,
@@ -217,6 +223,7 @@ async def seed_plans(
             )
         else:
             existing.price_cents = price_cents
+            existing.currency = currency
             existing.interval = interval
             existing.description = description
     await session.flush()

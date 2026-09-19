@@ -75,8 +75,15 @@ async def create_checkout_session(
     customer_email: str | None,
     metadata: dict[str, str],
     client: httpx.AsyncClient | None = None,
+    mode: str = "subscription",
 ) -> dict[str, Any]:
-    """Create a subscription Checkout Session and return Stripe's response.
+    """Create a Checkout Session and return Stripe's response.
+
+    ``mode`` is ``"subscription"`` (renewing, the USD plans) or ``"payment"``
+    (a single charge for the period, the India plans). In payment mode the
+    metadata rides on the PaymentIntent instead of a subscription, and the
+    completed-session event names ``payment_intent`` rather than
+    ``subscription`` — the webhook reads whichever is there.
 
     ``client_reference_id`` and ``metadata`` are how the webhook (phase 3) maps
     the resulting subscription back to our user — both are echoed on the
@@ -84,15 +91,22 @@ async def create_checkout_session(
     subscription itself via ``subscription_data`` so later subscription events
     (renewals, cancellations) carry it too, not just the one-off session.
     """
+    if mode not in ("subscription", "payment"):
+        raise ValueError(f"unsupported checkout mode: {mode}")
+    carrier = (
+        {"subscription_data": {"metadata": metadata}}
+        if mode == "subscription"
+        else {"payment_intent_data": {"metadata": metadata}}
+    )
     params = _flatten(
         {
-            "mode": "subscription",
+            "mode": mode,
             "success_url": success_url,
             "cancel_url": cancel_url,
             "client_reference_id": client_reference_id,
             "line_items": [{"price": price_id, "quantity": 1}],
             "metadata": metadata,
-            "subscription_data": {"metadata": metadata},
+            **carrier,
             # Email prefilled but editable; omitted when we don't know it so
             # Stripe collects it rather than sending an empty field.
             **({"customer_email": customer_email} if customer_email else {}),

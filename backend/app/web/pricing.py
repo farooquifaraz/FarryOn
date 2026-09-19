@@ -116,10 +116,13 @@ def _card(
 def plan_cards_html(settings: Settings) -> str:
     """The `<div class="plans">` grid for every monthly/trial plan on offer."""
     catalog = settings.plan_catalog
+    # The global (USD) list only: a regional price list (India) is shown to
+    # that region by the app, and by the site's currency picker in a later
+    # step — never side by side with the USD cards.
     monthly = [
         (name, plan)
         for name, plan in catalog.items()
-        if not name.endswith(_YEARLY_SUFFIX)
+        if not name.endswith(_YEARLY_SUFFIX) and settings.plan_region(name) is None
     ]
     cards = "".join(
         _card(settings, name, plan, catalog.get(name + _YEARLY_SUFFIX), i)
@@ -149,7 +152,7 @@ def annual_saving_label(settings: Settings) -> str:
     """
     savings: list[float] = []
     for name, plan in settings.plan_catalog.items():
-        if not name.endswith(_YEARLY_SUFFIX):
+        if not name.endswith(_YEARLY_SUFFIX) or settings.plan_region(name) is not None:
             continue
         base = settings.plan_catalog.get(name[: -len(_YEARLY_SUFFIX)])
         if not base:

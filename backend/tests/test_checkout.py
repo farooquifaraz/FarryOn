@@ -31,6 +31,11 @@ def _configure(monkeypatch, **over):
         "plan_title": lambda name: (name or "free").removesuffix("_yearly").capitalize(),
         "stripe_success_url": "https://app/success?session_id={CHECKOUT_SESSION_ID}",
         "stripe_cancel_url": "https://app/cancel",
+        # The regional catalog helpers (India plans, 2026-09-20): these stubs
+        # are the global, renewing list.
+        "plan_region": lambda name: None,
+        "plan_is_one_time": lambda name: False,
+        "plan_interval": lambda name: "month",
     }
     fields.update(over)
     settings = SimpleNamespace(**fields)

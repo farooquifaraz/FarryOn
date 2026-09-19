@@ -24,9 +24,16 @@ def _cards(settings) -> str:
     return pricing.plan_cards_html(settings)
 
 
+def _global(settings) -> dict:
+    """The USD price list — the only one the website's cards show. A regional
+    list (the India tiers, INR) is offered by the app to its region and never
+    appears beside the USD cards."""
+    return {n: p for n, p in settings.plan_catalog.items() if settings.plan_region(n) is None}
+
+
 def test_every_sold_plan_gets_a_card(settings) -> None:
     html = _cards(settings)
-    monthly = [n for n in settings.plan_catalog if not n.endswith("_yearly")]
+    monthly = [n for n in _global(settings) if not n.endswith("_yearly")]
     for name in monthly:
         assert f'>{settings.plan_title(name)}</div>' in html
     # Yearly plans are the SAME card under a toggle, never a card of their own —
@@ -36,7 +43,7 @@ def test_every_sold_plan_gets_a_card(settings) -> None:
 
 def test_the_card_price_is_the_catalog_price(settings) -> None:
     html = _cards(settings)
-    for name, plan in settings.plan_catalog.items():
+    for name, plan in _global(settings).items():
         if name.endswith("_yearly") or plan["period"] == "trial":
             continue
         monthly = f'data-m="{pricing._money(float(plan["price_usd"]))}"'
@@ -50,7 +57,7 @@ def test_the_annual_note_is_the_yearly_price_divided_by_twelve(settings) -> None
     notes = re.findall(r"works out at (?:<[^>]+>)?\$([0-9.]+)(?:</span>)?/mo", html)
     expected = [
         f"{float(p['price_usd']) / 12:.2f}"
-        for n, p in settings.plan_catalog.items()
+        for n, p in _global(settings).items()
         if n.endswith("_yearly")
     ]
     assert notes == expected
@@ -58,7 +65,7 @@ def test_the_annual_note_is_the_yearly_price_divided_by_twelve(settings) -> None
 
 def test_allowances_come_from_the_catalog(settings) -> None:
     html = _cards(settings)
-    for name, plan in settings.plan_catalog.items():
+    for name, plan in _global(settings).items():
         if name.endswith("_yearly"):
             continue
         minutes = int(plan["talk_minutes"])
@@ -81,7 +88,7 @@ def test_the_saving_badge_counts_the_months_actually_free(settings) -> None:
     """Every tier is ten months' money, so the badge says two months free."""
     months = {
         round(12 - float(p["price_usd"]) / float(settings.plan_catalog[n[:-7]]["price_usd"]))
-        for n, p in settings.plan_catalog.items()
+        for n, p in _global(settings).items()
         if n.endswith("_yearly")
     }
     assert len(months) == 1, "tiers disagree — the badge must not name one number"

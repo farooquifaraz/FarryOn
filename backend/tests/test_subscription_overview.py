@@ -34,6 +34,11 @@ def _settings(monkeypatch, **over):
         # Caps are spent over a window: a month for a paid plan, a lifetime
         # for the trial. The overview reads the same one the meters enforce.
         "usage_window": lambda plan: "month",
+        # The regional catalog helpers (India plans, 2026-09-20): these stubs
+        # are the global, renewing list.
+        "plan_region": lambda name: None,
+        "plan_is_one_time": lambda name: False,
+        "plan_interval": lambda name: "month",
     }
     fields.update(over)
     settings = SimpleNamespace(**fields)
