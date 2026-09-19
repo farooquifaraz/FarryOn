@@ -191,17 +191,33 @@ class FinderException implements Exception {
 /// Thin REST client for the backend's `POST /detect` endpoint. Points at the
 /// same backend the live session uses (via [AppConfig.httpBase]).
 class FinderApi {
-  FinderApi(this._config, {http.Client? client})
+  FinderApi(this._config, {http.Client? client, this.onSessionExpired})
       : _client = client ?? http.Client();
 
   AppConfig _config;
   final http.Client _client;
+
+  /// Called once per request that comes back 401, before the throw — the same
+  /// hook [DataApi] has, wired in `finderApiProvider` to sign the user out.
+  final void Function()? onSessionExpired;
 
   void updateConfig(AppConfig config) => _config = config;
 
   static const _timeout = Duration(seconds: 30);
 
   Uri get _uri => _config.httpBase.replace(path: '/detect');
+
+  /// Bearer header when a FarryOn session token exists — the same header
+  /// [DataApi] sends. Until 2026-09-19 this client sent none, so `/detect`
+  /// could not know whose scan it was: it could not be metered against a
+  /// plan, and a backend that requires sign-in would refuse it outright.
+  Map<String, String> get _headers {
+    final token = _config.authToken;
+    return {
+      'Content-Type': 'application/json',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+  }
 
   /// Detect a landmark/product. Pass [imageBytes] (a JPEG) or [imageUrl].
   /// [mode] is `auto` | `landmark` | `product`.
@@ -224,16 +240,23 @@ class FinderApi {
     final http.Response r;
     try {
       r = await _client
-          .post(
-            _uri,
-            headers: const {'Content-Type': 'application/json'},
-            body: jsonEncode(body),
-          )
+          .post(_uri, headers: _headers, body: jsonEncode(body))
           .timeout(_timeout);
     } catch (e) {
       throw FinderException('Network error — check your internet and try again.');
     }
 
+    if (r.statusCode == 401) {
+      // The session is over, not the backend: retrying cannot help.
+      onSessionExpired?.call();
+      throw FinderException('Your session has expired — please sign in again.');
+    }
+    if (r.statusCode == 429) {
+      // The plan's image-scan budget is spent. Say what the server said (it
+      // names the plan and the period) rather than a generic "server error".
+      throw FinderException(_serverMessage(r.body) ??
+          "You've used your plan's image scans. Upgrade for more.");
+    }
     if (r.statusCode != 200) {
       throw FinderException('Server error (${r.statusCode}). Please try again.');
     }
@@ -243,6 +266,18 @@ class FinderApi {
     } catch (e) {
       throw FinderException('Could not read the server response.');
     }
+  }
+
+  /// The `message` of an error envelope, if the body is one.
+  static String? _serverMessage(String body) {
+    try {
+      final j = jsonDecode(body);
+      if (j is Map && j['message'] is String) return j['message'] as String;
+      if (j is Map && j['detail'] is Map && j['detail']['message'] is String) {
+        return j['detail']['message'] as String;
+      }
+    } catch (_) {}
+    return null;
   }
 
   void dispose() => _client.close();

@@ -62,7 +62,10 @@ final dataApiProvider = Provider<DataApi>((ref) {
 
 /// REST client for the landmark/product Finder (`POST /detect`); tracks config.
 final finderApiProvider = Provider<FinderApi>((ref) {
-  final api = FinderApi(ref.read(configProvider));
+  final api = FinderApi(
+    ref.read(configProvider),
+    onSessionExpired: () => ref.read(authProvider.notifier).signOut(),
+  );
   ref.listen<AppConfig>(configProvider, (_, next) => api.updateConfig(next));
   ref.onDispose(api.dispose);
   return api;
