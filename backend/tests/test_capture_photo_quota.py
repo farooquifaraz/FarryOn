@@ -55,7 +55,10 @@ class _Waits:
         return self.got
 
 
-async def _scans(db, key: str) -> int:
+async def _scans(db, key: str = quota.ANONYMOUS_KEY) -> int:
+    """Image scans recorded this month. These sessions carry no user, so
+    they meter under the one anonymous key (user_key_for), whatever their
+    session id — each test gets its own database, so the pool starts empty."""
     return await repo.usage_this_month(
         db, user_key=key, month=quota._this_month(), metric="image_scans"
     )
@@ -77,7 +80,7 @@ async def test_enforcement_off_leaves_the_tool_exactly_as_it_was(db_session, mon
     out = await CapturePhotoTool().run(ctx)
     assert waits.calls == 1
     assert out["captured"] is False and "_instruction" in out
-    assert await _scans(db_session, "cp-off") == 0
+    assert await _scans(db_session) == 0
 
 
 async def test_a_capture_within_the_cap_runs_and_is_recorded(db_session, monkeypatch) -> None:
@@ -86,7 +89,7 @@ async def test_a_capture_within_the_cap_runs_and_is_recorded(db_session, monkeyp
     ctx = ToolContext(session=db_session, session_id="cp-ok", wait_for_frame=waits)
     out = await CapturePhotoTool().run(ctx)
     assert waits.calls == 1 and out["captured"] is False
-    assert await _scans(db_session, "cp-ok") == 1
+    assert await _scans(db_session) == 1
 
 
 async def test_capture_then_identify_in_one_turn_costs_one_scan(db_session, monkeypatch) -> None:
@@ -100,12 +103,12 @@ async def test_capture_then_identify_in_one_turn_costs_one_scan(db_session, monk
     )
     await CapturePhotoTool().run(ctx)
     await IdentifyImageTool().run(ctx)  # same turn, same photo: free
-    assert await _scans(db_session, "cp-turn") == 1
+    assert await _scans(db_session) == 1
     # Either order: identify first, then capture, is still one scan.
     turn.clear()
     await IdentifyImageTool().run(ctx)
     await CapturePhotoTool().run(ctx)
-    assert await _scans(db_session, "cp-turn") == 2
+    assert await _scans(db_session) == 2
 
 
 async def test_a_new_turn_charges_again_and_the_cap_still_bites(db_session, monkeypatch) -> None:
@@ -120,7 +123,7 @@ async def test_a_new_turn_charges_again_and_the_cap_still_bites(db_session, monk
     turn.clear()
     out = await CapturePhotoTool().run(ctx)
     assert out["status"] == "quota_exceeded"
-    assert await _scans(db_session, "cp-cap") == 2
+    assert await _scans(db_session) == 2
 
 
 async def test_a_refused_scan_does_not_mark_the_turn_as_paid(db_session, monkeypatch) -> None:

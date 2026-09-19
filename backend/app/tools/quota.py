@@ -83,15 +83,30 @@ async def _plan_for(ctx: ToolContext) -> str:
     return plan
 
 
+#: The one key every signed-out caller shares. Production never gets here
+#: (the WS handshake, /notes, /tasks and /detect all require a user once
+#: auth is on); it is the local-dev and test path.
+ANONYMOUS_KEY = "anonymous"
+
+
 def user_key_for(user_id: int | None, session_id: str | None) -> str:
     """The ``daily_usage`` key for a user, matching what the tools use.
 
     Shared so the session and the tools meter the *same* person. Two spellings of
     this would quietly bill one user twice under different keys.
+
+    A caller with no user is ``anonymous`` — one shared pool on the default
+    (free) plan — never the session id. Keyed by session, every reconnect was
+    a fresh quota: the trial's one-time budget reset as often as the app
+    reopened, which is exactly what a lifetime budget must not do. Paid plans
+    are only ever resolved from a signed-in user (:func:`_plan_for`), so an
+    anonymous caller cannot reach a paid cap by any spelling of the key.
+    ``session_id`` stays in the signature so every caller keeps compiling;
+    it no longer affects the key.
     """
     if user_id is not None:
         return f"u{user_id}"
-    return session_id or "anonymous"
+    return ANONYMOUS_KEY
 
 
 async def check_quota(

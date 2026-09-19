@@ -120,3 +120,30 @@ async def test_an_unknown_plan_still_blocks_at_the_default_cap(
     blocked = await quota.check_quota(ctx, "image_scans")
     assert blocked is not None, "an unknown plan must not mean unlimited"
     assert blocked["status"] == "quota_exceeded"
+
+
+async def test_a_signed_out_caller_is_one_pool_not_one_pool_per_session(db_session, monkeypatch) -> None:
+    """Keyed by session id, every reconnect was a fresh quota: a trial's
+    one-time budget reset as often as the app reopened. A caller with no
+    user now meters under the single anonymous key whatever the session,
+    and a signed-in user still meters under their own."""
+    monkeypatch.setattr(
+        quota, "get_settings",
+        lambda: SimpleNamespace(
+            quota_enforcement_enabled=True,
+            default_plan="free",
+            plan_limits={"free": {"image_scans": 2}},
+            usage_window=lambda plan: "month",
+        ),
+    )
+    assert quota.user_key_for(None, "session-a") == quota.user_key_for(None, "session-b") == quota.ANONYMOUS_KEY
+    assert quota.user_key_for(7, "session-a") == "u7"
+    first = ToolContext(session=db_session, session_id="session-a")
+    second = ToolContext(session=db_session, session_id="session-b")  # "a reconnect"
+    assert await quota.check_quota(first, "image_scans") is None
+    assert await quota.check_quota(second, "image_scans") is None
+    blocked = await quota.check_quota(second, "image_scans")
+    assert blocked is not None and blocked["status"] == "quota_exceeded"
+    # A signed-in user is untouched by the anonymous pool.
+    user = ToolContext(session=db_session, session_id="session-c", user_id=7)
+    assert await quota.check_quota(user, "image_scans") is None
