@@ -92,3 +92,109 @@ async def test_usage_metadata_is_recorded_and_accumulates() -> None:
     assert gw._tokens_total == 100
     await gw._handle_message(msg)   # a second turn adds on
     assert gw._tokens_total == 200
+
+
+async def test_usage_is_logged_split_by_modality(monkeypatch) -> None:
+    """The line that turns a bill into a measurement.
+
+    One number per turn cannot be priced: text input, re-counted audio history
+    and camera frames are billed at different rates. The Live API reports the
+    split; this pins that we write it down, attributed to a session and a turn.
+    """
+    from app.ai import gemini as gemini_mod
+
+    seen: list[dict] = []
+    real_info = gemini_mod.logger.info
+
+    def spy(event: str, **kw: object) -> None:
+        if event == "gemini.usage":
+            seen.append(kw)
+        return real_info(event, **kw)
+
+    monkeypatch.setattr(gemini_mod.logger, "info", spy)
+
+    from google.genai import types
+
+    gw = GeminiGateway(system_prompt="sys", tools=[])
+    gw.session_id, gw.turn_index = "sess-1", 3
+    message = types.LiveServerMessage.model_validate(
+        {
+            "usageMetadata": {
+                "promptTokenCount": 8123,
+                "responseTokenCount": 140,
+                "totalTokenCount": 8263,
+                "thoughtsTokenCount": 11,
+                "toolUsePromptTokenCount": 22,
+                "promptTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 7650},
+                    {"modality": "AUDIO", "tokenCount": 473},
+                ],
+                "responseTokensDetails": [
+                    {"modality": "AUDIO", "tokenCount": 140}
+                ],
+            }
+        }
+    )
+    await gw._handle_message(message)
+
+    assert len(seen) == 1
+    line = seen[0]
+    assert line["session_id"] == "sess-1" and line["turn"] == 3
+    assert line["seq"] == 1
+    assert line["input_text"] == 7650 and line["input_audio"] == 473
+    assert line["output_audio"] == 140 and line["output_text"] == 0
+    assert line["thoughts"] == 11 and line["tool_use"] == 22
+    # The pre-existing keys must survive: anything already reading them stays
+    # working.
+    assert line["turn_total"] == 8263 and line["input"] == 8123
+
+
+async def test_usage_without_modality_details_still_logs() -> None:
+    """An older SDK (or a test double) has no detail lists.
+
+    A missing breakdown must read as zeroes, never as an exception: this line
+    runs inside the receive loop, where a raise would take the turn down.
+    """
+    from app.ai import gemini as gemini_mod
+
+    seen: list[dict] = []
+    real_info = gemini_mod.logger.info
+    gemini_mod.logger.info = lambda e, **kw: (  # type: ignore[assignment]
+        seen.append(kw) if e == "gemini.usage" else None
+    ) or real_info(e, **kw)
+    try:
+        gw = GeminiGateway(system_prompt="sys", tools=[])
+        await gw._handle_message(
+            SimpleNamespace(
+                usage_metadata=SimpleNamespace(
+                    total_token_count=100,
+                    prompt_token_count=70,
+                    response_token_count=30,
+                ),
+                server_content=None,
+                tool_call=None,
+            )
+        )
+    finally:
+        gemini_mod.logger.info = real_info  # type: ignore[assignment]
+
+    assert seen and seen[0]["input_audio"] == 0 and seen[0]["input_text"] == 0
+    assert seen[0]["session_id"] is None  # untagged gateway is still loggable
+
+
+async def test_modality_helper_sums_and_tolerates_junk() -> None:
+    from app.ai.gemini import _by_modality
+
+    assert _by_modality(None) == {}
+    assert _by_modality([]) == {}
+    assert _by_modality([SimpleNamespace(modality="AUDIO", token_count=5)]) == {
+        "AUDIO": 5
+    }
+    # Two entries of one modality add up; a missing count reads as zero.
+    assert _by_modality(
+        [
+            SimpleNamespace(modality="TEXT", token_count=3),
+            SimpleNamespace(modality="TEXT", token_count=4),
+            SimpleNamespace(modality=None, token_count=None),
+        ]
+    ) == {"TEXT": 7, "UNKNOWN": 0}

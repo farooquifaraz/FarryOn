@@ -58,6 +58,27 @@ def strip_affect_tags(text: str) -> str:
     out = _AFFECT_LABEL_RE.sub("", out)
     return out.lstrip()
 
+def _by_modality(details: Any) -> dict[str, int]:
+    """``{"TEXT": n, "AUDIO": n, ...}`` from a list of ``ModalityTokenCount``.
+
+    The Live API reports each turn's prompt and response token counts BROKEN
+    DOWN BY MODALITY (``usage_metadata.prompt_tokens_details`` /
+    ``response_tokens_details``), and that split is the only way to tell what a
+    turn actually cost: text input, re-counted audio history and camera frames
+    are billed at different rates. Without it a usage line is one number that
+    cannot be priced.
+
+    Defensive on every access: an older SDK, or a test double built from a
+    ``SimpleNamespace``, simply yields an empty mapping instead of raising.
+    """
+    out: dict[str, int] = {}
+    for item in details or []:
+        modality = getattr(item, "modality", None)
+        name = getattr(modality, "value", None) or str(modality or "UNKNOWN")
+        out[name] = out.get(name, 0) + int(getattr(item, "token_count", 0) or 0)
+    return out
+
+
 # 16 kHz mono PCM input per PROTOCOL.md; Gemini accepts 16 kHz input audio.
 _INPUT_MIME = "audio/pcm;rate=16000"
 _VIDEO_MIME = "image/jpeg"
@@ -138,6 +159,16 @@ class GeminiGateway(AIGateway):
         # Cumulative billed tokens this session (from usage_metadata), for the
         # cost-visibility log.
         self._tokens_total = 0
+        #: Attribution for the usage log, set by the owning session (the same
+        #: duck-typed pattern as ``manual_vad`` / ``on_resume_handle``). Without
+        #: them a usage line cannot be tied to a session or a turn after the
+        #: fact, which is what made the first cost analysis an estimate.
+        self.session_id: str | None = None
+        self.turn_index: int = 0
+        #: Usage blocks seen on this connection. A turn that calls a tool draws
+        #: more than one response, so the count is what tells "per response"
+        #: apart from "per turn" when the numbers are read back.
+        self._usage_seq = 0
         # TTFA approximation: Gemini exposes no commit/VAD event, so measure
         # from the LAST input-transcription delta (≈ end of user speech) to
         # the first audio byte of the reply. Slightly optimistic, but stable
@@ -562,11 +593,33 @@ class GeminiGateway(AIGateway):
             metrics.TOKENS_USED.labels(kind="input").inc(prompt)
         if resp:
             metrics.TOKENS_USED.labels(kind="output").inc(resp)
+        # The modality split is the whole point of this line: `input_audio`
+        # growing turn after turn is accumulated history being re-counted, and
+        # it is billed at the audio rate, not the text one. `input_text` is the
+        # fixed system-prompt + tool-declaration preamble, paid on every turn.
+        by_prompt = _by_modality(getattr(usage, "prompt_tokens_details", None))
+        by_response = _by_modality(
+            getattr(usage, "response_tokens_details", None)
+        )
+        self._usage_seq += 1
         logger.info(
             "gemini.usage",
+            session_id=self.session_id,
+            turn=self.turn_index,
+            seq=self._usage_seq,
+            model=self.model,
             turn_total=total,
             input=prompt,
             output=resp,
+            input_text=by_prompt.get("TEXT", 0),
+            input_audio=by_prompt.get("AUDIO", 0),
+            input_image=by_prompt.get("IMAGE", 0),
+            input_video=by_prompt.get("VIDEO", 0),
+            output_text=by_response.get("TEXT", 0),
+            output_audio=by_response.get("AUDIO", 0),
+            thoughts=int(getattr(usage, "thoughts_token_count", 0) or 0),
+            tool_use=int(getattr(usage, "tool_use_prompt_token_count", 0) or 0),
+            cached=int(getattr(usage, "cached_content_token_count", 0) or 0),
             session_total=self._tokens_total,
         )
 

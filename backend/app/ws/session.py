@@ -405,6 +405,7 @@ class Session:
                 )
                 self._wire_session_resume()
                 self._apply_vad_mode()
+                self._tag_gateway()
 
             try:
                 await self._gateway.connect()
@@ -450,6 +451,7 @@ class Session:
                         )
                         self._wire_session_resume()
                         self._apply_vad_mode()
+                        self._tag_gateway()
                         await self._gateway.connect()
                     except Exception as exc2:  # noqa: BLE001
                         await self._report_provider_failure(exc2)
@@ -702,6 +704,24 @@ class Session:
                     requested=requested,
                 )
         return None
+
+    def _tag_gateway(self) -> None:
+        """Give the gateway this session's identity, for the usage log.
+
+        A gateway reports what each turn cost (``gemini.usage``) from inside
+        its own receive loop, where it knows nothing about who is talking or
+        which turn this is — so those lines could not be attributed after the
+        fact, and a session's real cost could only be estimated. Set once per
+        gateway; :meth:`_log_turn_timing` keeps the turn index current.
+
+        Duck-typed and total: any gateway takes the attributes, only the ones
+        that log usage read them back.
+        """
+        gw = self._gateway
+        if gw is None:
+            return
+        gw.session_id = self.session_id
+        gw.turn_index = self._turn_index
 
     def _wire_session_resume(self) -> None:
         """Hand a resumption-capable gateway this user's last handle.
@@ -1479,6 +1499,9 @@ class Session:
             tools=self._turn_tools,
         )
         self._turn_index += 1
+        # Keep the gateway's usage lines pointing at the turn they belong to.
+        if self._gateway is not None:
+            setattr(self._gateway, "turn_index", self._turn_index)
         self._t_user_first = 0.0
         self._t_user_last = 0.0
         self._t_reply_started = 0.0
