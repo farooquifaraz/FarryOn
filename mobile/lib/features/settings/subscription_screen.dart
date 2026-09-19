@@ -113,7 +113,9 @@ class SubscriptionView extends StatelessWidget {
         if (e.key != 'translate_seconds') e,
     ];
     return ListView(
-      padding: const EdgeInsets.all(16),
+      // Edge-to-edge: the last plan row must clear the system navigation bar.
+      padding: EdgeInsets.fromLTRB(
+          16, 16, 16, 16 + MediaQuery.paddingOf(context).bottom),
       children: [
         // ---- Current plan ------------------------------------------------
         SettingsGroup(children: [

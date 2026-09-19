@@ -95,7 +95,12 @@ class SettingsScreen extends ConsumerWidget {
       backgroundColor: Aurora.base,
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+        // The app draws edge-to-edge (targetSdk 36), so the system navigation
+        // bar sits OVER the list: with a fixed 28 px the last row — Version —
+        // was clipped behind it on the S23 (2026-09-19) and could not be
+        // scrolled into view. Pad by the bar's real height instead.
+        padding: EdgeInsets.fromLTRB(
+            16, 8, 16, 28 + MediaQuery.paddingOf(context).bottom),
         children: [
           _Hero(connection: live.connection, target: serverSub),
           const SizedBox(height: 22),
@@ -437,7 +442,10 @@ class _SubPage extends StatelessWidget {
         children: [
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+              // Same edge-to-edge rule as the hub: the last row must clear
+              // the system navigation bar.
+              padding: EdgeInsets.fromLTRB(
+                  16, 12, 16, 20 + MediaQuery.paddingOf(context).bottom),
               children: children,
             ),
           ),
