@@ -35,7 +35,7 @@
       "\\1% तक बचत"
     ],
     [
-      "^Choose (Lite|Plus|Pro)$",
+      "^Choose (Lite|Plus|Pro|साथी)$",
       "\\1 चुनें"
     ]
   ],
@@ -304,5 +304,9 @@
   "We're a young company building something that didn't exist before, and we'd rather tell you exactly what it does today than promise what it might do next year. What you read on this site is what ships.": "हम एक नई कंपनी हैं जो कुछ ऐसा बना रही है जो पहले नहीं था, और हम आपको ठीक-ठीक बताना पसंद करते हैं कि यह आज क्या करता है — न कि अगले साल क्या कर सकता है। इस साइट पर जो लिखा है, वही मिलता है।",
   "See the glasses →": "ग्लासेस देखें →",
   "Start the free trial": "फ्री ट्रायल शुरू करें",
-  "Burj Khalifa": "बुर्ज खलीफ़ा"
+  "Burj Khalifa": "बुर्ज खलीफ़ा",
+  "for 30 days": "30 दिन के लिए",
+  "for 12 months": "12 महीने के लिए",
+  "One-time payment · no auto-renew · GST included": "एक बार का भुगतान · ऑटो-रिन्यू नहीं · GST सहित",
+  "Everything in साथी": "साथी की सब सुविधाएँ"
 }

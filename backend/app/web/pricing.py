@@ -50,6 +50,24 @@ _COPY: dict[str, dict[str, object]] = {
 }
 
 
+def _rupees(amount: float) -> str:
+    """Whole rupees with Indian grouping: 3300 -> "3,300", 1100000 -> "11,00,000"."""
+    n = round(amount)
+    digits = str(abs(n))
+    if len(digits) <= 3:
+        out = digits
+    else:
+        head, tail = digits[:-3], digits[-3:]
+        groups: list[str] = []
+        while len(head) > 2:
+            groups.insert(0, head[-2:])
+            head = head[:-2]
+        if head:
+            groups.insert(0, head)
+        out = ",".join(groups) + "," + tail
+    return f"-{out}" if n < 0 else out
+
+
 def _money(amount: float) -> str:
     """`6.0` -> "6", `5.42` -> "5.42" — a trailing ".00" reads like a typo."""
     return f"{amount:.2f}".rstrip("0").rstrip(".")
@@ -111,6 +129,123 @@ def _card(
         f'<a href="/download/arm64" class="plan-btn {btn}">{cta}</a>'
         f"</div></div>"
     )
+
+
+# The India tiers' copy. Numbers, again, never live here.
+_COPY_IN: dict[str, dict[str, object]] = {
+    "sathi_in": {
+        "desc": "For everyday helpers.",
+        "extra": ["Notes, reminders &amp; email", "WhatsApp &amp; Telegram"],
+        "cta": "Choose साथी",
+    },
+    "plus_in": {
+        "desc": "For daily power users.",
+        "extra": ["Everything in साथी", "Priority responses"],
+        "cta": "Choose Plus",
+        "popular": True,
+    },
+    "pro_in": {
+        "desc": "For heavy, all-day use.",
+        "extra": ["Everything in Plus", "Priority support"],
+        "cta": "Choose Pro",
+    },
+}
+
+
+def _india_card(
+    settings: Settings, name: str, plan: dict, yearly: dict | None, delay: int
+) -> str:
+    """One India tier: rupees, bought outright for 30 days or 12 months.
+
+    The amount is marked ``native`` so the currency picker leaves it alone —
+    these prices ARE the price, not a conversion — and the period words say
+    "for 30 days" rather than "per month", because nothing renews.
+    """
+    copy = _COPY_IN.get(name, {})
+    minutes = int(plan.get("talk_minutes", 0))
+    scans = int(plan.get("image_scans", 0))
+    monthly = float(plan.get("price_inr", 0.0))
+    annual = float(yearly["price_inr"]) if yearly else monthly * 12
+    per_month = annual / 12
+    feats = [
+        f"{minutes:,} talk minutes a month",
+        f"{scans:,} image scans a month",
+        "One-time payment · no auto-renew · GST included",
+    ]
+    feats += [str(x) for x in copy.get("extra", [])]
+    amount = (
+        '<div class="plan-amount native"><sup class="code">₹</sup>'
+        f'<span class="pv" data-m="{_rupees(monthly)}" data-a="{_rupees(annual)}">'
+        f"{_rupees(monthly)}</span></div>"
+        '<div class="plan-period">'
+        '<span class="per" data-m="for 30 days" data-a="for 12 months">for 30 days</span>'
+        f'<span class="ann" style="display:none"> · works out at ₹{_rupees(round(per_month))}/mo</span>'
+        "</div>"
+    )
+    popular = bool(copy.get("popular"))
+    classes = "plan popular reveal" if popular else "plan reveal"
+    if delay:
+        classes += f" d{delay}"
+    badge = '<div class="plan-pop">Most popular</div>' if popular else ""
+    btn = "solid" if popular else "outline"
+    bullets = "".join(f"<li>{f}</li>" for f in feats)
+    cta = escape(str(copy.get("cta", f"Choose {settings.plan_title(name)}")))
+    return (
+        f'<div class="{classes}">{badge}'
+        f'<div class="plan-inner">'
+        f'<div class="plan-name">{escape(settings.plan_title(name))}</div>'
+        f'<p class="plan-desc">{copy.get("desc", "")}</p>'
+        f"<div>{amount}</div>"
+        f'<hr class="plan-div">'
+        f'<ul class="plan-feats">{bullets}</ul>'
+        f'<a href="/download/arm64" class="plan-btn {btn}">{cta}</a>'
+        "</div></div>"
+    )
+
+
+def india_cards_html(settings: Settings) -> str:
+    """The India price list, hidden until the page decides the visitor is in
+    India (their timezone) or they ask for it. Empty when the catalog has no
+    India tiers, so the slot then costs nothing."""
+    catalog = settings.plan_catalog
+    monthly = [
+        (name, plan)
+        for name, plan in catalog.items()
+        if not name.endswith(_YEARLY_SUFFIX) and settings.plan_region(name) == "IN"
+    ]
+    if not monthly:
+        return ""
+    cards = "".join(
+        _india_card(settings, name, plan, catalog.get(name + _YEARLY_SUFFIX), i)
+        for i, (name, plan) in enumerate(monthly)
+    )
+    return (
+        f'<div class="plans plans-in" data-region="IN" hidden '
+        f'style="grid-template-columns:repeat({len(monthly)},1fr)">{cards}</div>'
+    )
+
+
+def annual_saving_label_in(settings: Settings) -> str:
+    """The India tiers' yearly deal, worded like :func:`annual_saving_label`."""
+    savings: list[float] = []
+    for name, plan in settings.plan_catalog.items():
+        if not name.endswith(_YEARLY_SUFFIX) or settings.plan_region(name) != "IN":
+            continue
+        base = settings.plan_catalog.get(name[: -len(_YEARLY_SUFFIX)])
+        if not base:
+            continue
+        monthly = float(base.get("price_inr", 0.0))
+        if monthly <= 0:
+            continue
+        savings.append(12 - float(plan.get("price_inr", 0.0)) / monthly)
+    if not savings:
+        return "yearly billing"
+    months = savings[0]
+    if all(abs(x - months) < 0.01 for x in savings) and abs(months - round(months)) < 0.01:
+        whole = round(months)
+        return f"{whole} month{'s' if whole != 1 else ''} free"
+    best = max(savings) / 12
+    return f"save up to {round(best * 100)}%"
 
 
 def plan_cards_html(settings: Settings) -> str:
@@ -175,6 +310,8 @@ def render(html: str, settings: Settings) -> str:
     """Fill the landing page's pricing placeholders."""
     return (
         html.replace("<!--PLAN_CARDS-->", plan_cards_html(settings))
+        .replace("<!--PLAN_CARDS_IN-->", india_cards_html(settings))
         .replace("<!--TRIAL_MINUTES-->", str(trial_minutes(settings)))
         .replace("<!--ANNUAL_SAVING-->", annual_saving_label(settings))
+        .replace("<!--ANNUAL_SAVING_IN-->", annual_saving_label_in(settings))
     )

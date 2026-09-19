@@ -380,6 +380,13 @@ section{padding:100px 5%;position:relative;overflow:hidden}
 .fx-btn.on{background:rgba(0,212,170,.18);color:var(--t);border-color:rgba(0,212,170,.55)}
 .fx-btn:focus-visible{outline:2px solid var(--pl);outline-offset:2px}
 .fx-note{margin-top:12px;text-align:center;font-size:.76rem;color:var(--td);min-height:1em}
+/* The India price list: a second card grid, shown INSTEAD of the USD one to
+   a visitor whose clock is in India (or who asks). `hidden` must beat the
+   grid's display, or both lists would show. */
+.plans[hidden]{display:none}
+.region-line{margin-top:18px;text-align:center;font-size:.78rem;color:var(--tm)}
+.region-line a{color:var(--pl);text-decoration:none;border-bottom:1px solid rgba(0,212,170,.3)}
+.region-line a:hover{border-bottom-color:var(--pl)}
 /* A three-letter code in the superscript slot needs air; a symbol does not. */
 .plan-amount sup.code{font-size:1rem;margin-right:6px;letter-spacing:.02em}.t-label.on{color:var(--t);font-weight:600}
 .save-b{background:rgba(244,196,58,.1);color:var(--gold);
@@ -790,7 +797,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
       <div class="toggle">
         <span class="t-label on" id="ml">Monthly</span>
         <div class="toggle-track" id="bt" onclick="toggleBilling()"><div class="toggle-thumb"></div></div>
-        <span class="t-label" id="al">Annual <span class="save-b"><!--ANNUAL_SAVING--></span></span>
+        <span class="t-label" id="al">Annual <span class="save-b" data-global="<!--ANNUAL_SAVING-->" data-in="<!--ANNUAL_SAVING_IN-->"><!--ANNUAL_SAVING--></span></span>
       </div>
       <div class="fx-pick" role="group" aria-label="Show prices in">
         <span class="fx-lbl">Show prices in</span>
@@ -801,6 +808,8 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
       <p class="fx-note" data-fx-note></p>
     </div>
     <!--PLAN_CARDS-->
+    <!--PLAN_CARDS_IN-->
+    <p class="region-line" data-region-line></p>
 
     <div class="reveal" style="margin-top:44px">
       <p style="text-align:center;font-size:.9rem;color:var(--tm);margin-bottom:18px">Want the hands-free experience? <b style="color:var(--t)">Add smart glasses</b> — a one-time purchase that works with any plan.</p>
@@ -1009,7 +1018,7 @@ function fxApply(){
   /* Plan cards: the number keeps its USD data (the annual toggle reads it),
      only what is shown changes. In USD the original text is kept exactly —
      "$5.42" must not become "$5". */
-  document.querySelectorAll('.plan-amount').forEach(function(el){
+  document.querySelectorAll('.plan-amount:not(.native)').forEach(function(el){
     var sup=el.querySelector('sup'),pv=el.querySelector('.pv');if(!sup||!pv)return;
     var usd=parseFloat(ann?pv.dataset.a:pv.dataset.m);
     if(cur==='USD'){sup.textContent='$';pv.textContent=ann?pv.dataset.a:pv.dataset.m}
@@ -1042,6 +1051,44 @@ function fxApply(){
   }
   document.querySelectorAll('[data-fx-note]').forEach(function(el){el.textContent=note});
 }
+/* ═══════════════════════════════════════════
+   REGION — which price list: the India tiers (₹, bought for a period) to a
+   visitor whose clock is in India, the USD tiers to everyone else. Their own
+   choice (the link under the cards) wins over the clock and is remembered.
+═══════════════════════════════════════════ */
+var REGION_ZONES={'Asia/Kolkata':1,'Asia/Calcutta':1};
+function regionDetect(){
+  try{var s=localStorage.getItem('site-region');if(s==='IN'||s==='GLOBAL')return s}catch(e){}
+  try{var tz=Intl.DateTimeFormat().resolvedOptions().timeZone;if(REGION_ZONES[tz])return 'IN'}catch(e){}
+  return 'GLOBAL';
+}
+var siteRegion='GLOBAL';
+function regionApply(){
+  var india=document.querySelector('.plans-in');
+  var global=document.querySelector('.plans:not(.plans-in)');
+  if(!india){return}
+  var inIN=siteRegion==='IN';
+  india.hidden=!inIN; if(global) global.hidden=inIN;
+  var badge=document.querySelector('.save-b');
+  if(badge&&badge.dataset.global!==undefined) badge.textContent=inIN?badge.dataset.in:badge.dataset.global;
+  var hi=document.documentElement.lang==='hi';
+  var line=document.querySelector('[data-region-line]');
+  if(line){
+    line.innerHTML=inIN
+      ?(hi?'भारत के प्लान दिख रहे हैं — ₹ में, एक बार का भुगतान, GST सहित · <a href="#pricing" onclick="regionSet(\'GLOBAL\');return false">ग्लोबल (USD) प्लान देखें</a>'
+          :'Showing India plans — in ₹, one-time payment, GST included · <a href="#pricing" onclick="regionSet(\'GLOBAL\');return false">See global (USD) plans</a>')
+      :(hi?'ग्लोबल प्लान दिख रहे हैं (USD में बिल) · <a href="#pricing" onclick="regionSet(\'IN\');return false">भारत के प्लान देखें (₹)</a>'
+          :'Showing global plans (billed in USD) · <a href="#pricing" onclick="regionSet(\'IN\');return false">See India plans (₹)</a>');
+  }
+}
+function regionSet(r){
+  siteRegion=r;try{localStorage.setItem('site-region',r)}catch(e){}
+  regionApply();
+}
+(function(){
+  siteRegion=regionDetect();
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',regionApply);else regionApply();
+})();
 function fxSet(cur){
   if(!FX||!FX.rates[cur])return;
   fxCur=cur;try{localStorage.setItem('fx-cur',cur)}catch(e){}

@@ -114,7 +114,13 @@ def test_render_leaves_no_placeholder_behind(settings) -> None:
     page = pricing.render(
         Path(web_router._INDEX).read_text(encoding="utf-8"), settings
     )
-    for marker in ("<!--PLAN_CARDS-->", "<!--TRIAL_MINUTES-->", "<!--ANNUAL_SAVING-->"):
+    for marker in (
+        "<!--PLAN_CARDS-->",
+        "<!--PLAN_CARDS_IN-->",
+        "<!--TRIAL_MINUTES-->",
+        "<!--ANNUAL_SAVING-->",
+        "<!--ANNUAL_SAVING_IN-->",
+    ):
         assert marker not in page
     assert 'class="plans"' in page
 
@@ -140,3 +146,43 @@ def test_a_new_catalog_plan_needs_no_html_edit(settings) -> None:
     html = pricing.plan_cards_html(clone)
     assert 'data-m="40" data-a="440"' in html
     assert "2,000 talk minutes a month" in html
+
+
+# ── the India price list (shown instead of the USD one to a visitor in India) ──
+
+
+def test_the_india_cards_are_rupees_for_a_period_and_start_hidden(settings) -> None:
+    html = pricing.india_cards_html(settings)
+    assert html.startswith('<div class="plans plans-in" data-region="IN" hidden')
+    assert html.count('class="plan-name"') == 3
+    assert ">साथी<" in html and ">Plus<" in html and ">Pro<" in html
+    # native rupee amounts the currency picker must not convert
+    assert html.count('class="plan-amount native"') == 3
+    assert 'data-m="299" data-a="3,300"' in html
+    assert 'data-m="599" data-a="5,500"' in html
+    assert 'data-m="999" data-a="11,000"' in html
+    assert pricing._rupees(1100000) == "11,00,000" and pricing._rupees(999) == "999"
+    assert 'data-m="for 30 days" data-a="for 12 months"' in html
+    assert "works out at ₹275/mo" in html and "works out at ₹917/mo" in html
+    assert "One-time payment · no auto-renew · GST included" in html
+    assert "$" not in html and "per month" not in html
+    assert html.count("Most popular") == 1  # Plus, as on the USD list
+
+
+def test_the_india_yearly_badge_is_worded_from_its_own_prices(settings) -> None:
+    # साथी and Pro give one month free, Plus nearly three: no single number
+    # stands for all, so the badge says "up to".
+    assert pricing.annual_saving_label_in(settings) == "save up to 23%"
+    assert pricing.annual_saving_label(settings) == "2 months free"
+
+
+def test_the_page_carries_both_lists_and_the_region_line(settings) -> None:
+    from pathlib import Path
+
+    import app.web.router as web_router
+
+    page = pricing.render(Path(web_router._INDEX).read_text(encoding="utf-8"), settings)
+    assert page.count('class="plans"') == 1 and page.count('class="plans plans-in"') == 1
+    assert 'data-global="2 months free" data-in="save up to 23%"' in page
+    assert "data-region-line" in page and "function regionApply" in page
+    assert ".plan-amount:not(.native)" in page, "the picker must leave rupee amounts alone"
