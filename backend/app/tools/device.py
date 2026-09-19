@@ -18,6 +18,7 @@ from app.logging_conf import get_logger
 from app.services.vision import run_detection
 from app.tools.base import Tool, ToolContext
 from app.tools.capture_feedback import capture_failure_message
+from app.tools.quota import check_quota
 
 logger = get_logger(__name__)
 
@@ -87,6 +88,14 @@ class CapturePhotoTool(Tool):
     )
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
+        # The scan is paid work (a vision call on the photo), so it is metered
+        # like identify_image — and checked FIRST, before waiting for the
+        # frame: a user who waited five seconds for the shutter and then heard
+        # "quota exceeded" would have waited for nothing. One charge per turn
+        # covers the identify_image call the model often makes right after.
+        blocked = await check_quota(ctx, "image_scans", once_per_turn=True)
+        if blocked:
+            return blocked
         # The app started the capture the moment it saw this tool_call. Wait
         # for the resulting frame so it's in context before the model speaks.
         # The timeout is the session's device-appropriate default; a

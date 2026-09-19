@@ -95,17 +95,36 @@ def user_key_for(user_id: int | None, session_id: str | None) -> str:
 
 
 async def check_quota(
-    ctx: ToolContext, metric: str, *, cost: int = 1
+    ctx: ToolContext, metric: str, *, cost: int = 1, once_per_turn: bool = False
 ) -> dict[str, Any] | None:
     """Enforce (and record) one unit of a metered resource.
 
     Returns ``None`` when the action is allowed (and records the usage); returns
     a ``{ok: False, status: "quota_exceeded", message}`` dict when the plan's
     daily cap is reached. A no-op returning ``None`` when enforcement is off.
+
+    ``once_per_turn``: charge at most once per user turn, whichever metered
+    tool asks first. ``capture_photo`` and ``identify_image`` both look at the
+    same photo for one question and the model often calls both; without this
+    a single "what is this?" cost two of the free plan's ten scans. The
+    second caller in the turn is allowed for free; a *new* turn charges again.
     """
     settings = get_settings()
     if not settings.quota_enforcement_enabled:
         return None
+    charges = ctx.turn_charges if once_per_turn else None
+    if charges is not None and metric in charges:
+        return None
+    allowed = await _check_and_record(ctx, metric, cost)
+    if allowed is None and charges is not None:
+        charges.add(metric)
+    return allowed
+
+
+async def _check_and_record(
+    ctx: ToolContext, metric: str, cost: int
+) -> dict[str, Any] | None:
+    settings = get_settings()
     if ctx.session is None:
         # No DB to meter against — we can't record a use, so we can't fairly
         # enforce a cap either. Allow it, same fail-open rule the voice meter

@@ -65,7 +65,9 @@ class IdentifyImageTool(Tool):
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
         """Run detection on the cached camera frame and return the result."""
-        blocked = await check_quota(ctx, "image_scans")
+        # One charge per turn: a capture_photo that already paid for this
+        # photo makes this call free (see check_quota).
+        blocked = await check_quota(ctx, "image_scans", once_per_turn=True)
         if blocked:
             return blocked
         # Only answer on a frame captured AFTER this request began. Otherwise a

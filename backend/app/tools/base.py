@@ -48,6 +48,11 @@ class ToolContext:
     session: AsyncSession
     session_id: str | None = None
     user_id: int | None = None
+    #: Metrics already charged in the CURRENT user turn, shared by every tool
+    #: call of that turn (owned and reset by the orchestrator). Lets
+    #: ``capture_photo`` and ``identify_image`` — which the model often calls
+    #: together for one "what is this?" — cost one image scan, not two.
+    turn_charges: set[str] | None = None
     web_search: dict[str, Any] | None = None
     email: dict[str, Any] | None = None
     emails: list[dict[str, Any]] | None = None

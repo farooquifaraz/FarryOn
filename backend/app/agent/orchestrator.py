@@ -114,6 +114,9 @@ class Orchestrator:
         #: different arguments are never blocked at all.
         self._calls_since_speech: dict[str, int] = {}
         self._tool_calls_since_speech: dict[str, int] = {}
+        #: Metered resources already charged in the current user turn (see
+        #: ToolContext.turn_charges). Same lifetime as the repeat guard's slate.
+        self._turn_charges: set[str] = set()
         #: Mutable — updated in place when the client sends a ``location_update``.
         self.location = location
         #: Mutable — set to the latest INPUT_VIDEO JPEG by the session so the
@@ -336,12 +339,14 @@ class Orchestrator:
         repeat guard. Called by the session owner on every user turn."""
         self._calls_since_speech.clear()
         self._tool_calls_since_speech.clear()
+        self._turn_charges.clear()
 
     def note_assistant_spoke(self) -> None:
         """The model answered in words: whatever it calls next is a new
         step, not a retry of the last one."""
         self._calls_since_speech.clear()
         self._tool_calls_since_speech.clear()
+        self._turn_charges.clear()
 
     def _repeat_refusal(self, event: ToolCallEvent) -> str | None:
         try:
@@ -442,6 +447,7 @@ class Orchestrator:
                 session=db,
                 session_id=self._session_id,
                 user_id=self._user_id,
+                turn_charges=self._turn_charges,
                 web_search=self._web_search,
                 email=self._email,
                 emails=self._emails,
