@@ -25,6 +25,9 @@ void main() {
     bool checkoutAvailable = true,
     String window = 'month',
     String planTitle = '',
+    String currency = 'USD',
+    bool oneTime = false,
+    DateTime? periodEnd,
   }) =>
       SubscriptionOverview(
         plan: plan,
@@ -34,6 +37,9 @@ void main() {
         checkoutAvailable: checkoutAvailable,
         window: window,
         planTitle: planTitle,
+        currency: currency,
+        oneTime: oneTime,
+        periodEnd: periodEnd,
       );
 
   Future<void> pump(
@@ -144,6 +150,92 @@ void main() {
       );
 
       expect(find.text('Upgrade'), findsNothing);
+    });
+  });
+
+  group('the India price list (rupees, bought for a period)', () {
+    const india = [
+      PlanOffer(name: 'sathi_in', priceCents: 29900, title: 'साथी', currency: 'INR', oneTime: true),
+      PlanOffer(name: 'plus_in_yearly', priceCents: 550000, title: 'Plus (yearly)', interval: 'year', currency: 'INR', oneTime: true),
+    ];
+
+    testWidgets('offers read in whole rupees for a period, never \$ or /mo',
+        (tester) async {
+      await pump(tester, overview(upgrades: india));
+      expect(find.text('साथी — ₹299 for 30 days'), findsOneWidget);
+      expect(find.text('Plus (yearly) — ₹5,500 for 12 months'), findsOneWidget);
+      expect(find.textContaining('\$'), findsNothing);
+      expect(find.textContaining('/mo'), findsNothing);
+      expect(find.textContaining('no auto-renew'), findsNWidgets(2));
+    });
+
+    testWidgets('a bought plan shows its price, the period and the valid-till date',
+        (tester) async {
+      final end = DateTime.now().add(const Duration(days: 20));
+      await pump(
+        tester,
+        overview(
+          plan: 'plus_in', priceCents: 59900, planTitle: 'Plus',
+          currency: 'INR', oneTime: true, periodEnd: end, upgrades: const [],
+        ),
+      );
+      expect(find.text('Plus plan'), findsOneWidget);
+      expect(find.textContaining('₹599 for 30 days · valid till'), findsOneWidget);
+      // and the way to keep it: buy the same period again, added on the end
+      expect(find.text('Buy another 30 days — ₹599'), findsOneWidget);
+      expect(find.textContaining('Adds 30 days after'), findsOneWidget);
+    });
+
+    testWidgets('tapping Buy another hands over the SAME plan', (tester) async {
+      String? picked;
+      await pump(
+        tester,
+        overview(plan: 'sathi_in_yearly', priceCents: 330000, currency: 'INR',
+            oneTime: true, upgrades: const []),
+        onUpgrade: (p) => picked = p,
+      );
+      await tester.tap(find.textContaining('Buy another 12 months'));
+      expect(picked, 'sathi_in_yearly');
+    });
+
+    testWidgets('with three days left the line turns into a warning',
+        (tester) async {
+      await pump(
+        tester,
+        overview(plan: 'plus_in', priceCents: 59900, currency: 'INR',
+            oneTime: true, periodEnd: DateTime.now().add(const Duration(days: 2, hours: 1)),
+            upgrades: const []),
+      );
+      expect(find.textContaining('ends in 3 days — buy again to keep it'), findsOneWidget);
+    });
+
+    testWidgets('a renewing dollar plan is worded exactly as before', (tester) async {
+      await pump(tester, overview(plan: 'plus', priceCents: 1500, upgrades: const []));
+      expect(find.text('\$15.00 / month'), findsOneWidget);
+      expect(find.textContaining('Buy another'), findsNothing);
+    });
+
+    test('the wire shape carries currency, one_time and period_end', () {
+      final o = SubscriptionOverview.fromJson(<String, dynamic>{
+        'plan': 'plus_in', 'price_cents': 59900, 'currency': 'INR', 'one_time': true,
+        'period_end': '2026-10-20T10:00:00+00:00', 'region': 'IN',
+        'usage': <String, dynamic>{}, 'upgrades': <dynamic>[
+          <String, dynamic>{'name': 'pro_in', 'price_cents': 99900, 'currency': 'INR', 'one_time': true, 'title': 'Pro'},
+        ],
+        'checkout_available': true,
+      });
+      expect(o.currency, 'INR');
+      expect(o.oneTime, isTrue);
+      expect(o.periodEnd, DateTime.parse('2026-10-20T10:00:00+00:00'));
+      expect(o.region, 'IN');
+      expect(o.upgrades.single.oneTime, isTrue);
+      expect(o.upgrades.single.currency, 'INR');
+      // an older backend without the fields still parses as a dollar plan
+      final old = SubscriptionOverview.fromJson(<String, dynamic>{'plan': 'plus', 'price_cents': 1500, 'usage': <String, dynamic>{}, 'upgrades': <dynamic>[], 'checkout_available': false});
+      expect(old.currency, 'USD');
+      expect(old.oneTime, isFalse);
+      expect(old.periodEnd, isNull);
+      expect(old.daysLeft, isNull);
     });
   });
 

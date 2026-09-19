@@ -207,6 +207,12 @@ class AppConfig {
   /// website. Empty until read; the constant below then stands in.
   static String installedVersion = '';
 
+  /// The device's IANA timezone (`Asia/Kolkata`), read once at start-up by
+  /// [DeviceRegion.init]; empty when it could not be read. Sent as the
+  /// `X-Timezone` header on billing calls so the backend can offer the price
+  /// list for where the person is (core/region.dart).
+  static String deviceTimezone = '';
+
   factory AppConfig.fromEnvironment() {
     const host = String.fromEnvironment(
       'FARRYON_HOST',

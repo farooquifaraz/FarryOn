@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/money.dart';
 import '../../core/theme.dart';
 import '../../core/ui.dart';
 import '../../data/data_api.dart';
@@ -123,13 +124,28 @@ class SubscriptionView extends StatelessWidget {
             icon: Icons.workspace_premium_rounded,
             gradient: o.plan == 'free' ? Aurora.gradTeal : Aurora.gradAmber,
             title: '${o.planTitle.isEmpty ? _title(o.plan) : o.planTitle} plan',
-            subtitle: o.priceCents == 0
-                ? 'Free'
-                : '\$${(o.priceCents / 100).toStringAsFixed(2)} / '
-                    '${o.plan.endsWith('_yearly') ? 'year' : 'month'}',
+            subtitle: _currentPlanLine(o),
+            subtitleColor: (o.daysLeft ?? 99) <= 3 ? Aurora.amber : null,
             trailing: const SizedBox.shrink(),
-            showDivider: false,
+            showDivider: o.oneTime && o.priceCents > 0,
           ),
+          // A plan bought for a period is extended by buying it again — the
+          // next period starts when this one ends, so buying early loses
+          // nothing. Offered here, under the plan it extends, not in the
+          // upgrade list where it would read as a change of plan.
+          if (o.oneTime && o.priceCents > 0)
+            SettingsRow(
+              icon: Icons.autorenew_rounded,
+              gradient: Aurora.gradGreen,
+              title: 'Buy another ${_period(o.plan)} — '
+                  '${formatMoney(o.priceCents, o.currency)}',
+              subtitle: !o.checkoutAvailable
+                  ? 'Coming soon'
+                  : 'Adds ${_period(o.plan)} after '
+                      '${o.periodEnd == null ? 'the current period' : _date(o.periodEnd!)}',
+              onTap: o.checkoutAvailable ? () => onUpgrade(o.plan) : null,
+              showDivider: false,
+            ),
         ]),
         const SizedBox(height: 20),
 
@@ -175,15 +191,21 @@ class SubscriptionView extends StatelessWidget {
                 icon: Icons.arrow_circle_up_rounded,
                 gradient: Aurora.gradGreen,
                 title: '${p.title.isEmpty ? _title(p.name) : p.title} — '
-                    '\$${(p.priceCents / 100).toStringAsFixed(2)}'
-                    '/${p.interval == 'year' ? 'yr' : 'mo'}',
+                    '${formatMoney(p.priceCents, p.currency)}'
+                    '${p.oneTime ? ' for ${_period(p.name)}' : '/${p.interval == 'year' ? 'yr' : 'mo'}'}',
                 subtitle: !o.checkoutAvailable
                     ? 'Coming soon'
-                    : p.interval == 'year'
-                        // Say the saving where the choice is made, not in a
-                        // marketing page they may never have seen.
-                        ? 'Tap to upgrade · works out cheaper than monthly'
-                        : 'Tap to upgrade',
+                    : p.oneTime
+                        // Bought outright: say so, and that it never renews
+                        // by itself — the two things a card-wary buyer asks.
+                        ? (p.interval == 'year'
+                            ? 'One-time payment · no auto-renew · cheaper than monthly'
+                            : 'One-time payment · no auto-renew')
+                        : p.interval == 'year'
+                            // Say the saving where the choice is made, not in a
+                            // marketing page they may never have seen.
+                            ? 'Tap to upgrade · works out cheaper than monthly'
+                            : 'Tap to upgrade',
                 onTap:
                     o.checkoutAvailable ? () => onUpgrade(p.name) : null,
                 showDivider: i < o.upgrades.length - 1,
@@ -205,6 +227,39 @@ class SubscriptionView extends StatelessWidget {
 
   static String _title(String s) =>
       s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
+  /// "30 days" or "12 months" — the period a one-time plan buys.
+  static String _period(String plan) =>
+      plan.endsWith('_yearly') ? '12 months' : '30 days';
+
+  static const _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  static String _date(DateTime d) {
+    final l = d.toLocal();
+    return '${l.day} ${_months[l.month - 1]} ${l.year}';
+  }
+
+  /// The line under the plan's name: its price and, for a plan bought for a
+  /// period, when that period ends — with the days left once it is close.
+  static String _currentPlanLine(SubscriptionOverview o) {
+    if (o.priceCents == 0) return 'Free';
+    final price = formatMoney(o.priceCents, o.currency);
+    if (!o.oneTime) {
+      return '$price / ${o.plan.endsWith('_yearly') ? 'year' : 'month'}';
+    }
+    final end = o.periodEnd;
+    if (end == null) return '$price for ${_period(o.plan)}';
+    final left = o.daysLeft ?? 0;
+    final when = left <= 0
+        ? 'ends today'
+        : left <= 3
+            ? 'ends in $left day${left == 1 ? '' : 's'} — buy again to keep it'
+            : 'valid till ${_date(end)}';
+    return '$price for ${_period(o.plan)} · $when';
+  }
 }
 
 class _UsageRow extends StatelessWidget {

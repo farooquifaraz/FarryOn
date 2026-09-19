@@ -7,6 +7,7 @@ import 'core/config.dart';
 import 'core/config_store.dart';
 import 'core/data_cache.dart';
 import 'core/outbox.dart';
+import 'core/region.dart';
 
 /// Entry point. Loads persisted settings, then wraps the app in a
 /// [ProviderScope] so Riverpod providers are available throughout the tree.
@@ -18,6 +19,9 @@ Future<void> main() async {
     final info = await PackageInfo.fromPlatform();
     AppConfig.installedVersion = '${info.version}+${info.buildNumber}';
   } catch (_) {}
+  // Where the phone is (its timezone) — the backend picks the regional
+  // price list from it. Best effort; failure just means the global list.
+  await DeviceRegion.init();
   await ConfigStore.init();
   await DataCache.init();
   await Outbox.init();

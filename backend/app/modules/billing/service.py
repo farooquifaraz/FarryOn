@@ -42,6 +42,10 @@ def _plan_out(plan: Plan) -> dict:
         "price_cents": plan.price_cents,
         "currency": plan.currency,
         "interval": plan.interval,
+        # Bought outright for the period (the India plans) or renewing — the
+        # app words the price "for 30 days" or "/mo" from this.
+        "one_time": get_settings().plan_is_one_time(plan.name),
+        "region": get_settings().plan_region(plan.name),
         "description": plan.description,
         "features": json.loads(plan.features_json) if plan.features_json else [],
         "is_active": plan.is_active,

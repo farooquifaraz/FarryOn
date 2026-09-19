@@ -74,6 +74,8 @@ class PlanOffer {
     required this.priceCents,
     this.title = '',
     this.interval = 'month',
+    this.currency = 'USD',
+    this.oneTime = false,
   });
 
   /// The key checkout is started with (`plus`, `plus_yearly`).
@@ -87,11 +89,20 @@ class PlanOffer {
   /// `month` or `year` — decides whether the price reads /mo or /yr.
   final String interval;
 
+  /// The currency [priceCents] is in (`USD`, `INR`).
+  final String currency;
+
+  /// Bought outright for the period ("₹599 for 30 days") rather than
+  /// renewing ("$15/mo") — the India plans.
+  final bool oneTime;
+
   factory PlanOffer.fromJson(Map<String, dynamic> j) => PlanOffer(
         name: j['name'] as String? ?? '',
         priceCents: (j['price_cents'] as num?)?.toInt() ?? 0,
         title: j['title'] as String? ?? '',
         interval: j['interval'] as String? ?? 'month',
+        currency: j['currency'] as String? ?? 'USD',
+        oneTime: j['one_time'] as bool? ?? false,
       );
 }
 
@@ -105,6 +116,10 @@ class SubscriptionOverview {
     required this.checkoutAvailable,
     this.window = 'month',
     this.planTitle = '',
+    this.currency = 'USD',
+    this.oneTime = false,
+    this.periodEnd,
+    this.region,
   });
 
   final String plan;
@@ -120,6 +135,20 @@ class SubscriptionOverview {
   final String window;
   final Map<String, UsageMeter> usage;
   final List<PlanOffer> upgrades;
+
+  /// The currency [priceCents] is in.
+  final String currency;
+
+  /// The current plan was bought outright for a period (India plans): it
+  /// runs until [periodEnd] and is not renewed by anyone — buying it again
+  /// adds another period on the end.
+  final bool oneTime;
+
+  /// When a one-time plan's bought period ends (ISO 8601), else null.
+  final DateTime? periodEnd;
+
+  /// The price list this overview was built for (`IN`) or null for global.
+  final String? region;
 
   /// Whether tapping Upgrade can actually start a checkout (Stripe configured
   /// server-side). False renders the buttons with an honest "coming soon".
@@ -140,7 +169,21 @@ class SubscriptionOverview {
             PlanOffer.fromJson(p as Map<String, dynamic>),
         ],
         checkoutAvailable: j['checkout_available'] as bool? ?? false,
+        currency: j['currency'] as String? ?? 'USD',
+        oneTime: j['one_time'] as bool? ?? false,
+        periodEnd: DateTime.tryParse(j['period_end'] as String? ?? ''),
+        region: j['region'] as String?,
       );
+
+  /// Whole days until the bought period ends; null on a renewing plan.
+  int? get daysLeft {
+    final end = periodEnd;
+    if (!oneTime || end == null) return null;
+    final left = end.difference(DateTime.now());
+    // Minutes, not hours: 48 h 59 min is 2.04 days and must round UP to 3,
+    // which truncating to whole hours first would call 2.
+    return left.isNegative ? 0 : (left.inMinutes / 1440).ceil();
+  }
 }
 
 /// The server says this session is over: the token expired, was revoked, or the
@@ -205,9 +248,13 @@ class DataApi {
   /// only the anonymous pile (locally) or 401s (in production).
   Map<String, String> get _headers {
     final token = _config.authToken;
-    return (token == null || token.isEmpty)
-        ? const {}
-        : {'Authorization': 'Bearer $token'};
+    final tz = AppConfig.deviceTimezone;
+    return {
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+      // Where the phone is: the backend offers the price list for this region
+      // (India in rupees, bought for the period) — see core/region.dart.
+      if (tz.isNotEmpty) 'X-Timezone': tz,
+    };
   }
 
   /// Bound on the TCP connect only — see [_defaultClient].

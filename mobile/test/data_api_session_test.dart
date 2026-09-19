@@ -27,6 +27,32 @@ void main() {
         onSessionExpired: onExpired,
       );
 
+  group('the region header', () {
+    test('the device timezone rides on every request when known', () async {
+      AppConfig.deviceTimezone = 'Asia/Kolkata';
+      addTearDown(() => AppConfig.deviceTimezone = '');
+      http.Request? seen;
+      final api = apiThat((req) {
+        seen = req;
+        return http.Response(jsonEncode({'data': {'plan': 'free', 'usage': {}, 'upgrades': [], 'checkout_available': false}}), 200);
+      });
+      await api.subscription();
+      expect(seen!.headers['X-Timezone'], 'Asia/Kolkata');
+      expect(seen!.headers['Authorization'], 'Bearer tok');
+    });
+
+    test('no header when the zone could not be read', () async {
+      AppConfig.deviceTimezone = '';
+      http.Request? seen;
+      final api = apiThat((req) {
+        seen = req;
+        return http.Response(jsonEncode({'data': {'plan': 'free', 'usage': {}, 'upgrades': [], 'checkout_available': false}}), 200);
+      });
+      await api.subscription();
+      expect(seen!.headers.containsKey('X-Timezone'), isFalse);
+    });
+  });
+
   group('401', () {
     test('reads throw SessionExpiredException, not a cast error', () async {
       final api = apiThat((_) => http.Response(
