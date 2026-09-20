@@ -116,12 +116,14 @@ def _session(session_id: str = "cs_test_order1", *, kind: str = "glasses_order",
 # ---- the page ------------------------------------------------------------------
 
 
-def test_the_cards_price_and_buy_from_the_one_catalog() -> None:
+def test_the_cards_price_and_buy_from_the_one_catalog(monkeypatch) -> None:
     from pathlib import Path
 
     import app.web.router as web_router
 
     settings = get_settings()
+    # the developer's .env may list more countries; the test pins the default
+    monkeypatch.setattr(settings, "shop_ship_countries", ["AE"])
     page = shop.render(Path(web_router._INDEX).read_text(encoding="utf-8"), settings)
     assert "<!--PRICE_AED:" not in page and "<!--BUY_ROW:" not in page and "<!--SHOP_CATALOG-->" not in page
     for slug, price in products.PRICES_AED.items():
@@ -142,7 +144,8 @@ def test_the_cards_price_and_buy_from_the_one_catalog() -> None:
     assert catalog["countries"][0] == ["AE", "United Arab Emirates"] and len(catalog["countries"]) >= 50
     assert ["IN", "India"] in catalog["countries"] and ["US", "United States"] in catalog["countries"]
     assert catalog["country_zones"]["Asia/Dubai"] == "AE" and catalog["country_zones"]["Asia/Kolkata"] == "IN"
-    assert catalog["emirates"][:2] == ["Abu Dhabi", "Dubai"] and len(catalog["emirates"]) == 7
+    assert catalog["regions"]["AE"][:2] == ["Abu Dhabi", "Dubai"] and len(catalog["regions"]["AE"]) == 7
+    assert "Maharashtra" in catalog["regions"]["IN"] and "Delhi" in catalog["regions"]["IN"]
     assert "function cartGuessCountry" in page and "data-cart-nodeliver" in page
     assert "data-cart-count" in page and "function cartCheckout" in page
     # the drawer must really be closed on load: `hidden` has to beat display:flex

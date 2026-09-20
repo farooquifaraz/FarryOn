@@ -34,9 +34,19 @@ _COUNTRY_NAMES = {
     "BR": "Brazil", "MX": "Mexico", "AR": "Argentina", "CL": "Chile", "CO": "Colombia",
 }
 
-# The seven emirates: when the country is the UAE the "State / Emirate" field
-# is a picker, not free text — the courier needs it spelled one way.
+# Where a country has a fixed list of states, the "State / Emirate" field is
+# a picker, not free text — the courier needs it spelled one way. Any other
+# country gets a text box.
 EMIRATES = ["Abu Dhabi", "Dubai", "Sharjah", "Ajman", "Umm Al Quwain", "Ras Al Khaimah", "Fujairah"]
+INDIA_STATES = [
+    "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh", "Goa", "Gujarat", "Haryana",
+    "Himachal Pradesh", "Jharkhand", "Karnataka", "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur",
+    "Meghalaya", "Mizoram", "Nagaland", "Odisha", "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu", "Telangana",
+    "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal",
+    "Andaman and Nicobar Islands", "Chandigarh", "Dadra and Nagar Haveli and Daman and Diu", "Delhi",
+    "Jammu and Kashmir", "Ladakh", "Lakshadweep", "Puducherry",
+]
+REGIONS: dict[str, list[str]] = {"AE": EMIRATES, "IN": INDIA_STATES}
 
 # Where the buyer probably is, from the clock — the country picker's first
 # guess. They can change it; nothing is decided by it.
@@ -136,7 +146,7 @@ def catalog(settings: Settings, sold_out: set[str] | None = None) -> dict:
         "countries": [[c, names[c]] for c in ship_to]
         + sorted(([c, n] for c, n in names.items() if c not in ship_to), key=lambda x: x[1]),
         "country_zones": _COUNTRY_ZONES,
-        "emirates": EMIRATES,
+        "regions": REGIONS,
         "enabled": bool(getattr(settings, "stripe_secret_key", None)),
     }
 

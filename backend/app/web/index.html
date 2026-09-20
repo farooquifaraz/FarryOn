@@ -1398,11 +1398,13 @@ function cartCountryName(cc){var hit=(SHOP&&SHOP.countries||[]).find(function(c)
 function cartCountryChanged(){
   var f=document.querySelector('[data-cart-step="2"]');if(!f)return;
   var cc=f.elements.country.value,note=document.querySelector('[data-cart-nodeliver]'),pay=document.querySelector('[data-cart-checkout]');
-  /* the UAE gets an emirate picker; everywhere else a free-text state */
+  /* a country with a known list of states (UAE emirates, Indian states)
+     gets a picker; everywhere else a free-text state */
   var pick=f.querySelector('[data-cart-emirates]'),txt=f.elements.state;
-  if(cc==='AE'&&SHOP&&SHOP.emirates){
-    if(!pick.options.length){SHOP.emirates.forEach(function(e){var o=document.createElement('option');o.value=e;o.textContent=e;pick.appendChild(o)})}
-    if(txt.value&&SHOP.emirates.indexOf(txt.value)>=0)pick.value=txt.value;
+  var list=SHOP&&SHOP.regions&&SHOP.regions[cc];
+  if(list&&list.length){
+    if(pick.dataset.for!==cc){pick.innerHTML='';list.forEach(function(e){var o=document.createElement('option');o.value=e;o.textContent=e;pick.appendChild(o)});pick.dataset.for=cc}
+    if(txt.value&&list.indexOf(txt.value)>=0)pick.value=txt.value;
     pick.hidden=false;txt.hidden=true;
   }else{pick.hidden=true;txt.hidden=false}
   var ok=cartDelivers(cc);
@@ -1421,7 +1423,13 @@ function cartCountryChanged(){
 function cartFormFill(){
   var f=document.querySelector('[data-cart-step="2"]');if(!f)return;
   var sel=f.querySelector('[data-cart-countries]');
-  if(sel&&!sel.options.length&&SHOP){(SHOP.countries||[]).forEach(function(c){var o=document.createElement('option');o.value=c[0];o.textContent=c[1];sel.appendChild(o)})}
+  if(sel&&!sel.options.length&&SHOP){
+    /* two groups: where we deliver, then everywhere else A–Z */
+    var g1=document.createElement('optgroup'),g2=document.createElement('optgroup');
+    g1.label=CART_HI?'यहाँ डिलीवर करते हैं':'We deliver to';g2.label=CART_HI?'अन्य देश':'Other countries';
+    (SHOP.countries||[]).forEach(function(c){var o=document.createElement('option');o.value=c[0];o.textContent=c[1];(cartDelivers(c[0])?g1:g2).appendChild(o)});
+    sel.appendChild(g1);if(g2.children.length)sel.appendChild(g2);
+  }
   var saved={};try{saved=JSON.parse(localStorage.getItem('cart-address')||'{}')}catch(e){}
   CART_FIELDS.forEach(function(k){var el=f.elements[k];if(el&&!el.value&&saved[k])el.value=saved[k]});
   if(sel&&!saved.country)sel.value=cartGuessCountry();
