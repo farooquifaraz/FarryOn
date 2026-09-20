@@ -28,9 +28,20 @@ STATUSES = ("paid", "shipped", "delivered", "cancelled")
 
 
 def _line(item: CartItem) -> dict:
-    """One Stripe line item, priced from the catalog — never from the client."""
+    """One Stripe line item, priced from the catalog — never from the client.
+
+    Refuses a model or colour that is sold out (settings.shop_out_of_stock):
+    the page greys those out, but a cart saved in the browser last week
+    does not know, and Stripe must never take money for a pair we can't ship.
+    """
+    from app.config import get_settings
+    from app.web.shop import colour_in_stock, model_in_stock
+
     if item.slug not in PRICES_AED:
         raise AppError("UNKNOWN_MODEL", f"'{item.slug}' isn't a model we sell.", status_code=400)
+    settings = get_settings()
+    if not model_in_stock(settings, item.slug):
+        raise AppError("OUT_OF_STOCK", f"{MODELS[item.slug]} is out of stock right now.", status_code=400)
     colours = COLOURS.get(item.slug, [])
     colour = (item.colour or "").strip() or None
     if colours and colour not in colours:
@@ -38,6 +49,10 @@ def _line(item: CartItem) -> dict:
             "UNKNOWN_COLOUR",
             f"{MODELS[item.slug]} comes in {', '.join(colours)}.",
             status_code=400,
+        )
+    if colours and colour and not colour_in_stock(settings, item.slug, colour):
+        raise AppError(
+            "OUT_OF_STOCK", f"{MODELS[item.slug]} in {colour} is out of stock right now.", status_code=400
         )
     if not colours:
         colour = None

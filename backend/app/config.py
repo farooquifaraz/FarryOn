@@ -393,6 +393,11 @@ class Settings(BaseSettings):
     # (falls back to the first super admin). Same Stripe keys as billing.
     shop_ship_countries: list[str] = Field(default_factory=lambda: ["AE"])
     shop_notify_email: str | None = Field(default=None)
+    # What is sold out right now: model slugs ("l802") and colour variants
+    # ("gs5:Red"). The card says "Out of stock", the colour is greyed out in
+    # the picker, and a checkout naming one is refused. An env edit + restart
+    # (no code) takes a model off sale and puts it back.
+    shop_out_of_stock: list[str] = Field(default_factory=list)
     # Signing secret (whsec_…) for the Stripe webhook — verifies the
     # Stripe-Signature header. Phase 3. Rejected (503) while unset.
     stripe_webhook_secret: str | None = Field(default=None)

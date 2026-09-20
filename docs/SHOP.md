@@ -25,6 +25,13 @@ localStorage), and **Checkout**, which opens a Stripe Checkout page.
 
 Nothing is written when a checkout starts; an abandoned cart leaves no row.
 
+## Sold out
+
+`SHOP_OUT_OF_STOCK=l802,gs5:Red` (in `.env`, then restart the backend): the
+model's card shows one disabled "Out of stock" button, the colour is greyed
+out in the picker, a cart that still holds it cannot check out, and the
+API refuses it (`OUT_OF_STOCK`). Remove the entry to sell it again.
+
 ## Changing a price or adding a colour
 
 Edit `PRICES_AED` / `COLOURS` in `backend/app/web/products.py`. The card, the

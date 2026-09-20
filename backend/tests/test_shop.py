@@ -127,8 +127,41 @@ def test_the_cards_price_and_buy_from_the_one_catalog() -> None:
     block = page[page.index(">", start) + 1 : page.index("</script>", start)]
     catalog = json.loads(block)
     assert {k: v["price_aed"] for k, v in catalog["items"].items()} == products.PRICES_AED
-    assert catalog["items"]["gs5"]["colours"] == ["Black", "Red", "Cream"]
+    assert [c["name"] for c in catalog["items"]["gs5"]["colours"]] == ["Black", "Red", "Cream"]
+    assert all(c["in_stock"] for c in catalog["items"]["gs5"]["colours"])
+    assert all(v["in_stock"] for v in catalog["items"].values())
+    assert catalog["ship_to_names"] == ["United Arab Emirates"]
     assert "data-cart-count" in page and "function cartCheckout" in page
+    # the drawer must really be closed on load: `hidden` has to beat display:flex
+    assert ".cart[hidden]" in page and "<aside class=\"cart\" data-cart hidden" in page
+
+
+def test_sold_out_models_and_colours_are_marked_and_refused(monkeypatch) -> None:
+    from pathlib import Path
+
+    import app.web.router as web_router
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "shop_out_of_stock", ["l802", "gs5:Red"])
+    page = shop.render(Path(web_router._INDEX).read_text(encoding="utf-8"), settings)
+    assert 'data-buy="l802" data-stock="out"' in page and page.count("Out of stock") == 1
+    assert '<option value="Red" disabled>Red — out of stock</option>' in page
+    assert '<option value="Black">Black</option>' in page
+    start = page.index('id="shop-catalog"')
+    catalog = json.loads(page[page.index(">", start) + 1 : page.index("</script>", start)])
+    assert catalog["items"]["l802"]["in_stock"] is False
+    assert {c["name"]: c["in_stock"] for c in catalog["items"]["gs5"]["colours"]} == {"Black": True, "Red": False, "Cream": True}
+
+    async def refused() -> None:
+        monkeypatch.setattr(settings, "stripe_secret_key", "sk_test_x")
+        with pytest.raises(AppError) as err:
+            await service.create_checkout(items=[CartItem(slug="l802", qty=1)], origin="https://x")
+        assert err.value.code == "OUT_OF_STOCK"
+        with pytest.raises(AppError) as err:
+            await service.create_checkout(items=[CartItem(slug="gs5", qty=1, colour="Red")], origin="https://x")
+        assert err.value.code == "OUT_OF_STOCK"
+
+    asyncio.run(refused())
 
 
 # ---- checkout ------------------------------------------------------------------
