@@ -194,8 +194,8 @@ void main() {
       );
       await tester.tap(find.text('Annual'));
       await tester.pumpAndSettle();
-      // 12 × ₹599 − ₹5,500 = ₹1,688, 23%
-      expect(find.text('Save ₹1,688 (23%)'), findsOneWidget);
+      // 12 × ₹599 − ₹5,500 = ₹1,688 — no percentage, Faraz's call
+      expect(find.text('Save ₹1,688'), findsOneWidget);
     });
 
     testWidgets('a bought plan shows its price, the period and the valid-till date',
@@ -387,7 +387,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('\$150.00'), findsOneWidget);
       expect(find.text('per year'), findsOneWidget);
-      expect(find.text('Save \$30.00 (17%)'), findsOneWidget);
+      expect(find.text('Save \$30.00'), findsOneWidget);
       expect(find.text('works out at \$12.50/mo'), findsOneWidget);
       // Lite has no yearly twin: it drops out of the Annual view
       expect(find.text('Choose Lite'), findsNothing);
@@ -411,7 +411,7 @@ void main() {
       expect(find.text('AED 275'), findsOneWidget);
       expect(find.text('per year'), findsOneWidget);
       expect(find.text('works out at AED 22.92/mo'), findsOneWidget);
-      expect(find.text('Save AED 25 (8%)'), findsOneWidget);
+      expect(find.text('Save AED 25'), findsOneWidget);
     });
 
     test('the wire shape carries the caps a card lists', () {

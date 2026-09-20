@@ -22,7 +22,7 @@ ones. Nothing in the HTML is marked up for it.
 - A dictionary key is the **exact English text** as it appears on the page
   (whitespace collapsed, entities as in the HTML, e.g. `See &amp; Ask`).
 - `_regex` rules handle text with numbers or names in it:
-  `"200 talk minutes a month"`, `"Ask about the GS5 MAX"`, `"Save ₹288 (8%)"`.
+  `"200 talk minutes a month"`, `"Ask about the GS5 MAX"`, `"Save ₹288"`.
 - `_head` holds the `<title>` and meta descriptions.
 - A few attributes are translated too: `alt`, `aria-label`, `title`,
   `placeholder`, and `data-m`/`data-a` (the "per month"/"per year" words the

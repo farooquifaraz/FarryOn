@@ -85,8 +85,8 @@ def test_the_website_renders_a_hidden_uae_grid_with_the_saving_on_each_card() ->
     assert 'data-m="15" data-a="170"' in html and 'data-m="45" data-a="500"' in html
     assert 'data-m="per month" data-a="per year"' in html, "a renewing plan, not a period"
     assert "works out at AED 14.17/mo" in html and "works out at AED 41.67/mo" in html
-    # 12 × 15 − 170 = 10 (6%), 12 × 25 − 275 = 25 (8%), 12 × 45 − 500 = 40 (7%)
-    assert "Save AED 10 (6%)" in html and "Save AED 25 (8%)" in html and "Save AED 40 (7%)" in html
+    # 12 × 15 − 170 = 10, 12 × 25 − 275 = 25, 12 × 45 − 500 = 40 — no percentage
+    assert "Save AED 10<" in html and "Save AED 25<" in html and "Save AED 40<" in html
     assert "Cancel anytime · VAT included" in html
     assert "₹" not in html and "$" not in html and "one-time" not in html.lower()
     assert html.count("Most popular") == 1

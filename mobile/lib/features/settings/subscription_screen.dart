@@ -492,14 +492,14 @@ class _PlanCard extends StatelessWidget {
       : (offer.yearly ? 'per year' : 'per month');
 
   /// What a year saves against twelve months of the monthly price, when
-  /// both are known: "Save ₹288 (8%)". Null when there is nothing to say.
+  /// both are known: "Save ₹288" — the amount alone, no percentage (Faraz).
+  /// Null when there is nothing to say.
   String? get _saving {
     final m = monthly;
     if (!offer.yearly || m == null || m.priceCents <= 0) return null;
     final saved = m.priceCents * 12 - offer.priceCents;
     if (saved <= 0) return null;
-    final pct = (saved * 100 / (m.priceCents * 12)).round();
-    return 'Save ${formatMoney(saved, offer.currency)} ($pct%)';
+    return 'Save ${formatMoney(saved, offer.currency)}';
   }
 
   @override

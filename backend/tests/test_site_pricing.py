@@ -87,7 +87,7 @@ def test_the_headline_promises_the_trial_that_exists(settings) -> None:
 def test_a_yearly_card_says_what_the_year_saves(settings) -> None:
     """Ten months' money for twelve: the card says so, in dollars and percent."""
     html = _cards(settings)
-    assert 'data-usd="30.00">$30</span> (17%)' in html  # Plus: 12 × 15 − 150
+    assert 'data-usd="30.00">$30</span></span>' in html  # Plus: 12 × 15 − 150
     assert html.count('class="plan-save"') == len(
         [n for n in _global(settings) if n.endswith("_yearly")]
     )
@@ -159,8 +159,10 @@ def test_the_india_cards_are_rupees_for_a_period_and_start_hidden(settings) -> N
     assert pricing._rupees(1100000) == "11,00,000" and pricing._rupees(999) == "999"
     assert 'data-m="for 30 days" data-a="for 12 months"' in html
     assert "works out at ₹275/mo" in html and "works out at ₹917/mo" in html
-    # what the year saves, on the card: 12 × 299 − 3,300 = 288 (8%), Plus 1,688 (23%)
-    assert "Save ₹288 (8%)" in html and "Save ₹1,688 (23%)" in html and "Save ₹988 (8%)" in html
+    # what the year saves, on the card: 12 × 299 − 3,300 = 288, Plus 1,688 — the
+    # amount alone, no percentage (Faraz, 2026-09-20)
+    assert "Save ₹288<" in html and "Save ₹1,688<" in html and "Save ₹988<" in html
+    assert "%)" not in html
     assert "One-time payment · no auto-renew · GST included" in html
     assert "$" not in html and "per month" not in html
     assert html.count("Most popular") == 1  # Plus, as on the USD list
@@ -191,5 +193,4 @@ def test_every_usd_yearly_card_says_what_it_saves(settings) -> None:
         monthly = float(plan["price_usd"])
         annual = float(settings.plan_catalog[f"{name}_yearly"]["price_usd"])
         saved = monthly * 12 - annual
-        pct = round(saved / (monthly * 12) * 100)
-        assert f'data-usd="{saved:.2f}">${pricing._money(saved)}</span> ({pct}%)' in html, name
+        assert f'data-usd="{saved:.2f}">${pricing._money(saved)}</span></span>' in html, name

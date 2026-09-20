@@ -105,7 +105,7 @@ def _card(
             f'<span class="ann" style="display:none"> · '
             f'<span class="plan-save">Save '
             f'<span class="fx-usd" data-usd="{saved:.2f}">${_money(saved)}</span>'
-            f" ({round(saved / (monthly_price * 12) * 100)}%)</span></span>"
+            "</span></span>"
             if saved > 0
             else ""
         )
@@ -232,7 +232,7 @@ def _regional_card(
         f"{fmt(round(per_month)) if region == 'IN' else fmt(per_month)}/mo</span>"
         + (
             f'<span class="ann" style="display:none"> · <span class="plan-save">'
-            f"Save {sign}{sep}{fmt(saved)} ({round(saved / (monthly * 12) * 100)}%)</span></span>"
+            f"Save {sign}{sep}{fmt(saved)}</span></span>"
             if saved > 0
             else ""
         )
