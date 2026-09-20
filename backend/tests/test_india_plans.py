@@ -56,7 +56,7 @@ def test_the_india_tiers_are_in_the_catalog_with_the_agreed_numbers() -> None:
     assert s.plan_title("plus_in") == "Plus"
     # the global list is untouched
     assert s.plan_currency("plus") == "USD" and s.plan_region("plus") is None
-    assert not s.plan_is_one_time("plus") and s.plan_price_cents("plus") == 1500
+    assert not s.plan_is_one_time("plus") and s.plan_price_cents("plus") == 800
     assert s.plan_title("plus_yearly") == "Plus (yearly)"
     assert set(s.plans_for_region("IN")) == set(INDIA)
     assert "plus" in s.plans_for_region(None) and "plus_in" not in s.plans_for_region(None)

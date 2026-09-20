@@ -87,7 +87,7 @@ def test_the_headline_promises_the_trial_that_exists(settings) -> None:
 def test_a_yearly_card_says_what_the_year_saves(settings) -> None:
     """Ten months' money for twelve: the card says so, in dollars and percent."""
     html = _cards(settings)
-    assert 'data-usd="30.00">$30</span></span>' in html  # Plus: 12 × 15 − 150
+    assert 'data-usd="16.00">$16</span></span>' in html  # Plus: 12 × 8 − 80
     assert html.count('class="plan-save"') == len(
         [n for n in _global(settings) if n.endswith("_yearly")]
     )

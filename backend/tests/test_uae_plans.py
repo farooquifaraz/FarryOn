@@ -138,3 +138,16 @@ async def test_the_uae_sees_only_its_own_list_and_checks_out_as_a_subscription(d
     monkeypatch.setattr(stripe_client, "create_checkout_session", fake_session)
     await service.create_checkout(db_session, user=user, plan_name="plus_ae", region="AE")
     assert seen[-1]["mode"] == "subscription" and seen[-1]["price_id"] == "price_ae"
+
+
+def test_the_three_lists_sell_the_same_caps_and_the_dollar_list_sits_above_the_dirham_one() -> None:
+    """One product, three price lists (Faraz, 2026-09-21)."""
+    s = get_settings()
+    aed_per_usd = 3.6725
+    for us, ae, india in (("lite", "lite_ae", "sathi_in"), ("plus", "plus_ae", "plus_in"), ("pro", "pro_ae", "pro_in")):
+        assert s.plan_limits[us] == s.plan_limits[ae] == s.plan_limits[india], us
+        usd = s.plan_price_cents(us) / 100
+        aed_in_usd = s.plan_price_cents(ae) / 100 / aed_per_usd
+        assert aed_in_usd < usd <= aed_in_usd * 1.3, (us, usd, aed_in_usd)
+    assert s.plan_price_cents("lite") == 500 and s.plan_price_cents("plus") == 800 and s.plan_price_cents("pro") == 1500
+    assert s.plan_price_cents("lite_yearly") == 5000 and s.plan_price_cents("plus_yearly") == 8000 and s.plan_price_cents("pro_yearly") == 15000

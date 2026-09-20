@@ -27,11 +27,11 @@ async def test_seeds_the_catalog(db_session) -> None:
 
     plans = await _plans_by_name(db_session)
     assert set(seed.sold_plans()) <= set(plans)
-    # Prices come from Settings.plan_catalog (lite $6, plus $15, pro $25 —
-    # repriced 2026-09-05 against the measured cost per talk-minute).
-    assert plans["lite"].price_cents == 600
-    assert plans["plus"].price_cents == 1500
-    assert plans["pro"].price_cents == 2500
+    # Prices come from Settings.plan_catalog (lite $5, plus $8, pro $15 —
+    # the India/UAE caps, priced a little above the UAE list, 2026-09-21).
+    assert plans["lite"].price_cents == 500
+    assert plans["plus"].price_cents == 800
+    assert plans["pro"].price_cents == 1500
     assert plans["plus"].currency == "USD"
     assert plans["pro"].is_active is True
     # The free/trial tier is a fallback, not a billable row.

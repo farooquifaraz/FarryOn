@@ -42,7 +42,7 @@ def test_the_hindi_dictionary_loads_and_knows_the_headline() -> None:
     tr = i18n.load("hi")
     assert tr is not None
     assert tr.lookup("See everything.") == "सब देखें।"
-    assert tr.lookup("200 talk minutes a month") == "200 टॉक मिनट हर महीने"
+    assert tr.lookup("120 talk minutes a month") == "120 टॉक मिनट हर महीने"
     assert tr.lookup("Ask about the GS5 MAX") == "GS5 MAX के बारे में पूछें"
     assert tr.lookup("Something nobody translated") is None
     assert i18n.load("xx") is None

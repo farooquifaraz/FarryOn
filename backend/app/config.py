@@ -575,9 +575,13 @@ class Settings(BaseSettings):
             # numbers are one-time lifetime totals.
             #         price  period    talk_min  scans  searches
             "free": {"price_usd": 0.0,  "period": "trial", "talk_minutes": 30,   "image_scans": 10,   "web_searches": 15},    # noqa: E501
-            "lite": {"price_usd": 6.0,  "period": "month", "talk_minutes": 200,  "image_scans": 150,  "web_searches": 200},   # noqa: E501
-            "plus": {"price_usd": 15.0, "period": "month", "talk_minutes": 500,  "image_scans": 500,  "web_searches": 800},   # noqa: E501
-            "pro":  {"price_usd": 25.0, "period": "month", "talk_minutes": 1000, "image_scans": 1000, "web_searches": 1000},  # noqa: E501
+            # Global (USD) tiers — Faraz, 2026-09-21: the SAME caps as the
+            # India and UAE lists (120/250/400 minutes), priced a little
+            # above the UAE list in dollars ($5/8/15 vs AED 15/25/45 ≈
+            # $4.08/6.81/12.25). One product, three price lists.
+            "lite": {"price_usd": 5.0,  "period": "month", "talk_minutes": 120, "image_scans": 70,  "web_searches": 110},   # noqa: E501
+            "plus": {"price_usd": 8.0,  "period": "month", "talk_minutes": 250, "image_scans": 130, "web_searches": 225},   # noqa: E501
+            "pro":  {"price_usd": 15.0, "period": "month", "talk_minutes": 400, "image_scans": 240, "web_searches": 400},   # noqa: E501
             # Yearly: the SAME monthly allowances, paid a year at a time, at
             # ten months' money — two months free, the same deal on every tier
             # so no one has to compare discounts to pick a plan. It is
@@ -585,9 +589,9 @@ class Settings(BaseSettings):
             # and the money arrives before the cost does. Caps stay
             # MONTHLY on purpose — a year-sized bucket would let someone spend
             # twelve months of the most expensive thing we sell in a weekend.
-            "lite_yearly": {"price_usd": 60.0,  "period": "year", "talk_minutes": 200,  "image_scans": 150,  "web_searches": 200},   # noqa: E501
-            "plus_yearly": {"price_usd": 150.0, "period": "year", "talk_minutes": 500,  "image_scans": 500,  "web_searches": 800},   # noqa: E501
-            "pro_yearly":  {"price_usd": 250.0, "period": "year", "talk_minutes": 1000, "image_scans": 1000, "web_searches": 1000},  # noqa: E501
+            "lite_yearly": {"price_usd": 50.0,  "period": "year", "talk_minutes": 120, "image_scans": 70,  "web_searches": 110},   # noqa: E501
+            "plus_yearly": {"price_usd": 80.0,  "period": "year", "talk_minutes": 250, "image_scans": 130, "web_searches": 225},   # noqa: E501
+            "pro_yearly":  {"price_usd": 150.0, "period": "year", "talk_minutes": 400, "image_scans": 240, "web_searches": 400},   # noqa: E501
             # India price list (Faraz, 2026-09-20): priced in INR, sold as a
             # ONE-TIME payment for the period (no auto-renew — Indian cards
             # need an RBI e-mandate for recurring charges to a foreign
