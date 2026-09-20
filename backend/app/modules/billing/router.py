@@ -22,6 +22,7 @@ from app.core.responses import AppError, ok
 from app.db.models import User
 from app.modules.audit.service import write_audit
 from app.modules.billing import service, stripe_webhook
+from app.modules.shop import service as shop_service
 from app.modules.billing.schemas import (
     CheckoutRequest,
     PaymentLinkRequest,
@@ -319,6 +320,28 @@ async def stripe_webhook_endpoint(
         stripe_event = json.loads(payload)
     except ValueError as e:
         raise AppError("INVALID_EVENT", "Body is not JSON.", status_code=400) from e
+
+    # A glasses order (modules/shop) completes through the same event as a
+    # plan purchase; its metadata says which it is. Orders never touch the
+    # subscription machinery.
+    session_obj = (stripe_event.get("data") or {}).get("object") or {}
+    if (
+        stripe_event.get("type") == "checkout.session.completed"
+        and (session_obj.get("metadata") or {}).get("kind") == shop_service.ORDER_KIND
+    ):
+        order = await shop_service.record_order(db, session_obj)
+        if not order["duplicate"]:
+            await write_audit(
+                db,
+                actor_id=None,
+                action="order.paid",
+                entity_type="order",
+                entity_id=order["id"],
+                after={"amount_cents": order["amount_cents"], "currency": order["currency"]},
+                ip=_client_ip(request),
+                user_agent=request.headers.get("user-agent"),
+            )
+        return ok({"order_id": order["id"], "duplicate": order["duplicate"]})
 
     events = stripe_webhook.to_events(stripe_event)
     if not events:

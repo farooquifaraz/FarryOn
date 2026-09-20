@@ -388,6 +388,11 @@ class Settings(BaseSettings):
         default="https://farryon.app/billing/success?session_id={CHECKOUT_SESSION_ID}"
     )
     stripe_cancel_url: str = Field(default="https://farryon.app/billing/cancel")
+    # The glasses shop (modules/shop): where Stripe may collect a shipping
+    # address (ISO country codes) and who is mailed when an order is paid
+    # (falls back to the first super admin). Same Stripe keys as billing.
+    shop_ship_countries: list[str] = Field(default_factory=lambda: ["AE"])
+    shop_notify_email: str | None = Field(default=None)
     # Signing secret (whsec_…) for the Stripe webhook — verifies the
     # Stripe-Signature header. Phase 3. Rejected (503) while unset.
     stripe_webhook_secret: str | None = Field(default=None)

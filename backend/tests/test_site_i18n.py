@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.config import get_settings
-from app.web import contact, i18n, pricing, products
+from app.web import contact, i18n, pricing, products, shop
 from app.web import router as web
 
 pytestmark = pytest.mark.asyncio
@@ -143,7 +143,7 @@ def test_every_hindi_key_is_still_on_the_page_or_a_rule(tmp_path, monkeypatch) -
     monkeypatch.setattr(products, "media_root", lambda _s: tmp_path)
     products._cache.clear()
     page = web._INDEX.read_text(encoding="utf-8")
-    landing = contact.render(products.render(pricing.render(page, settings), settings), settings)
+    landing = contact.render(shop.render(products.render(pricing.render(page, settings), settings), settings), settings)
     about = contact.render(web._ABOUT.read_text(encoding="utf-8"), settings)
     present = set(_text_nodes(landing)) | set(_text_nodes(about))
     for html in (landing, about):

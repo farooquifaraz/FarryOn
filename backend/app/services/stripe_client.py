@@ -117,6 +117,75 @@ async def create_checkout_session(
     )
 
 
+async def create_order_session(
+    *,
+    secret_key: str,
+    line_items: list[dict[str, Any]],
+    success_url: str,
+    cancel_url: str,
+    ship_to: list[str],
+    metadata: dict[str, str],
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """A one-payment Checkout for physical goods (the glasses shop).
+
+    Prices ride inline as ``price_data`` — the catalog is ours, not Stripe's
+    — and Stripe collects the shipping address (``ship_to`` countries) and a
+    phone number, so nothing personal is typed on our page. ``metadata``
+    (``kind=glasses_order`` + the items) is echoed on the completed-session
+    event and copied to the PaymentIntent, which is how the webhook knows an
+    order from a plan.
+    """
+    params = _flatten(
+        {
+            "mode": "payment",
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+            "line_items": line_items,
+            "metadata": metadata,
+            "payment_intent_data": {"metadata": metadata},
+            "shipping_address_collection": {"allowed_countries": ship_to},
+            "phone_number_collection": {"enabled": True},
+        }
+    )
+    return await _post("/v1/checkout/sessions", params, secret_key=secret_key, client=client)
+
+
+async def retrieve_checkout_session(
+    *, secret_key: str, session_id: str, client: httpx.AsyncClient | None = None
+) -> dict[str, Any]:
+    """Read a Checkout Session back (the thank-you page's summary)."""
+    return await _get(f"/v1/checkout/sessions/{session_id}", secret_key=secret_key, client=client)
+
+
+async def _get(
+    path: str, *, secret_key: str, client: httpx.AsyncClient | None
+) -> dict[str, Any]:
+    owns = client is None
+    client = client or httpx.AsyncClient(timeout=_TIMEOUT)
+    try:
+        res = await client.get(
+            f"{_API_BASE}{path}", headers={"Authorization": f"Bearer {secret_key}"}
+        )
+    except httpx.HTTPError as e:
+        raise StripeError(f"Could not reach Stripe: {e}") from e
+    finally:
+        if owns:
+            await client.aclose()
+    try:
+        body = res.json()
+    except ValueError:
+        body = {}
+    if res.status_code >= 400:
+        err = body.get("error", {}) if isinstance(body, dict) else {}
+        raise StripeError(
+            err.get("message", f"Stripe returned {res.status_code}"),
+            code=err.get("code"),
+            status=res.status_code,
+        )
+    return body
+
+
 async def _post(
     path: str,
     params: dict[str, str],

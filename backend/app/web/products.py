@@ -107,6 +107,21 @@ MODELS: dict[str, str] = {
     "gs5": "GS5 MAX",
 }
 
+# What each model costs, in whole dirhams — the ONE place the price lives.
+# The spec cards print it, the currency picker converts it, the cart adds it
+# up and the checkout charges it (modules/shop). Change it here, nowhere else.
+PRICES_AED: dict[str, int] = {
+    "l801": 300,
+    "l802": 350,
+    "gs4": 350,
+    "gs5": 450,
+}
+
+# Colour choices, for the models that come in more than one.
+COLOURS: dict[str, list[str]] = {
+    "gs5": ["Black", "Red", "Cream"],
+}
+
 # Product catalogs (one PDF per model) live next to the photographs, in
 # ``<media root>/catalogs/<slug>.pdf``. Like the photographs they are
 # discovered, never assumed: a model without a catalog gets no link.

@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from app.config import get_settings
-from app.web import contact, i18n, pricing, products, rates
+from app.web import contact, i18n, pricing, products, rates, shop
 from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -99,6 +99,9 @@ async def _landing(lang: str, request: Request) -> HTMLResponse:
         # Fills the gallery slots on the spec cards from whatever photography
         # is on disk, and resolves to nothing at all when there is none.
         page = products.render(page, settings)
+        # Glasses prices, the Buy / Add-to-cart buttons and the catalog the
+        # cart script reads — all from one price table (web/products.py).
+        page = shop.render(page, settings)
         # The WhatsApp buttons and the footer's social icons. Both resolve to
         # nothing when their settings are unset — which is the point: the page
         # used to ship a WhatsApp link and four social icons that went nowhere.

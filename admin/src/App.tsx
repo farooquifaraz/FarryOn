@@ -3,6 +3,7 @@ import { AuthProvider } from "./lib/auth";
 import Layout from "./components/Layout";
 import Audit from "./pages/Audit";
 import Billing from "./pages/Billing";
+import Orders from "./pages/Orders";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Roles from "./pages/Roles";
@@ -26,6 +27,7 @@ export default function App() {
             <Route path="/admin/usage" element={<Usage />} />
             <Route path="/admin/roles" element={<Roles />} />
             <Route path="/admin/billing" element={<Billing />} />
+            <Route path="/admin/orders" element={<Orders />} />
             <Route path="/admin/audit" element={<Audit />} />
           </Route>
         </Routes>

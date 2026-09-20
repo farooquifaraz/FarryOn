@@ -667,3 +667,35 @@ class DailyUsage(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+
+class Order(Base):
+    """A glasses order: one paid Stripe Checkout Session (modules/shop).
+
+    Created only by the webhook, keyed on the session id so a redelivered
+    event finds its own row. The address and items are kept as JSON text —
+    they are what Stripe reported at the time, read back to ship the parcel,
+    never queried.
+    """
+
+    __tablename__ = "orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    payment_intent: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
+    name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    address_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    items_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    amount_cents: Mapped[int] = mapped_column(Integer, default=0)
+    currency: Mapped[str] = mapped_column(String(8), default="AED")
+    # "paid" -> "shipped" -> "delivered", or "cancelled"
+    status: Mapped[str] = mapped_column(String(16), default="paid", index=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )

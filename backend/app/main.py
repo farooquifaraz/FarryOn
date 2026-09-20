@@ -41,6 +41,9 @@ from app.modules.impersonation.router import router as impersonation_router
 from app.modules.rbac.router import router as rbac_router
 from app.modules.sessions.router import admin_router as sessions_admin_router
 from app.modules.sessions.router import me_router as sessions_me_router
+from app.modules.shop.router import admin_router as shop_admin_router
+from app.modules.shop.router import page_router as shop_page_router
+from app.modules.shop.router import router as shop_router
 from app.modules.sso.router import router as sso_router
 from app.modules.twofa.router import admin_router as twofa_admin_router
 from app.modules.twofa.router import me_router as twofa_me_router
@@ -160,6 +163,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(billing_router, prefix="/api/v1")
     app.include_router(billing_me_router, prefix="/api/v1")
     app.include_router(billing_webhook_router, prefix="/api/v1")
+    # The glasses shop: public checkout + admin orders under the API, the
+    # thank-you page at /shop/success next to the site.
+    app.include_router(shop_router, prefix="/api/v1")
+    app.include_router(shop_admin_router, prefix="/api/v1")
+    app.include_router(shop_page_router)
 
     @app.get("/healthz", response_class=JSONResponse, tags=["ops"])
     async def healthz() -> JSONResponse:
