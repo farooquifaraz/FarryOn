@@ -21,3 +21,7 @@ class ShopCheckoutRequest(BaseModel):
 class OrderStatusRequest(BaseModel):
     status: Literal["paid", "shipped", "delivered", "cancelled"]
     note: str | None = Field(default=None, max_length=500)
+
+
+class StockRequest(BaseModel):
+    in_stock: bool

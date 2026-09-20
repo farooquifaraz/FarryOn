@@ -27,10 +27,15 @@ Nothing is written when a checkout starts; an abandoned cart leaves no row.
 
 ## Sold out
 
-`SHOP_OUT_OF_STOCK=l802,gs5:Red` (in `.env`, then restart the backend): the
-model's card shows one disabled "Out of stock" button, the colour is greyed
-out in the picker, a cart that still holds it cannot check out, and the
-API refuses it (`OUT_OF_STOCK`). Remove the entry to sell it again.
+Admin panel → **Orders** → the **Stock** card at the top: click a model's
+"On sale" button to mark it out of stock, or a colour chip to take just
+that colour off sale; click again to put it back. It takes effect on the
+next page load (no restart): the model's card shows one disabled "Out of
+stock" button, the colour is greyed out in the picker, a cart that still
+holds it cannot check out, and the API refuses it (`OUT_OF_STOCK`).
+
+`SHOP_OUT_OF_STOCK=l802,gs5:Red` in `.env` does the same from the server
+side (needs a restart); the two lists are unioned.
 
 ## Changing a price or adding a colour
 

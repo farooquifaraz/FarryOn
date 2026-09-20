@@ -20,7 +20,7 @@ from app.core.responses import ok
 from app.db.models import User
 from app.modules.audit.service import write_audit
 from app.modules.shop import service
-from app.modules.shop.schemas import OrderStatusRequest, ShopCheckoutRequest
+from app.modules.shop.schemas import OrderStatusRequest, ShopCheckoutRequest, StockRequest
 
 router = APIRouter(prefix="/shop", tags=["shop"])
 page_router = APIRouter(tags=["shop"])
@@ -36,8 +36,10 @@ def _origin(request: Request) -> str:
 
 
 @router.post("/checkout")
-async def shop_checkout_endpoint(body: ShopCheckoutRequest, request: Request) -> dict:
-    return ok(await service.create_checkout(items=body.items, origin=_origin(request)))
+async def shop_checkout_endpoint(
+    body: ShopCheckoutRequest, request: Request, db: AsyncSession = Depends(get_db)
+) -> dict:
+    return ok(await service.create_checkout(db, items=body.items, origin=_origin(request)))
 
 
 _PAGE = """<!doctype html>
@@ -115,6 +117,38 @@ async def set_order_status_endpoint(
         entity_type="order",
         entity_id=order_id,
         after={"status": body.status},
+        ip=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    return ok(out)
+
+
+# ---- Stock (admin) --------------------------------------------------------------
+
+
+@admin_router.get("/stock", dependencies=[Depends(require_permission("billing.read"))])
+async def list_stock_endpoint(db: AsyncSession = Depends(get_db)) -> dict:
+    """Every model and colour, and whether it is on sale."""
+    return ok(await service.stock_list(db))
+
+
+@admin_router.put("/stock/{key}", dependencies=[Depends(require_permission("billing.manage"))])
+async def set_stock_endpoint(
+    key: str,
+    body: StockRequest,
+    request: Request,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Toggle a model (``l802``) or a colour (``gs5:Red``) on or off sale."""
+    out = await service.set_stock(db, key, in_stock=body.in_stock)
+    await write_audit(
+        db,
+        actor_id=actor.id,
+        action="stock.set",
+        entity_type="stock",
+        entity_id=None,
+        after={"key": key, "in_stock": body.in_stock},
         ip=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )

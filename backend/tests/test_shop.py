@@ -17,15 +17,14 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.core.responses import AppError
+from app.core.security import hash_password
 from app.db import base as db_base
-from app.db.models import Order
+from app.db.models import Order, User, UserRole
+from app.db.seed import seed_roles_and_permissions
 from app.main import create_app
 from app.modules.shop import service
 from app.modules.shop.schemas import CartItem
 from app.services import stripe_client
-from app.core.security import hash_password
-from app.db.models import User, UserRole
-from app.db.seed import seed_roles_and_permissions
 from app.web import products, shop
 
 SECRET = "whsec_shop_test"
@@ -154,20 +153,56 @@ def test_sold_out_models_and_colours_are_marked_and_refused(monkeypatch) -> None
 
     async def refused() -> None:
         monkeypatch.setattr(settings, "stripe_secret_key", "sk_test_x")
-        with pytest.raises(AppError) as err:
-            await service.create_checkout(items=[CartItem(slug="l802", qty=1)], origin="https://x")
-        assert err.value.code == "OUT_OF_STOCK"
-        with pytest.raises(AppError) as err:
-            await service.create_checkout(items=[CartItem(slug="gs5", qty=1, colour="Red")], origin="https://x")
-        assert err.value.code == "OUT_OF_STOCK"
+        async with db_base.get_sessionmaker()() as db:
+            with pytest.raises(AppError) as err:
+                await service.create_checkout(db, items=[CartItem(slug="l802", qty=1)], origin="https://x")
+            assert err.value.code == "OUT_OF_STOCK"
+            with pytest.raises(AppError) as err:
+                await service.create_checkout(db, items=[CartItem(slug="gs5", qty=1, colour="Red")], origin="https://x")
+            assert err.value.code == "OUT_OF_STOCK"
 
     asyncio.run(refused())
+
+
+def test_the_admin_toggles_stock_and_the_page_and_checkout_follow(monkeypatch) -> None:
+    """Sold out from the admin panel, with no env edit and no restart."""
+    client = TestClient(create_app())
+    admin_token = _setup_admin(client, "stock-admin@example.com")
+    r = client.get("/api/v1/admin/stock", headers=_auth(admin_token))
+    assert r.status_code == 200
+    keys = {row["key"]: row for row in r.json()["data"]}
+    assert set(keys) == {"l801", "l802", "gs4", "gs5", "gs5:Black", "gs5:Red", "gs5:Cream"}
+    assert all(row["in_stock"] for row in keys.values())
+    assert keys["gs5:Red"] == {"key": "gs5:Red", "model": "GS5 MAX", "colour": "Red", "in_stock": True}
+
+    r = client.put("/api/v1/admin/stock/gs5:Red", headers=_auth(admin_token), json={"in_stock": False})
+    assert r.status_code == 200 and r.json()["data"]["in_stock"] is False
+    r = client.put("/api/v1/admin/stock/l802", headers=_auth(admin_token), json={"in_stock": False})
+    assert r.status_code == 200
+    r = client.put("/api/v1/admin/stock/gs9", headers=_auth(admin_token), json={"in_stock": False})
+    assert r.status_code == 404
+
+    # the landing page greys them out
+    page = client.get("/").text
+    assert '<option value="Red" disabled>Red — out of stock</option>' in page
+    assert 'data-buy="l802" data-stock="out"' in page
+
+    # and the checkout refuses them
+    s = get_settings()
+    monkeypatch.setattr(s, "stripe_secret_key", "sk_test_x")
+    r = client.post("/api/v1/shop/checkout", json={"items": [{"slug": "gs5", "qty": 1, "colour": "Red"}]})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "OUT_OF_STOCK"
+
+    # back on sale
+    r = client.put("/api/v1/admin/stock/gs5:Red", headers=_auth(admin_token), json={"in_stock": True})
+    assert r.json()["data"]["in_stock"] is True
+    assert '<option value="Red">Red</option>' in client.get("/").text
 
 
 # ---- checkout ------------------------------------------------------------------
 
 
-async def test_checkout_prices_the_cart_from_the_catalog_not_the_client(monkeypatch) -> None:
+async def test_checkout_prices_the_cart_from_the_catalog_not_the_client(db_session, monkeypatch) -> None:
     s = get_settings()
     monkeypatch.setattr(s, "stripe_secret_key", "sk_test_x")
     seen: list[dict] = []
@@ -178,6 +213,7 @@ async def test_checkout_prices_the_cart_from_the_catalog_not_the_client(monkeypa
 
     monkeypatch.setattr(stripe_client, "create_order_session", fake)
     out = await service.create_checkout(
+        db_session,
         items=[CartItem(slug="gs5", qty=2, colour="Cream"), CartItem(slug="l801", qty=1)],
         origin="http://localhost:8000",
     )
@@ -196,14 +232,14 @@ async def test_checkout_prices_the_cart_from_the_catalog_not_the_client(monkeypa
     assert json.loads(meta["items"])[0] == {"slug": "gs5", "name": "GS5 MAX", "colour": "Cream", "qty": 2, "price_aed": 450}
 
 
-async def test_checkout_refuses_unknown_models_and_colours(monkeypatch) -> None:
+async def test_checkout_refuses_unknown_models_and_colours(db_session, monkeypatch) -> None:
     s = get_settings()
     monkeypatch.setattr(s, "stripe_secret_key", "sk_test_x")
     with pytest.raises(AppError) as err:
-        await service.create_checkout(items=[CartItem(slug="gs9", qty=1)], origin="https://x")
+        await service.create_checkout(db_session, items=[CartItem(slug="gs9", qty=1)], origin="https://x")
     assert err.value.code == "UNKNOWN_MODEL"
     with pytest.raises(AppError) as err:
-        await service.create_checkout(items=[CartItem(slug="gs5", qty=1, colour="Pink")], origin="https://x")
+        await service.create_checkout(db_session, items=[CartItem(slug="gs5", qty=1, colour="Pink")], origin="https://x")
     assert err.value.code == "UNKNOWN_COLOUR"
 
 

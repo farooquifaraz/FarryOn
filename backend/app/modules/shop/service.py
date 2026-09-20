@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.responses import AppError
-from app.db.models import Order
+from app.db.models import Order, ShopStock
 from app.logging_conf import get_logger
 from app.modules.shop.schemas import CartItem
 from app.web.products import COLOURS, MODELS, PRICES_AED
@@ -27,20 +27,57 @@ ORDER_KIND = "glasses_order"
 STATUSES = ("paid", "shipped", "delivered", "cancelled")
 
 
-def _line(item: CartItem) -> dict:
+# ---- Stock -------------------------------------------------------------------
+
+
+async def sold_out_keys(db: AsyncSession) -> set[str]:
+    """Everything not for sale right now: the admin panel's toggles
+    (shop_stock rows with in_stock false) plus the SHOP_OUT_OF_STOCK env list."""
+    from app.config import get_settings
+    from app.web.shop import out_of_stock
+
+    rows = (await db.execute(select(ShopStock.key).where(ShopStock.in_stock.is_(False)))).scalars().all()
+    return out_of_stock(get_settings()) | set(rows)
+
+
+async def stock_list(db: AsyncSession) -> list[dict]:
+    """Every model and colour with whether it is on sale — the admin's table."""
+    from app.web.shop import stock_keys
+
+    sold_out = await sold_out_keys(db)
+    return [{**k, "in_stock": k["key"] not in sold_out} for k in stock_keys()]
+
+
+async def set_stock(db: AsyncSession, key: str, *, in_stock: bool) -> dict:
+    from app.web.shop import stock_keys
+
+    known = {k["key"]: k for k in stock_keys()}
+    if key not in known:
+        raise AppError("UNKNOWN_KEY", f"'{key}' isn't a model or colour we sell.", status_code=404)
+    row = (await db.execute(select(ShopStock).where(ShopStock.key == key))).scalar_one_or_none()
+    if row is None:
+        row = ShopStock(key=key, in_stock=in_stock)
+        db.add(row)
+    else:
+        row.in_stock = in_stock
+        row.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info("shop.stock_set", key=key, in_stock=in_stock)
+    return {**known[key], "in_stock": in_stock}
+
+
+def _line(item: CartItem, sold_out: set[str]) -> dict:
     """One Stripe line item, priced from the catalog — never from the client.
 
-    Refuses a model or colour that is sold out (settings.shop_out_of_stock):
-    the page greys those out, but a cart saved in the browser last week
-    does not know, and Stripe must never take money for a pair we can't ship.
+    Refuses a model or colour that is sold out: the page greys those out,
+    but a cart saved in the browser last week does not know, and Stripe
+    must never take money for a pair we can't ship.
     """
-    from app.config import get_settings
     from app.web.shop import colour_in_stock, model_in_stock
 
     if item.slug not in PRICES_AED:
         raise AppError("UNKNOWN_MODEL", f"'{item.slug}' isn't a model we sell.", status_code=400)
-    settings = get_settings()
-    if not model_in_stock(settings, item.slug):
+    if not model_in_stock(sold_out, item.slug):
         raise AppError("OUT_OF_STOCK", f"{MODELS[item.slug]} is out of stock right now.", status_code=400)
     colours = COLOURS.get(item.slug, [])
     colour = (item.colour or "").strip() or None
@@ -50,7 +87,7 @@ def _line(item: CartItem) -> dict:
             f"{MODELS[item.slug]} comes in {', '.join(colours)}.",
             status_code=400,
         )
-    if colours and colour and not colour_in_stock(settings, item.slug, colour):
+    if colours and colour and not colour_in_stock(sold_out, item.slug, colour):
         raise AppError(
             "OUT_OF_STOCK", f"{MODELS[item.slug]} in {colour} is out of stock right now.", status_code=400
         )
@@ -81,7 +118,7 @@ def _summary(items: list[CartItem]) -> list[dict]:
     ]
 
 
-async def create_checkout(*, items: list[CartItem], origin: str) -> dict:
+async def create_checkout(db: AsyncSession, *, items: list[CartItem], origin: str) -> dict:
     """Start a Stripe Checkout for the cart; returns ``{"url": …}``.
 
     ``origin`` is where the visitor is (https://farryon.izylrn.com, or the
@@ -94,7 +131,8 @@ async def create_checkout(*, items: list[CartItem], origin: str) -> dict:
     settings = get_settings()
     if not settings.stripe_secret_key:
         raise AppError("SHOP_NOT_CONFIGURED", "The shop isn't taking orders yet.", status_code=503)
-    lines = [_line(i) for i in items]
+    sold_out = await sold_out_keys(db)
+    lines = [_line(i, sold_out) for i in items]
     summary = _summary(items)
     total = sum(i["price_aed"] * i["qty"] for i in summary)
     try:

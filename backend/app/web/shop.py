@@ -32,17 +32,32 @@ _COUNTRY_NAMES = {
 
 
 def out_of_stock(settings: Settings) -> set[str]:
-    """``{"l802", "gs5:Red"}`` from the setting — model slugs and
-    ``slug:Colour`` variants that are not for sale right now."""
+    """``{"l802", "gs5:Red"}`` from the env setting — model slugs and
+    ``slug:Colour`` variants that are not for sale right now. The admin
+    panel's toggles (shop_stock table) are unioned in by
+    :func:`app.modules.shop.service.sold_out_keys`; callers that have a DB
+    pass that set in, callers that don't get the env list alone."""
     return {str(x).strip() for x in getattr(settings, "shop_out_of_stock", []) if str(x).strip()}
 
 
-def model_in_stock(settings: Settings, slug: str) -> bool:
-    return slug not in out_of_stock(settings)
+def stock_keys() -> list[dict]:
+    """Every toggleable thing, in card order: each model, then its colours."""
+    out = []
+    for slug, name in MODELS.items():
+        if slug not in PRICES_AED:
+            continue
+        out.append({"key": slug, "model": name, "colour": None})
+        for c in COLOURS.get(slug, []):
+            out.append({"key": f"{slug}:{c}", "model": name, "colour": c})
+    return out
 
 
-def colour_in_stock(settings: Settings, slug: str, colour: str) -> bool:
-    return f"{slug}:{colour}" not in out_of_stock(settings)
+def model_in_stock(sold_out: set[str], slug: str) -> bool:
+    return slug not in sold_out
+
+
+def colour_in_stock(sold_out: set[str], slug: str, colour: str) -> bool:
+    return f"{slug}:{colour}" not in sold_out
 
 
 def thumb_url(gallery: Gallery | None) -> str | None:
@@ -60,9 +75,10 @@ def thumb_url(gallery: Gallery | None) -> str | None:
     return None
 
 
-def catalog(settings: Settings) -> dict:
+def catalog(settings: Settings, sold_out: set[str] | None = None) -> dict:
     """What the cart script needs: names, prices, colours and their stock,
     a thumbnail when there is photography, where we deliver."""
+    sold_out = out_of_stock(settings) if sold_out is None else sold_out
     found = galleries(settings)
     items = {}
     for slug, name in MODELS.items():
@@ -71,9 +87,9 @@ def catalog(settings: Settings) -> dict:
         items[slug] = {
             "name": name,
             "price_aed": PRICES_AED[slug],
-            "in_stock": model_in_stock(settings, slug),
+            "in_stock": model_in_stock(sold_out, slug),
             "colours": [
-                {"name": c, "in_stock": colour_in_stock(settings, slug, c)}
+                {"name": c, "in_stock": colour_in_stock(sold_out, slug, c)}
                 for c in COLOURS.get(slug, [])
             ],
             "thumb": thumb_url(found.get(slug)),
@@ -87,7 +103,7 @@ def catalog(settings: Settings) -> dict:
     }
 
 
-def buy_row(settings: Settings, slug: str) -> str:
+def buy_row(sold_out: set[str], slug: str) -> str:
     """Buy now / Add to cart under a spec card, with a colour picker where
     the model has colours. A sold-out model gets one disabled "Out of stock"
     button (the WhatsApp button under it still works); a sold-out colour is
@@ -95,7 +111,7 @@ def buy_row(settings: Settings, slug: str) -> str:
     translates them."""
     if slug not in PRICES_AED:
         return ""
-    if not model_in_stock(settings, slug):
+    if not model_in_stock(sold_out, slug):
         return (
             f'<div class="buy-row" data-buy="{slug}" data-stock="out">'
             '<button type="button" class="buy-btn" disabled>Out of stock</button></div>'
@@ -105,7 +121,7 @@ def buy_row(settings: Settings, slug: str) -> str:
     if colours:
         opts = "".join(
             f'<option value="{escape(c)}">{escape(c)}</option>'
-            if colour_in_stock(settings, slug, c)
+            if colour_in_stock(sold_out, slug, c)
             else f'<option value="{escape(c)}" disabled>{escape(c)} — out of stock</option>'
             for c in colours
         )
@@ -121,16 +137,18 @@ def buy_row(settings: Settings, slug: str) -> str:
     )
 
 
-def render(html: str, settings: Settings) -> str:
+def render(html: str, settings: Settings, sold_out: set[str] | None = None) -> str:
     """Fill the price and buy-row slots on the spec cards and the catalog
-    block the cart script reads."""
+    block the cart script reads. ``sold_out`` is the union of the env list
+    and the admin toggles (service.sold_out_keys); without it, env only."""
+    sold_out = out_of_stock(settings) if sold_out is None else sold_out
     for slug, price in PRICES_AED.items():
         html = html.replace(f"<!--PRICE_AED:{slug}-->", str(price))
     for slug in MODELS:
-        html = html.replace(f"<!--BUY_ROW:{slug}-->", buy_row(settings, slug))
+        html = html.replace(f"<!--BUY_ROW:{slug}-->", buy_row(sold_out, slug))
     block = (
         '<script id="shop-catalog" type="application/json">'
-        + json.dumps(catalog(settings), ensure_ascii=False).replace("</", "<\\/")
+        + json.dumps(catalog(settings, sold_out), ensure_ascii=False).replace("</", "<\\/")
         + "</script>"
     )
     return html.replace("<!--SHOP_CATALOG-->", block)

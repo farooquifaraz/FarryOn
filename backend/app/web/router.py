@@ -15,12 +15,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.web import contact, i18n, pricing, products, rates, shop
+from app.core.deps import get_db
 from app.logging_conf import get_logger
+from app.web import contact, i18n, pricing, products, rates, shop
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["site"])
@@ -89,8 +91,10 @@ def _site_origin(request: Request) -> str:
     return f"{'http' if local else 'https'}://{host}"
 
 
-async def _landing(lang: str, request: Request) -> HTMLResponse:
+async def _landing(lang: str, request: Request, db: AsyncSession) -> HTMLResponse:
     """The public marketing / download page, in one language."""
+    from app.modules.shop import service as shop_service
+
     try:
         # Prices and allowances are filled in from Settings.plan_catalog, so the
         # page can never quote a plan the API would refuse to sell.
@@ -100,8 +104,9 @@ async def _landing(lang: str, request: Request) -> HTMLResponse:
         # is on disk, and resolves to nothing at all when there is none.
         page = products.render(page, settings)
         # Glasses prices, the Buy / Add-to-cart buttons and the catalog the
-        # cart script reads — all from one price table (web/products.py).
-        page = shop.render(page, settings)
+        # cart script reads — all from one price table (web/products.py),
+        # with whatever the admin panel has marked sold out.
+        page = shop.render(page, settings, await shop_service.sold_out_keys(db))
         # The WhatsApp buttons and the footer's social icons. Both resolve to
         # nothing when their settings are unset — which is the point: the page
         # used to ship a WhatsApp link and four social icons that went nowhere.
@@ -121,13 +126,13 @@ async def _landing(lang: str, request: Request) -> HTMLResponse:
 
 
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def landing(request: Request) -> HTMLResponse:
-    return await _landing("en", request)
+async def landing(request: Request, db: AsyncSession = Depends(get_db)) -> HTMLResponse:
+    return await _landing("en", request, db)
 
 
 @router.get("/hi", response_class=HTMLResponse, include_in_schema=False)
-async def landing_hi(request: Request) -> HTMLResponse:
-    return await _landing("hi", request)
+async def landing_hi(request: Request, db: AsyncSession = Depends(get_db)) -> HTMLResponse:
+    return await _landing("hi", request, db)
 
 
 async def _about(lang: str, request: Request) -> HTMLResponse:

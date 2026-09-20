@@ -34,6 +34,13 @@ interface OrderRow {
   created_at: string | null;
 }
 
+interface StockRow {
+  key: string;
+  model: string;
+  colour: string | null;
+  in_stock: boolean;
+}
+
 const STATUSES = ["paid", "shipped", "delivered", "cancelled"] as const;
 const FILTERS = ["all", ...STATUSES] as const;
 const PILL: Record<string, string> = { paid: "warn", shipped: "good", delivered: "good", cancelled: "muted" };
@@ -88,6 +95,7 @@ export default function Orders() {
           <p>Glasses bought on the website. Stripe collected the address and phone.</p>
         </div>
       </div>
+      <StockCard />
       <div className="toolbar">
         {FILTERS.map((f) => (
           <button key={f} className={`chip ${filter === f ? "on" : ""}`} onClick={() => { setFilter(f); setPage(1); }}>{f}</button>
@@ -145,5 +153,95 @@ export default function Orders() {
       </div>
       <Pager page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
     </>
+  );
+}
+
+
+/** What is on sale. A switched-off model shows "Out of stock" on the website
+ *  and cannot be checked out; a switched-off colour is greyed out in its
+ *  picker. Takes effect on the next page load — no restart. */
+function StockCard() {
+  const [rows, setRows] = useState<StockRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await api<Envelope<StockRow[]>>("/api/v1/admin/stock");
+      setRows(res.data);
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "Could not load stock.");
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function toggle(row: StockRow) {
+    setBusy(row.key);
+    setError(null);
+    try {
+      await api(`/api/v1/admin/stock/${encodeURIComponent(row.key)}`, { method: "PUT", body: { in_stock: !row.in_stock } });
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "Update failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const models = rows.filter((r) => r.colour === null);
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div className="sub">Stock — what the website sells right now</div>
+      {error && <div className="error-text">{error}</div>}
+      <table>
+        <thead>
+          <tr><th>Model</th><th>Colours</th><th>On sale</th></tr>
+        </thead>
+        <tbody>
+          {models.length === 0 ? (
+            <tr><td colSpan={3} className="loading">Loading…</td></tr>
+          ) : (
+            models.map((m) => {
+              const colours = rows.filter((r) => r.colour !== null && r.key.startsWith(m.key + ":"));
+              return (
+                <tr key={m.key}>
+                  <td><b>{m.model}</b></td>
+                  <td>
+                    {colours.length === 0 ? <span style={{ color: "var(--td)" }}>—</span> : (
+                      <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
+                        {colours.map((c) => (
+                          <Can key={c.key} permission="billing.manage">
+                            <button
+                              className={`chip${c.in_stock ? " on" : ""}`}
+                              disabled={busy === c.key || !m.in_stock}
+                              title={c.in_stock ? "On sale — click to mark out of stock" : "Out of stock — click to put back on sale"}
+                              onClick={() => void toggle(c)}
+                            >
+                              {c.colour}{c.in_stock ? "" : " · out"}
+                            </button>
+                          </Can>
+                        ))}
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <Can permission="billing.manage">
+                      <button
+                        className={`btn-outline btn-sm${m.in_stock ? "" : " danger"}`}
+                        disabled={busy === m.key}
+                        onClick={() => void toggle(m)}
+                      >
+                        {m.in_stock ? "On sale" : "Out of stock"}
+                      </button>
+                    </Can>
+                  </td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
   );
 }

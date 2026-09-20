@@ -699,3 +699,21 @@ class Order(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+
+class ShopStock(Base):
+    """What is sold out, set from the admin panel (modules/shop).
+
+    One row per thing that has ever been toggled: ``key`` is a model slug
+    (``l802``) or a colour variant (``gs5:Red``). Absent row = in stock. The
+    SHOP_OUT_OF_STOCK env list still works as well; the two are unioned.
+    """
+
+    __tablename__ = "shop_stock"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    in_stock: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
