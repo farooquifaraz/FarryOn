@@ -194,3 +194,18 @@ def test_every_usd_yearly_card_says_what_it_saves(settings) -> None:
         annual = float(settings.plan_catalog[f"{name}_yearly"]["price_usd"])
         saved = monthly * 12 - annual
         assert f'data-usd="{saved:.2f}">${pricing._money(saved)}</span></span>' in html, name
+
+
+def test_paid_cards_have_no_button_and_the_page_says_where_to_buy(settings) -> None:
+    """A plan is bought inside the app; only the free card keeps its download."""
+    html = _cards(settings)
+    assert html.count("plan-btn") == 1 and "Start free" in html
+    assert "Choose " not in html
+    assert "plan-btn" not in pricing.india_cards_html(settings)
+    assert "plan-btn" not in pricing.uae_cards_html(settings)
+    from pathlib import Path
+
+    import app.web.router as web_router
+
+    page = pricing.render(Path(web_router._INDEX).read_text(encoding="utf-8"), settings)
+    assert "Plans are bought inside the FarryOn app" in page

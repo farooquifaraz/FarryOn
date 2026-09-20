@@ -34,18 +34,15 @@ _COPY: dict[str, dict[str, object]] = {
     "lite": {
         "desc": "For everyday helpers.",
         "extra": ["Notes, reminders &amp; email", "WhatsApp &amp; Telegram"],
-        "cta": "Choose Lite",
     },
     "plus": {
         "desc": "For daily power users.",
         "extra": ["Everything in Lite", "Priority responses"],
-        "cta": "Choose Plus",
         "popular": True,
     },
     "pro": {
         "desc": "For heavy, all-day use.",
         "extra": ["Everything in Plus", "Priority support"],
-        "cta": "Choose Pro",
     },
 }
 
@@ -125,9 +122,17 @@ def _card(
     if delay:
         classes += f" d{delay}"
     badge = '<div class="plan-pop">Most popular</div>' if popular else ""
-    btn = "solid" if popular else "outline"
     bullets = "".join(f"<li>{f}</li>" for f in feats)
-    cta = escape(str(copy.get("cta", f"Choose {settings.plan_title(name)}")))
+    # Plans are bought inside the app (Settings → Subscription), so a paid
+    # card carries no button — a "Choose Plus" that only downloaded the APK
+    # promised a checkout the page cannot give (Faraz, 2026-09-20). The free
+    # tier keeps its button: that one really is the download.
+    button = (
+        f'<a href="/download/arm64" class="plan-btn outline">'
+        f'{escape(str(copy.get("cta", "Start free")))}</a>'
+        if trial
+        else ""
+    )
 
     return (
         f'<div class="{classes}">{badge}'
@@ -137,7 +142,7 @@ def _card(
         f"<div>{amount}</div>"
         f'<hr class="plan-div">'
         f'<ul class="plan-feats">{bullets}</ul>'
-        f'<a href="/download/arm64" class="plan-btn {btn}">{cta}</a>'
+        f"{button}"
         f"</div></div>"
     )
 
@@ -147,18 +152,15 @@ _COPY_IN: dict[str, dict[str, object]] = {
     "sathi_in": {
         "desc": "For everyday helpers.",
         "extra": ["Notes, reminders &amp; email", "WhatsApp &amp; Telegram"],
-        "cta": "Choose साथी",
     },
     "plus_in": {
         "desc": "For daily power users.",
         "extra": ["Everything in साथी", "Priority responses"],
-        "cta": "Choose Plus",
         "popular": True,
     },
     "pro_in": {
         "desc": "For heavy, all-day use.",
         "extra": ["Everything in Plus", "Priority support"],
-        "cta": "Choose Pro",
     },
 }
 
@@ -167,18 +169,15 @@ _COPY_AE: dict[str, dict[str, object]] = {
     "lite_ae": {
         "desc": "For everyday helpers.",
         "extra": ["Notes, reminders &amp; email", "WhatsApp &amp; Telegram"],
-        "cta": "Choose Lite",
     },
     "plus_ae": {
         "desc": "For daily power users.",
         "extra": ["Everything in Lite", "Priority responses"],
-        "cta": "Choose Plus",
         "popular": True,
     },
     "pro_ae": {
         "desc": "For heavy, all-day use.",
         "extra": ["Everything in Plus", "Priority support"],
-        "cta": "Choose Pro",
     },
 }
 
@@ -243,9 +242,8 @@ def _regional_card(
     if delay:
         classes += f" d{delay}"
     badge = '<div class="plan-pop">Most popular</div>' if popular else ""
-    btn = "solid" if popular else "outline"
     bullets = "".join(f"<li>{f}</li>" for f in feats)
-    cta = escape(str(copy.get("cta", f"Choose {settings.plan_title(name)}")))
+    # No button: a plan is bought inside the app (see _card).
     return (
         f'<div class="{classes}">{badge}'
         f'<div class="plan-inner">'
@@ -254,7 +252,6 @@ def _regional_card(
         f"<div>{amount}</div>"
         f'<hr class="plan-div">'
         f'<ul class="plan-feats">{bullets}</ul>'
-        f'<a href="/download/arm64" class="plan-btn {btn}">{cta}</a>'
         "</div></div>"
     )
 

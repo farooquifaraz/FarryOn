@@ -27,10 +27,6 @@
       "PDF · \\1 MB"
     ],
     [
-      "^Choose (Lite|Plus|Pro|साथी)$",
-      "\\1 चुनें"
-    ],
-    [
       "^· works out at ₹([0-9,]+)/mo$",
       "· यानी लगभग ₹\\1/माह"
     ],
@@ -318,5 +314,6 @@
   "One-time payment · no auto-renew · GST included": "एक बार का भुगतान · ऑटो-रिन्यू नहीं · GST सहित",
   "Everything in साथी": "साथी की सब सुविधाएँ",
   "Save": "बचत",
-  "Cancel anytime · VAT included": "कभी भी कैंसल करें · VAT सहित"
+  "Cancel anytime · VAT included": "कभी भी कैंसल करें · VAT सहित",
+  "Plans are bought inside the FarryOn app — Settings → Subscription.": "प्लान FarryOn ऐप के अंदर खरीदे जाते हैं — Settings → Subscription।"
 }
