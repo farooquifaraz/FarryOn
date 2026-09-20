@@ -74,7 +74,8 @@ def test_the_website_shows_only_the_global_cards() -> None:
     html = pricing.plan_cards_html(get_settings())
     assert html.count('class="plan-name"') == 4  # free, lite, plus, pro
     assert "साथी" not in html and "sathi" not in html.lower()
-    assert pricing.annual_saving_label(get_settings()) == "2 months free"
+    # each yearly card says its own saving in dollars — never rupees here
+    assert html.count('class="plan-save"') == 3 and "₹" not in html
 
 
 # ── region ─────────────────────────────────────────────────────────────────

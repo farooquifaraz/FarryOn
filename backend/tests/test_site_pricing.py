@@ -84,26 +84,23 @@ def test_the_headline_promises_the_trial_that_exists(settings) -> None:
     )
 
 
-def test_the_saving_badge_counts_the_months_actually_free(settings) -> None:
-    """Every tier is ten months' money, so the badge says two months free."""
-    months = {
-        round(12 - float(p["price_usd"]) / float(settings.plan_catalog[n[:-7]]["price_usd"]))
-        for n, p in _global(settings).items()
-        if n.endswith("_yearly")
-    }
-    assert len(months) == 1, "tiers disagree — the badge must not name one number"
-    free = months.pop()
-    assert pricing.annual_saving_label(settings) == f"{free} months free"
+def test_a_yearly_card_says_what_the_year_saves(settings) -> None:
+    """Ten months' money for twelve: the card says so, in dollars and percent."""
+    html = _cards(settings)
+    assert 'data-usd="30.00">$30</span> (17%)' in html  # Plus: 12 × 15 − 150
+    assert html.count('class="plan-save"') == len(
+        [n for n in _global(settings) if n.endswith("_yearly")]
+    )
 
 
-def test_an_uneven_discount_is_described_as_up_to(settings) -> None:
-    """If one tier is ever a better bargain, no single figure may stand for all."""
+def test_a_card_whose_year_saves_nothing_says_nothing(settings) -> None:
     clone = settings.model_copy(deep=True)
-    clone.plan_catalog = {
-        k: dict(v) for k, v in clone.plan_catalog.items()
-    }
-    clone.plan_catalog["lite_yearly"]["price_usd"] = 66.0  # 11 months, not 10
-    assert pricing.annual_saving_label(clone).startswith("save up to ")
+    clone.plan_catalog = {k: dict(v) for k, v in clone.plan_catalog.items()}
+    clone.plan_catalog["lite_yearly"]["price_usd"] = 72.0  # twelve months' money
+    html = pricing.plan_cards_html(clone)
+    lite = html[html.index("Lite") : html.index("Plus")]
+    assert "plan-save" not in lite
+    assert html.count('class="plan-save"') == 2
 
 
 def test_render_leaves_no_placeholder_behind(settings) -> None:
@@ -118,8 +115,6 @@ def test_render_leaves_no_placeholder_behind(settings) -> None:
         "<!--PLAN_CARDS-->",
         "<!--PLAN_CARDS_IN-->",
         "<!--TRIAL_MINUTES-->",
-        "<!--ANNUAL_SAVING-->",
-        "<!--ANNUAL_SAVING_IN-->",
     ):
         assert marker not in page
     assert 'class="plans"' in page
@@ -164,16 +159,11 @@ def test_the_india_cards_are_rupees_for_a_period_and_start_hidden(settings) -> N
     assert pricing._rupees(1100000) == "11,00,000" and pricing._rupees(999) == "999"
     assert 'data-m="for 30 days" data-a="for 12 months"' in html
     assert "works out at ₹275/mo" in html and "works out at ₹917/mo" in html
+    # what the year saves, on the card: 12 × 299 − 3,300 = 288 (8%), Plus 1,688 (23%)
+    assert "Save ₹288 (8%)" in html and "Save ₹1,688 (23%)" in html and "Save ₹988 (8%)" in html
     assert "One-time payment · no auto-renew · GST included" in html
     assert "$" not in html and "per month" not in html
     assert html.count("Most popular") == 1  # Plus, as on the USD list
-
-
-def test_the_india_yearly_badge_is_worded_from_its_own_prices(settings) -> None:
-    # साथी and Pro give one month free, Plus nearly three: no single number
-    # stands for all, so the badge says "up to".
-    assert pricing.annual_saving_label_in(settings) == "save up to 23%"
-    assert pricing.annual_saving_label(settings) == "2 months free"
 
 
 def test_the_page_carries_both_lists_and_the_region_line(settings) -> None:
@@ -183,6 +173,19 @@ def test_the_page_carries_both_lists_and_the_region_line(settings) -> None:
 
     page = pricing.render(Path(web_router._INDEX).read_text(encoding="utf-8"), settings)
     assert page.count('class="plans"') == 1 and page.count('class="plans plans-in"') == 1
-    assert 'data-global="2 months free" data-in="save up to 23%"' in page
+    # The saving lives on each yearly card now, not on the toggle.
+    assert 'class="save-b"' not in page
     assert "data-region-line" in page and "function regionApply" in page
     assert ".plan-amount:not(.native)" in page, "the picker must leave rupee amounts alone"
+
+
+def test_every_usd_yearly_card_says_what_it_saves(settings) -> None:
+    html = _cards(settings)
+    for name, plan in _global(settings).items():
+        if name.endswith("_yearly") or plan["period"] == "trial":
+            continue
+        monthly = float(plan["price_usd"])
+        annual = float(settings.plan_catalog[f"{name}_yearly"]["price_usd"])
+        saved = monthly * 12 - annual
+        pct = round(saved / (monthly * 12) * 100)
+        assert f'data-usd="{saved:.2f}">${pricing._money(saved)}</span> ({pct}%)' in html, name

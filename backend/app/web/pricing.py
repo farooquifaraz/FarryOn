@@ -98,6 +98,17 @@ def _card(
     else:
         annual = float(yearly["price_usd"]) if yearly else monthly_price * 12
         per_month = annual / 12
+        # What the year saves against twelve months, said on the card itself
+        # — the only reason to pick yearly, so it sits next to the price.
+        saved = monthly_price * 12 - annual
+        saving = (
+            f'<span class="ann" style="display:none"> · '
+            f'<span class="plan-save">Save '
+            f'<span class="fx-usd" data-usd="{saved:.2f}">${_money(saved)}</span>'
+            f" ({round(saved / (monthly_price * 12) * 100)}%)</span></span>"
+            if saved > 0
+            else ""
+        )
         amount = (
             f'<div class="plan-amount"><sup>$</sup>'
             f'<span class="pv" data-m="{_money(monthly_price)}" '
@@ -106,7 +117,7 @@ def _card(
             f'<span class="per" data-m="per month" data-a="per year">per month</span>'
             f'<span class="ann" style="display:none"> · works out at '
             f'<span class="fx-usd" data-usd="{per_month:.2f}">${per_month:.2f}</span>'
-            f'/mo</span></div>'
+            f"/mo</span>{saving}</div>"
         )
 
     popular = bool(copy.get("popular"))
@@ -180,7 +191,14 @@ def _india_card(
         '<div class="plan-period">'
         '<span class="per" data-m="for 30 days" data-a="for 12 months">for 30 days</span>'
         f'<span class="ann" style="display:none"> · works out at ₹{_rupees(round(per_month))}/mo</span>'
-        "</div>"
+        + (
+            f'<span class="ann" style="display:none"> · <span class="plan-save">'
+            f"Save ₹{_rupees(monthly * 12 - annual)} "
+            f"({round((monthly * 12 - annual) / (monthly * 12) * 100)}%)</span></span>"
+            if monthly * 12 - annual > 0
+            else ""
+        )
+        + "</div>"
     )
     popular = bool(copy.get("popular"))
     classes = "plan popular reveal" if popular else "plan reveal"
@@ -225,29 +243,6 @@ def india_cards_html(settings: Settings) -> str:
     )
 
 
-def annual_saving_label_in(settings: Settings) -> str:
-    """The India tiers' yearly deal, worded like :func:`annual_saving_label`."""
-    savings: list[float] = []
-    for name, plan in settings.plan_catalog.items():
-        if not name.endswith(_YEARLY_SUFFIX) or settings.plan_region(name) != "IN":
-            continue
-        base = settings.plan_catalog.get(name[: -len(_YEARLY_SUFFIX)])
-        if not base:
-            continue
-        monthly = float(base.get("price_inr", 0.0))
-        if monthly <= 0:
-            continue
-        savings.append(12 - float(plan.get("price_inr", 0.0)) / monthly)
-    if not savings:
-        return "yearly billing"
-    months = savings[0]
-    if all(abs(x - months) < 0.01 for x in savings) and abs(months - round(months)) < 0.01:
-        whole = round(months)
-        return f"{whole} month{'s' if whole != 1 else ''} free"
-    best = max(savings) / 12
-    return f"save up to {round(best * 100)}%"
-
-
 def plan_cards_html(settings: Settings) -> str:
     """The `<div class="plans">` grid for every monthly/trial plan on offer."""
     catalog = settings.plan_catalog
@@ -276,42 +271,10 @@ def trial_minutes(settings: Settings) -> int:
     return int(plan.get("talk_minutes", 0))
 
 
-def annual_saving_label(settings: Settings) -> str:
-    """"2 months free", or "save up to 17%" if the tiers ever disagree.
-
-    Derived, because the badge used to read "~1 month free" and would have gone
-    on saying so however the yearly prices moved. Months are the honest unit
-    while every tier offers the same deal; the moment one tier is a better
-    bargain than another, a single percentage would overstate the rest, so the
-    label says "up to" instead.
-    """
-    savings: list[float] = []
-    for name, plan in settings.plan_catalog.items():
-        if not name.endswith(_YEARLY_SUFFIX) or settings.plan_region(name) is not None:
-            continue
-        base = settings.plan_catalog.get(name[: -len(_YEARLY_SUFFIX)])
-        if not base:
-            continue
-        monthly = float(base.get("price_usd", 0.0))
-        if monthly <= 0:
-            continue
-        savings.append(12 - float(plan.get("price_usd", 0.0)) / monthly)
-    if not savings:
-        return "yearly billing"
-    months = savings[0]
-    if all(abs(x - months) < 0.01 for x in savings) and abs(months - round(months)) < 0.01:
-        whole = round(months)
-        return f"{whole} month{'s' if whole != 1 else ''} free"
-    best = max(savings) / 12
-    return f"save up to {round(best * 100)}%"
-
-
 def render(html: str, settings: Settings) -> str:
     """Fill the landing page's pricing placeholders."""
     return (
         html.replace("<!--PLAN_CARDS-->", plan_cards_html(settings))
         .replace("<!--PLAN_CARDS_IN-->", india_cards_html(settings))
         .replace("<!--TRIAL_MINUTES-->", str(trial_minutes(settings)))
-        .replace("<!--ANNUAL_SAVING-->", annual_saving_label(settings))
-        .replace("<!--ANNUAL_SAVING_IN-->", annual_saving_label_in(settings))
     )

@@ -389,9 +389,11 @@ section{padding:100px 5%;position:relative;overflow:hidden}
 .region-line a:hover{border-bottom-color:var(--pl)}
 /* A three-letter code in the superscript slot needs air; a symbol does not. */
 .plan-amount sup.code{font-size:1rem;margin-right:6px;letter-spacing:.02em}.t-label.on{color:var(--t);font-weight:600}
-.save-b{background:rgba(244,196,58,.1);color:var(--gold);
-  border:1px solid rgba(244,196,58,.2);font-size:.66rem;font-weight:700;
-  padding:3px 9px;border-radius:50px}
+/* The saving a yearly card carries next to its price, in place of the old
+   badge on the toggle: the number belongs to the plan, not to the switch. */
+.plan-save{display:inline-block;background:rgba(244,196,58,.1);color:var(--gold);
+  border:1px solid rgba(244,196,58,.25);font-size:.68rem;font-weight:700;
+  padding:2px 9px;border-radius:50px;vertical-align:middle}
 .plans{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:48px}
 .plan{border-radius:20px;position:relative;transition:.4s}
 .plan::before{content:'';position:absolute;inset:-1px;border-radius:21px;z-index:0;
@@ -797,7 +799,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
       <div class="toggle">
         <span class="t-label on" id="ml">Monthly</span>
         <div class="toggle-track" id="bt" onclick="toggleBilling()"><div class="toggle-thumb"></div></div>
-        <span class="t-label" id="al">Annual <span class="save-b" data-global="<!--ANNUAL_SAVING-->" data-in="<!--ANNUAL_SAVING_IN-->"><!--ANNUAL_SAVING--></span></span>
+        <span class="t-label" id="al">Annual</span>
       </div>
       <div class="fx-pick" role="group" aria-label="Show prices in">
         <span class="fx-lbl">Show prices in</span>
@@ -1069,8 +1071,6 @@ function regionApply(){
   if(!india){return}
   var inIN=siteRegion==='IN';
   india.hidden=!inIN; if(global) global.hidden=inIN;
-  var badge=document.querySelector('.save-b');
-  if(badge&&badge.dataset.global!==undefined) badge.textContent=inIN?badge.dataset.in:badge.dataset.global;
   var hi=document.documentElement.lang==='hi';
   var line=document.querySelector('[data-region-line]');
   if(line){
