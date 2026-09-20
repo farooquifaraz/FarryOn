@@ -384,7 +384,7 @@ section{padding:100px 5%;position:relative;overflow:hidden}
    a visitor whose clock is in India (or who asks). `hidden` must beat the
    grid's display, or both lists would show. */
 .plans[hidden]{display:none}
-.region-line{margin-top:18px;text-align:center;font-size:.78rem;color:var(--tm)}
+.region-line{margin-top:8px;text-align:center;font-size:.78rem;color:var(--tm)}
 .region-line a{color:var(--pl);text-decoration:none;border-bottom:1px solid rgba(0,212,170,.3)}
 .region-line a:hover{border-bottom-color:var(--pl)}
 /* A three-letter code in the superscript slot needs air; a symbol does not. */
@@ -808,10 +808,10 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
         <button type="button" class="fx-btn" data-fx="INR" onclick="fxSet('INR')">₹ INR</button>
       </div>
       <p class="fx-note" data-fx-note></p>
+      <p class="region-line" data-region-line></p>
     </div>
     <!--PLAN_CARDS-->
     <!--PLAN_CARDS_IN-->
-    <p class="region-line" data-region-line></p>
 
     <div class="reveal" style="margin-top:44px">
       <p style="text-align:center;font-size:.9rem;color:var(--tm);margin-bottom:18px">Want the hands-free experience? <b style="color:var(--t)">Add smart glasses</b> — a one-time purchase that works with any plan.</p>
@@ -1040,64 +1040,52 @@ function fxApply(){
   if(FX){
     var r=FX.rates,hi=document.documentElement.lang==='hi';
     var approx=FX.source==='fallback'?(hi?'अनुमानित ':'approximate '):'';
-    var aed=r.AED.toFixed(2),inr=r.INR.toFixed(2),inrAed=(r.INR/r.AED).toFixed(2);
+    var aed=r.AED.toFixed(2),inrAed=(r.INR/r.AED).toFixed(2);
     if(hi){
       if(cur==='USD')note='ऐप प्लान USD में बिल होते हैं · ग्लासेस की कीमत AED में है (1 USD = '+aed+' AED, '+FX.asOf+' का '+approx+'रेट)';
       else if(cur==='AED')note='ऐप प्लान USD में बिल होते हैं — यहाँ '+FX.asOf+' के '+approx+'रेट पर AED में दिखाए गए हैं (1 USD = '+aed+' AED) · ग्लासेस की कीमत AED में है';
-      else note=FX.asOf+' के '+approx+'रेट पर बदला गया (1 USD = ₹'+inr+', 1 AED = ₹'+inrAed+') · ऐप प्लान USD में बिल होते हैं, ग्लासेस की कीमत AED में है';
+      else note='ऐप प्लान ₹ में बिल होते हैं (भारत की कीमतें) · ग्लासेस की कीमत AED में है — '+FX.asOf+' के '+approx+'रेट पर ₹ में दिखाई गई (1 AED = ₹'+inrAed+')';
     }else{
       if(cur==='USD')note='App plans are billed in USD · glasses are priced in AED (1 USD = '+aed+' AED, '+approx+'rate of '+FX.asOf+')';
       else if(cur==='AED')note='App plans are billed in USD — shown in AED at the '+approx+'rate of '+FX.asOf+' (1 USD = '+aed+' AED) · glasses are priced in AED';
-      else note='Converted at the '+approx+'rate of '+FX.asOf+' (1 USD = ₹'+inr+', 1 AED = ₹'+inrAed+') · app plans are billed in USD, glasses are priced in AED';
+      else note='App plans are billed in ₹ (India prices) · glasses are priced in AED — shown in ₹ at the '+approx+'rate of '+FX.asOf+' (1 AED = ₹'+inrAed+')';
     }
   }
   document.querySelectorAll('[data-fx-note]').forEach(function(el){el.textContent=note});
 }
 /* ═══════════════════════════════════════════
-   REGION — which price list: the India tiers (₹, bought for a period) to a
-   visitor whose clock is in India, the USD tiers to everyone else. Their own
-   choice (the link under the cards) wins over the clock and is remembered.
+   REGION — which price list. The "₹ INR" chip is the India list (₹299/599/999,
+   bought for a period), "$ USD" and "AED" are the global USD tiers, converted.
+   So the rupee figure on this page is always the real rupee price, never a
+   dollar price turned into rupees. A visitor whose clock is in India lands on
+   INR (fxDetect), and the line under the picker says which list this is.
 ═══════════════════════════════════════════ */
-var REGION_ZONES={'Asia/Kolkata':1,'Asia/Calcutta':1};
-function regionDetect(){
-  try{var s=localStorage.getItem('site-region');if(s==='IN'||s==='GLOBAL')return s}catch(e){}
-  try{var tz=Intl.DateTimeFormat().resolvedOptions().timeZone;if(REGION_ZONES[tz])return 'IN'}catch(e){}
-  return 'GLOBAL';
-}
-var siteRegion='GLOBAL';
 function regionApply(){
   var india=document.querySelector('.plans-in');
   var global=document.querySelector('.plans:not(.plans-in)');
   if(!india){return}
-  var inIN=siteRegion==='IN';
+  var inIN=fxCur==='INR';
   india.hidden=!inIN; if(global) global.hidden=inIN;
   var hi=document.documentElement.lang==='hi';
   var line=document.querySelector('[data-region-line]');
   if(line){
     line.innerHTML=inIN
-      ?(hi?'भारत के प्लान दिख रहे हैं — ₹ में, एक बार का भुगतान, GST सहित · <a href="#pricing" onclick="regionSet(\'GLOBAL\');return false">ग्लोबल (USD) प्लान देखें</a>'
-          :'Showing India plans — in ₹, one-time payment, GST included · <a href="#pricing" onclick="regionSet(\'GLOBAL\');return false">See global (USD) plans</a>')
-      :(hi?'ग्लोबल प्लान दिख रहे हैं (USD में बिल) · <a href="#pricing" onclick="regionSet(\'IN\');return false">भारत के प्लान देखें (₹)</a>'
-          :'Showing global plans (billed in USD) · <a href="#pricing" onclick="regionSet(\'IN\');return false">See India plans (₹)</a>');
+      ?(hi?'भारत के प्लान दिख रहे हैं — ₹ में, एक बार का भुगतान, GST सहित · <a href="#pricing" onclick="fxSet(\'USD\');return false">ग्लोबल (USD) प्लान देखें</a>'
+          :'Showing India plans — in ₹, one-time payment, GST included · <a href="#pricing" onclick="fxSet(\'USD\');return false">See global (USD) plans</a>')
+      :(hi?'ग्लोबल प्लान दिख रहे हैं (USD में बिल) · <a href="#pricing" onclick="fxSet(\'INR\');return false">भारत के प्लान देखें (₹)</a>'
+          :'Showing global plans (billed in USD) · <a href="#pricing" onclick="fxSet(\'INR\');return false">See India plans (₹)</a>');
   }
 }
-function regionSet(r){
-  siteRegion=r;try{localStorage.setItem('site-region',r)}catch(e){}
-  regionApply();
-}
-(function(){
-  siteRegion=regionDetect();
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',regionApply);else regionApply();
-})();
 function fxSet(cur){
   if(!FX||!FX.rates[cur])return;
   fxCur=cur;try{localStorage.setItem('fx-cur',cur)}catch(e){}
-  fxApply();
+  fxApply();regionApply();
 }
 (function(){
   if(!FX){document.querySelectorAll('.fx-pick').forEach(function(el){el.style.display='none'});return}
   fxCur=fxDetect();
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',fxApply);else fxApply();
+  var go=function(){fxApply();regionApply()};
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();
 })();
 
 function toggleBilling(){

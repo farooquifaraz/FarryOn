@@ -176,6 +176,10 @@ def test_the_page_carries_both_lists_and_the_region_line(settings) -> None:
     # The saving lives on each yearly card now, not on the toggle.
     assert 'class="save-b"' not in page
     assert "data-region-line" in page and "function regionApply" in page
+    # the line lives under the currency picker, above the cards — and the
+    # "₹ INR" chip is what opens the India list (one choice, not two)
+    assert page.index("data-region-line") < page.index('class="plans"')
+    assert "var inIN=fxCur==='INR'" in page and "regionSet" not in page
     assert ".plan-amount:not(.native)" in page, "the picker must leave rupee amounts alone"
 
 
