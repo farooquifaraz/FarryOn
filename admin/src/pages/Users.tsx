@@ -38,6 +38,7 @@ export default function Users() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [rolesFor, setRolesFor] = useState<UserRow | null>(null);
+  const [linkFor, setLinkFor] = useState<UserRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -181,6 +182,9 @@ export default function Users() {
                         <Can permission="users.impersonate">
                           <button className="btn-outline btn-sm" onClick={() => impersonate(row)}>Login as</button>
                         </Can>
+                        <Can permission="billing.manage">
+                          <button className="btn-outline btn-sm" onClick={() => setLinkFor(row)}>Payment link</button>
+                        </Can>
                         <Can permission="users.delete">
                           <button className="btn-outline btn-sm danger" onClick={() => act(row, "delete")}>Delete</button>
                         </Can>
@@ -201,6 +205,7 @@ export default function Users() {
       {rolesFor && (
         <RolesModal user={rolesFor} roles={roles} onClose={() => setRolesFor(null)} onDone={() => { setRolesFor(null); void load(); }} />
       )}
+      {linkFor && <PaymentLinkModal user={linkFor} onClose={() => setLinkFor(null)} />}
     </>
   );
 }
@@ -320,6 +325,145 @@ function RolesModal({ user, roles, onClose, onDone }: { user: UserRow; roles: Ro
           <button type="button" className="btn-outline" onClick={onClose}>Cancel</button>
           <button className="btn-primary" disabled={busy}>{busy ? "Saving…" : "Save roles"}</button>
         </div>
+      </form>
+    </div>
+  );
+}
+
+interface PlanRow {
+  id: number;
+  name: string;
+  title: string;
+  price_cents: number;
+  currency: string;
+  interval: "month" | "year";
+  one_time: boolean;
+  region: string | null;
+  is_active: boolean;
+}
+interface PaymentLink {
+  url: string;
+  plan: string;
+  plan_title: string;
+  price_cents: number;
+  currency: string;
+  interval: "month" | "year";
+  one_time: boolean;
+  user_email: string | null;
+  valid_hours: number;
+}
+
+/** "₹599", "AED 25", "$15.00" — whole rupees/dirhams, cents for dollars. */
+function money(cents: number, currency: string): string {
+  const c = currency.toUpperCase();
+  if (c === "INR") return `₹${Math.round(cents / 100).toLocaleString("en-IN")}`;
+  if (c === "AED") return cents % 100 === 0 ? `AED ${cents / 100}` : `AED ${(cents / 100).toFixed(2)}`;
+  if (c === "USD") return `$${(cents / 100).toFixed(2)}`;
+  return `${c} ${(cents / 100).toFixed(2)}`;
+}
+
+function planLabel(p: PlanRow): string {
+  const period = p.one_time ? (p.interval === "year" ? "for 12 months" : "for 30 days") : p.interval === "year" ? "/yr" : "/mo";
+  const where = p.region ? ` · ${p.region}` : "";
+  return `${p.title} — ${money(p.price_cents, p.currency)} ${period}${where}`;
+}
+
+/**
+ * Mint a Stripe Checkout link for this user and one plan, to send by hand
+ * (WhatsApp, email). It is the app's own checkout, so paying it activates
+ * the plan through the same webhook; nothing else to do afterwards.
+ */
+function PaymentLinkModal({ user, onClose }: { user: UserRow; onClose: () => void }) {
+  const [plans, setPlans] = useState<PlanRow[]>([]);
+  const [plan, setPlan] = useState("");
+  const [link, setLink] = useState<PaymentLink | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    api<Envelope<PlanRow[]>>("/api/v1/admin/plans")
+      .then((r) => {
+        const sold = r.data.filter((p) => p.is_active && p.price_cents > 0);
+        setPlans(sold);
+        if (sold.length && !plan) setPlan(sold[0].name);
+      })
+      .catch((err) => setError(err instanceof ApiRequestError ? err.message : "Could not load plans."));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api<Envelope<PaymentLink>>("/api/v1/admin/payment-links", {
+        method: "POST",
+        body: { user_id: user.id, plan },
+      });
+      setLink(r.data);
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "Could not create the link.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy() {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link.url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setError("Copy failed — select the link and copy it by hand.");
+    }
+  }
+
+  const message = link
+    ? `Hi${user.display_name ? " " + user.display_name : ""}, here is your FarryOn ${link.plan_title} plan (${money(link.price_cents, link.currency)}${link.one_time ? (link.interval === "year" ? " for 12 months" : " for 30 days") : link.interval === "year" ? " a year" : " a month"}). Pay securely here (link valid ${link.valid_hours} hours): ${link.url}`
+    : "";
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+        <h3>Payment link — {user.email}</h3>
+        {!link ? (
+          <>
+            <div className="field">
+              <label>Plan</label>
+              <select value={plan} onChange={(e) => setPlan(e.target.value)} style={{ width: "100%" }} required>
+                {plans.map((p) => (
+                  <option key={p.name} value={p.name}>{planLabel(p)}</option>
+                ))}
+              </select>
+            </div>
+            <p style={{ color: "var(--td)", fontSize: 12 }}>
+              The same Stripe checkout the app opens. When they pay, the plan switches on by itself. A user already on a paid plan cannot be sent a second one.
+            </p>
+            {error && <div className="error-text">{error}</div>}
+            <div className="modal-actions">
+              <button type="button" className="btn-outline" onClick={onClose}>Cancel</button>
+              <button className="btn-primary" disabled={busy || !plan}>{busy ? "Creating…" : "Create link"}</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="field">
+              <label>{link.plan_title} · {money(link.price_cents, link.currency)} · valid {link.valid_hours} h</label>
+              <input readOnly value={link.url} onFocus={(e) => e.currentTarget.select()} style={{ width: "100%" }} />
+            </div>
+            {error && <div className="error-text">{error}</div>}
+            <div className="modal-actions">
+              <button type="button" className="btn-outline" onClick={onClose}>Close</button>
+              <a className="btn-outline" href={`https://wa.me/?text=${encodeURIComponent(message)}`} target="_blank" rel="noreferrer">WhatsApp</a>
+              {user.email && (
+                <a className="btn-outline" href={`mailto:${user.email}?subject=${encodeURIComponent("Your FarryOn plan")}&body=${encodeURIComponent(message)}`}>Email</a>
+              )}
+              <button type="button" className="btn-primary" onClick={() => void copy()}>{copied ? "Copied ✓" : "Copy link"}</button>
+            </div>
+          </>
+        )}
       </form>
     </div>
   );

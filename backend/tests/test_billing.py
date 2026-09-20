@@ -309,3 +309,67 @@ def test_transactions_pagination_meta() -> None:
         body = r.json()
         assert len(body["data"]) == 2
         assert body["meta"]["total"] == 3
+
+
+# ---- payment links -----------------------------------------------------------
+
+
+def test_an_admin_can_mint_a_checkout_link_for_a_user(monkeypatch) -> None:
+    """The link is the app's own Checkout Session, region taken from the plan."""
+    from app.services import stripe_client
+
+    client = _client()
+    admin_token = _setup_admin(client, "link-admin@example.com")
+    uid = _register_user(client, "link-customer@example.com")
+    s = get_settings()
+    monkeypatch.setattr(s, "stripe_secret_key", "sk_test_x")
+    monkeypatch.setattr(s, "stripe_price_ids", {"plus_in": "price_in", "plus": "price_usd"})
+    seen: list[dict] = []
+
+    async def fake_session(**kw):
+        seen.append(kw)
+        return {"url": "https://checkout.stripe.test/cs_123"}
+
+    monkeypatch.setattr(stripe_client, "create_checkout_session", fake_session)
+
+    # an India plan, minted from anywhere: the plan's own region is used
+    r = client.post(
+        "/api/v1/admin/payment-links",
+        headers=_auth(admin_token),
+        json={"user_id": uid, "plan": "plus_in"},
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["url"] == "https://checkout.stripe.test/cs_123"
+    assert data["plan"] == "plus_in" and data["currency"] == "INR" and data["one_time"] is True
+    assert data["price_cents"] == 59_900 and data["user_email"] == "link-customer@example.com"
+    assert seen[-1]["mode"] == "payment" and seen[-1]["price_id"] == "price_in"
+    assert seen[-1]["metadata"]["user_id"] == str(uid) and seen[-1]["metadata"]["plan"] == "plus_in"
+
+    # a plan that isn't sold is refused, not sent to Stripe
+    r = client.post(
+        "/api/v1/admin/payment-links",
+        headers=_auth(admin_token),
+        json={"user_id": uid, "plan": "pro"},
+    )
+    assert r.status_code == 400 and r.json()["error"]["code"] == "UNKNOWN_PLAN"
+    # and an unknown user is a 404
+    r = client.post(
+        "/api/v1/admin/payment-links",
+        headers=_auth(admin_token),
+        json={"user_id": 999_999, "plan": "plus"},
+    )
+    assert r.status_code == 404
+
+
+def test_a_payment_link_needs_billing_manage() -> None:
+    client = _client()
+    _setup_admin(client, "link-boss@example.com")
+    uid = _register_user(client, "link-plain@example.com")
+    token = _login(client, "link-plain@example.com")
+    r = client.post(
+        "/api/v1/admin/payment-links",
+        headers=_auth(token),
+        json={"user_id": uid, "plan": "plus"},
+    )
+    assert r.status_code == 403

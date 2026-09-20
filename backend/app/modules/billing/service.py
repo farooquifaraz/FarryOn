@@ -214,6 +214,35 @@ async def subscription_overview(
 # ---- Checkout ------------------------------------------------------------
 
 
+async def create_payment_link(db: AsyncSession, *, user: User, plan_name: str) -> dict:
+    """A Checkout link an admin sends to ``user`` for ``plan_name``.
+
+    Exactly :func:`create_checkout`, with the region taken from the PLAN
+    rather than from a request: the admin chose the plan for this person,
+    so an Indian customer can be sent the ₹ list from a desk in Dubai. The
+    same one-paid-plan-per-user and sold-plans rules apply, and the link is
+    Stripe's ordinary session URL — it lives 24 hours and, once paid, fires
+    the same ``checkout.session.completed`` that activates the plan.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    region = settings.plan_region(plan_name)
+    out = await create_checkout(db, user=user, plan_name=plan_name, region=region)
+    return {
+        "url": out["url"],
+        "plan": plan_name,
+        "plan_title": settings.plan_title(plan_name),
+        "price_cents": settings.plan_price_cents(plan_name),
+        "currency": settings.plan_currency(plan_name),
+        "interval": settings.plan_interval(plan_name),
+        "one_time": settings.plan_is_one_time(plan_name),
+        "user_id": user.id,
+        "user_email": user.email,
+        "valid_hours": 24,
+    }
+
+
 async def create_checkout(
     db: AsyncSession, *, user: User, plan_name: str, region: str | None = None
 ) -> dict:

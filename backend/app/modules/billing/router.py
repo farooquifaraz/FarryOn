@@ -24,6 +24,7 @@ from app.modules.audit.service import write_audit
 from app.modules.billing import service, stripe_webhook
 from app.modules.billing.schemas import (
     CheckoutRequest,
+    PaymentLinkRequest,
     PlanCreateRequest,
     PlanUpdateRequest,
     WebhookEvent,
@@ -179,6 +180,34 @@ async def update_plan_endpoint(
         user_agent=request.headers.get("user-agent"),
     )
     return ok(plan)
+
+
+# ---- Payment links -----------------------------------------------------------
+
+
+@router.post("/payment-links", dependencies=[Depends(require_permission("billing.manage"))])
+async def create_payment_link_endpoint(
+    body: PaymentLinkRequest,
+    request: Request,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """A Checkout link for one user and one plan, to send by hand."""
+    from app.modules.users.service import get_user_or_404
+
+    user = await get_user_or_404(db, body.user_id)
+    link = await service.create_payment_link(db, user=user, plan_name=body.plan)
+    await write_audit(
+        db,
+        actor_id=actor.id,
+        action="billing.payment_link",
+        entity_type="user",
+        entity_id=user.id,
+        after={"plan": body.plan},
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    return ok(link)
 
 
 # ---- Subscriptions & revenue --------------------------------------------------

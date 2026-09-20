@@ -20,6 +20,16 @@ class CheckoutRequest(BaseModel):
     plan: str = Field(min_length=2, max_length=64)
 
 
+class PaymentLinkRequest(BaseModel):
+    """An admin asks for a Checkout link to hand to one user for one plan —
+    over WhatsApp, email, whatever — instead of the user tapping Upgrade
+    in the app. The same Checkout Session the app would start, so the same
+    webhook activates the plan; nothing new to listen for."""
+
+    user_id: int = Field(ge=1)
+    plan: str = Field(min_length=2, max_length=64)
+
+
 class PlanCreateRequest(BaseModel):
     name: str = Field(min_length=2, max_length=64)
     price_cents: int = Field(ge=0)
