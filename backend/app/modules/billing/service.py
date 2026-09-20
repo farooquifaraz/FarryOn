@@ -163,7 +163,7 @@ async def subscription_overview(
         usage[metric] = {"used": int(used), "cap": cap}
 
     # Only this region's price list: the India tiers to a request from India,
-    # the USD tiers to everyone else. A plan the DB knows but the catalog
+    # the UAE tiers to one from the UAE, the USD tiers to everyone else. A plan the DB knows but the catalog
     # does not has no region and is treated as global.
     sellable = [
         p

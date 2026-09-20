@@ -812,6 +812,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
     </div>
     <!--PLAN_CARDS-->
     <!--PLAN_CARDS_IN-->
+    <!--PLAN_CARDS_AE-->
 
     <div class="reveal" style="margin-top:44px">
       <p style="text-align:center;font-size:.9rem;color:var(--tm);margin-bottom:18px">Want the hands-free experience? <b style="color:var(--t)">Add smart glasses</b> — a one-time purchase that works with any plan.</p>
@@ -992,8 +993,11 @@ let ann=false;
 var FX=(function(){try{return JSON.parse(document.getElementById('fx-rates').textContent)}catch(e){return null}})();
 var fxCur='USD';
 var FX_SYM={USD:'$',AED:'AED ',INR:'₹'};
-var FX_ZONES={'Asia/Kolkata':'INR','Asia/Calcutta':'INR','Asia/Dubai':'AED','Asia/Muscat':'AED',
-  'Asia/Riyadh':'AED','Asia/Qatar':'AED','Asia/Bahrain':'AED','Asia/Kuwait':'AED'};
+/* Only India and the UAE seed a currency from the clock: each chip is now a
+   price list (India in ₹, the UAE in AED), and the UAE list is for the UAE
+   alone (Faraz, 2026-09-20). The rest of the Gulf lands on USD and may press
+   AED. */
+var FX_ZONES={'Asia/Kolkata':'INR','Asia/Calcutta':'INR','Asia/Dubai':'AED'};
 function fxDetect(){
   /* The visitor's own choice first; then where their clock says they are
      (no permission prompt, unlike GPS); then the browser's language region. */
@@ -1001,7 +1005,7 @@ function fxDetect(){
   try{var tz=Intl.DateTimeFormat().resolvedOptions().timeZone;if(FX_ZONES[tz])return FX_ZONES[tz]}catch(e){}
   var l=(navigator.language||'').toUpperCase();
   if(/-IN$/.test(l))return 'INR';
-  if(/-(AE|SA|QA|BH|KW|OM)$/.test(l))return 'AED';
+  if(/-AE$/.test(l))return 'AED';
   return 'USD';
 }
 function fxConv(amount,from,to){
@@ -1043,37 +1047,49 @@ function fxApply(){
     var aed=r.AED.toFixed(2),inrAed=(r.INR/r.AED).toFixed(2);
     if(hi){
       if(cur==='USD')note='ऐप प्लान USD में बिल होते हैं · ग्लासेस की कीमत AED में है (1 USD = '+aed+' AED, '+FX.asOf+' का '+approx+'रेट)';
-      else if(cur==='AED')note='ऐप प्लान USD में बिल होते हैं — यहाँ '+FX.asOf+' के '+approx+'रेट पर AED में दिखाए गए हैं (1 USD = '+aed+' AED) · ग्लासेस की कीमत AED में है';
+      else if(cur==='AED')note='ऐप प्लान AED में बिल होते हैं (UAE की कीमतें) · ग्लासेस की कीमत AED में है';
       else note='ऐप प्लान ₹ में बिल होते हैं (भारत की कीमतें) · ग्लासेस की कीमत AED में है — '+FX.asOf+' के '+approx+'रेट पर ₹ में दिखाई गई (1 AED = ₹'+inrAed+')';
     }else{
       if(cur==='USD')note='App plans are billed in USD · glasses are priced in AED (1 USD = '+aed+' AED, '+approx+'rate of '+FX.asOf+')';
-      else if(cur==='AED')note='App plans are billed in USD — shown in AED at the '+approx+'rate of '+FX.asOf+' (1 USD = '+aed+' AED) · glasses are priced in AED';
+      else if(cur==='AED')note='App plans are billed in AED (UAE prices) · glasses are priced in AED';
       else note='App plans are billed in ₹ (India prices) · glasses are priced in AED — shown in ₹ at the '+approx+'rate of '+FX.asOf+' (1 AED = ₹'+inrAed+')';
     }
   }
   document.querySelectorAll('[data-fx-note]').forEach(function(el){el.textContent=note});
 }
 /* ═══════════════════════════════════════════
-   REGION — which price list. The "₹ INR" chip is the India list (₹299/599/999,
-   bought for a period), "$ USD" and "AED" are the global USD tiers, converted.
-   So the rupee figure on this page is always the real rupee price, never a
-   dollar price turned into rupees. A visitor whose clock is in India lands on
-   INR (fxDetect), and the line under the picker says which list this is.
+   REGION — which price list. The currency chip decides: "₹ INR" is the India
+   list (₹299/599/999, bought for a period), "AED" is the UAE list (AED
+   15/25/45, renewing), "$ USD" is the global list. So a rupee or dirham
+   figure on this page is always the real price, never a dollar price turned
+   into one. A visitor whose clock is in India or the UAE lands on their
+   list (fxDetect), and the line under the picker says which list this is.
 ═══════════════════════════════════════════ */
+var REGION_OF={INR:'IN',AED:'AE'};
 function regionApply(){
-  var india=document.querySelector('.plans-in');
-  var global=document.querySelector('.plans:not(.plans-in)');
-  if(!india){return}
-  var inIN=fxCur==='INR';
-  india.hidden=!inIN; if(global) global.hidden=inIN;
+  var want=REGION_OF[fxCur]||null;
+  if(want&&!document.querySelector('#pricing .plans[data-region="'+want+'"]'))want=null;
+  var any=false;
+  document.querySelectorAll('#pricing .plans').forEach(function(el){
+    var r=el.dataset.region||null; el.hidden=(r!==want); any=true;
+  });
+  if(!any)return;
   var hi=document.documentElement.lang==='hi';
   var line=document.querySelector('[data-region-line]');
-  if(line){
-    line.innerHTML=inIN
-      ?(hi?'भारत के प्लान दिख रहे हैं — ₹ में, एक बार का भुगतान, GST सहित · <a href="#pricing" onclick="fxSet(\'USD\');return false">ग्लोबल (USD) प्लान देखें</a>'
-          :'Showing India plans — in ₹, one-time payment, GST included · <a href="#pricing" onclick="fxSet(\'USD\');return false">See global (USD) plans</a>')
-      :(hi?'ग्लोबल प्लान दिख रहे हैं (USD में बिल) · <a href="#pricing" onclick="fxSet(\'INR\');return false">भारत के प्लान देखें (₹)</a>'
-          :'Showing global plans (billed in USD) · <a href="#pricing" onclick="fxSet(\'INR\');return false">See India plans (₹)</a>');
+  if(!line)return;
+  var L=function(cur,txt){return '<a href="#pricing" onclick="fxSet(\''+cur+'\');return false">'+txt+'</a>'};
+  if(want==='IN'){
+    line.innerHTML=hi
+      ?'भारत के प्लान दिख रहे हैं — ₹ में, एक बार का भुगतान, GST सहित · '+L('USD','ग्लोबल (USD) प्लान देखें')+' · '+L('AED','UAE के प्लान देखें (AED)')
+      :'Showing India plans — in ₹, one-time payment, GST included · '+L('USD','See global (USD) plans')+' · '+L('AED','See UAE plans (AED)');
+  }else if(want==='AE'){
+    line.innerHTML=hi
+      ?'UAE के प्लान दिख रहे हैं — AED में, हर महीने या साल रिन्यू, VAT सहित · '+L('USD','ग्लोबल (USD) प्लान देखें')+' · '+L('INR','भारत के प्लान देखें (₹)')
+      :'Showing UAE plans — in AED, renewing monthly or yearly, VAT included · '+L('USD','See global (USD) plans')+' · '+L('INR','See India plans (₹)');
+  }else{
+    line.innerHTML=hi
+      ?'ग्लोबल प्लान दिख रहे हैं (USD में बिल) · '+L('INR','भारत के प्लान देखें (₹)')+' · '+L('AED','UAE के प्लान देखें (AED)')
+      :'Showing global plans (billed in USD) · '+L('INR','See India plans (₹)')+' · '+L('AED','See UAE plans (AED)');
   }
 }
 function fxSet(cur){

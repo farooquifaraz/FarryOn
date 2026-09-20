@@ -590,6 +590,20 @@ class Settings(BaseSettings):
             "sathi_in_yearly": {"title": "साथी", "currency": "INR", "region": "IN", "billing": "one_time", "price_inr": 3300.0,  "period": "year", "talk_minutes": 120, "image_scans": 70,  "web_searches": 110},
             "plus_in_yearly":  {"title": "Plus", "currency": "INR", "region": "IN", "billing": "one_time", "price_inr": 5500.0,  "period": "year", "talk_minutes": 250, "image_scans": 130, "web_searches": 225},
             "pro_in_yearly":   {"title": "Pro",  "currency": "INR", "region": "IN", "billing": "one_time", "price_inr": 11000.0, "period": "year", "talk_minutes": 400, "image_scans": 240, "web_searches": 400},
+            # UAE price list (Faraz, 2026-09-20): priced in AED, VAT-inclusive,
+            # a renewing subscription like the global tiers (a UAE card has no
+            # RBI-style block on recurring charges), shown only to requests
+            # from the UAE (core/region.py). Faraz's prices with the India
+            # caps: at global caps Plus and Pro would lose money at full use;
+            # at these caps every tier clears 40% at full use and a UAE minute
+            # costs more than an Indian one (docs/REVENUE_PLAN.md, UAE table).
+            #                   price   period    talk  scans searches
+            "lite_ae": {"title": "Lite", "currency": "AED", "region": "AE", "price_aed": 15.0,  "period": "month", "talk_minutes": 120, "image_scans": 70,  "web_searches": 110},
+            "plus_ae": {"title": "Plus", "currency": "AED", "region": "AE", "price_aed": 25.0,  "period": "month", "talk_minutes": 250, "image_scans": 130, "web_searches": 225},
+            "pro_ae":  {"title": "Pro",  "currency": "AED", "region": "AE", "price_aed": 45.0,  "period": "month", "talk_minutes": 400, "image_scans": 240, "web_searches": 400},
+            "lite_ae_yearly": {"title": "Lite", "currency": "AED", "region": "AE", "price_aed": 170.0, "period": "year", "talk_minutes": 120, "image_scans": 70,  "web_searches": 110},
+            "plus_ae_yearly": {"title": "Plus", "currency": "AED", "region": "AE", "price_aed": 275.0, "period": "year", "talk_minutes": 250, "image_scans": 130, "web_searches": 225},
+            "pro_ae_yearly":  {"title": "Pro",  "currency": "AED", "region": "AE", "price_aed": 500.0, "period": "year", "talk_minutes": 400, "image_scans": 240, "web_searches": 400},
         }
     )
     # Days used to spread a monthly voice budget into a daily cap. 30 is the
@@ -771,18 +785,20 @@ class Settings(BaseSettings):
 
     def plan_price_cents(self, name: str) -> int:
         """The plan's price in minor units of its own currency (0 for
-        free/unsold): cents for a USD plan, paise for an INR one."""
+        free/unsold): cents for a USD plan, paise for INR, fils for AED. The
+        catalog names the field after the currency (``price_inr``,
+        ``price_aed``); ``price_usd`` for the global list."""
         row = self._plan(name)
-        field = "price_inr" if self.plan_currency(name) == "INR" else "price_usd"
+        field = f"price_{self.plan_currency(name).lower()}"
         return round(float(row.get(field, 0)) * 100)
 
     def plan_currency(self, name: str | None) -> str:
-        """``"USD"`` unless the catalog row says otherwise (``"INR"``)."""
+        """``"USD"`` unless the catalog row says otherwise (``"INR"``, ``"AED"``)."""
         return str(self._plan(name).get("currency", "USD")).upper()
 
     def plan_region(self, name: str | None) -> str | None:
-        """The region a plan is sold in — ``"IN"`` — or ``None`` for the
-        global list. Regional plans are offered only to requests from that
+        """The region a plan is sold in — ``"IN"``, ``"AE"`` — or ``None`` for
+        the global list. Regional plans are offered only to requests from that
         region (core/region.py); global plans only to everyone else."""
         region = self._plan(name).get("region")
         return str(region).upper() if region else None
@@ -843,7 +859,7 @@ class Settings(BaseSettings):
         if own:
             title = str(own)
         else:
-            base = base.removesuffix("_in")
+            base = base.removesuffix("_in").removesuffix("_ae")
             title = base[:1].upper() + base[1:]
         return f"{title} (yearly)" if raw.endswith("_yearly") else title
 

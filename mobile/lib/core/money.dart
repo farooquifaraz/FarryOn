@@ -4,8 +4,8 @@
 /// unit — cents for USD, paise for INR — plus the currency code. The screens
 /// used to hard-code `'$'` and two decimals, which read "$599.00" for an
 /// Indian plan the moment one existed. Rupees are shown whole, with Indian
-/// grouping (₹5,500, ₹11,000); dollars keep cents as before; anything else
-/// gets its code.
+/// grouping (₹5,500, ₹11,000); dirhams whole unless there are fils; dollars
+/// keep cents as before; anything else gets its code.
 String formatMoney(int minor, String currency) {
   final code = currency.toUpperCase();
   switch (code) {
@@ -16,7 +16,11 @@ String formatMoney(int minor, String currency) {
       // (₹11,000 → 91,666.67 paise) must read ₹917 as the website says.
       return '₹${_groupIndian((minor / 100).round())}';
     case 'AED':
-      return 'AED ${(minor / 100).toStringAsFixed(2)}';
+      // Whole dirhams when there are no fils ("AED 25"), else two places
+      // ("AED 14.17") — the UAE plans are whole, a twelfth of one is not.
+      return minor % 100 == 0
+          ? 'AED ${minor ~/ 100}'
+          : 'AED ${(minor / 100).toStringAsFixed(2)}';
     default:
       return '$code ${(minor / 100).toStringAsFixed(2)}';
   }

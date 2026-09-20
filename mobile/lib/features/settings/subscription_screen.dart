@@ -474,7 +474,8 @@ class _PlanCard extends StatelessWidget {
   final bool enabled;
   final void Function(String plan) onChoose;
 
-  bool get _popular => offer.tier == 'plus' || offer.tier == 'plus_in';
+  /// Plus is the tier we point at, on every list (plus, plus_in, plus_ae).
+  bool get _popular => offer.tier.startsWith('plus');
 
   String get _title {
     final t = offer.title.isEmpty

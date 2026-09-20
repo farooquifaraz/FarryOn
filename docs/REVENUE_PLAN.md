@@ -104,6 +104,29 @@ plan किसी हालत में घाटे में नहीं। 
 (foreign Stripe account); (2) OIDAR — विदेशी supplier को Indian GST registration —
 CA से confirm; (3) card-country check अभी नहीं (Faraz: बाद में)।
 
+## 0-D. UAE price list (2026-09-20 से, config में set)
+
+UAE से आने वाले (timezone `Asia/Dubai` — सिर्फ़ UAE, बाकी Gulf global list) को
+AED में ये दिखते हैं; **recurring** (auto-renew — UAE card पर कोई RBI जैसी रोक
+नहीं), VAT-inclusive, Stripe Checkout `subscription` mode, बाकी सब global जैसा।
+दाम Faraz के (15/25/45), caps **India वाले** — global caps (200/500/1000 मिनट) पर
+Plus/Pro 100% use में घाटे में जाते (−33%) और UAE मिनट India से सस्ता पड़ता।
+
+लागत: voice $0.0093/min, scan $0.003, search $0.002, infra $0.25/user;
+Stripe UAE 2.9% + AED 1; VAT 5% price के अंदर; AED 3.6725/$; ₹26.12/AED।
+
+| Plan | कीमत | मिनट / scan / search | हाथ में (VAT+fee के बाद) | Cost @100% | Margin @100% | @60% use | ₹/मिनट (India) |
+|---|---|---|---|---|---|---|---|
+| Lite (`lite_ae`) | AED 15/माह | 120 / 70 / 110 | $3.50 | $1.80 | 49% | 66% | 3.27 (2.49) |
+| Plus (`plus_ae`) | AED 25/माह | 250 / 130 / 225 | $6.02 | $3.42 | 43% | 64% | 2.61 (2.40) |
+| Pro (`pro_ae`) | AED 45/माह | 400 / 240 / 400 | $11.06 | $5.49 | 50% | 69% | 2.94 (2.50) |
+| Lite yearly | AED 170/साल (0.7 माह free) | वही | $3.54/माह | $1.80 | 49% | 67% | 3.08 (2.29) |
+| Plus yearly | AED 275/साल (1 माह free) | वही | $5.75/माह | $3.42 | 41% | 63% | 2.39 (1.83) |
+| Pro yearly | AED 500/साल (0.9 माह free) | वही | $10.47/माह | $5.49 | 48% | 68% | 2.72 (2.29) |
+
+Breakeven minutes हर plan में cap से 2× ऊपर। Stripe test-mode AED recurring
+prices बने हैं (keys `lite_ae` … `pro_ae_yearly` in STRIPE_PRICE_IDS)।
+
 ## 0. एक मिनट में पूरी बात (TL;DR)
 
 - FarryOn **voice-first** है। हर live voice मिनट पर हमें **~$0.012** लगता है। यही ~95% खर्च है।

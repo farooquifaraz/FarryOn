@@ -393,6 +393,27 @@ void main() {
       expect(find.text('Choose Lite'), findsNothing);
     });
 
+    testWidgets('a UAE card reads in dirhams, renewing, with its saving',
+        (tester) async {
+      await pump(
+        tester,
+        overview(upgrades: const [
+          PlanOffer(name: 'plus_ae', priceCents: 2500, title: 'Plus', currency: 'AED', talkMinutes: 250),
+          PlanOffer(name: 'plus_ae_yearly', priceCents: 27500, title: 'Plus (yearly)', interval: 'year', currency: 'AED', talkMinutes: 250),
+        ]),
+      );
+      expect(find.text('AED 25'), findsOneWidget);
+      expect(find.text('per month'), findsOneWidget);
+      expect(find.text('Most popular'), findsOneWidget);
+      expect(find.textContaining('One-time'), findsNothing);
+      await tester.tap(find.text('Annual'));
+      await tester.pumpAndSettle();
+      expect(find.text('AED 275'), findsOneWidget);
+      expect(find.text('per year'), findsOneWidget);
+      expect(find.text('works out at AED 22.92/mo'), findsOneWidget);
+      expect(find.text('Save AED 25 (8%)'), findsOneWidget);
+    });
+
     test('the wire shape carries the caps a card lists', () {
       final p = PlanOffer.fromJson({
         'name': 'plus_yearly', 'price_cents': 15000, 'interval': 'year',

@@ -163,39 +163,77 @@ _COPY_IN: dict[str, dict[str, object]] = {
 }
 
 
-def _india_card(
-    settings: Settings, name: str, plan: dict, yearly: dict | None, delay: int
+_COPY_AE: dict[str, dict[str, object]] = {
+    "lite_ae": {
+        "desc": "For everyday helpers.",
+        "extra": ["Notes, reminders &amp; email", "WhatsApp &amp; Telegram"],
+        "cta": "Choose Lite",
+    },
+    "plus_ae": {
+        "desc": "For daily power users.",
+        "extra": ["Everything in Lite", "Priority responses"],
+        "cta": "Choose Plus",
+        "popular": True,
+    },
+    "pro_ae": {
+        "desc": "For heavy, all-day use.",
+        "extra": ["Everything in Plus", "Priority support"],
+        "cta": "Choose Pro",
+    },
+}
+
+
+def _aed(amount: float) -> str:
+    """25 → "25", 14.1667 → "14.17": whole dirhams when there are no fils."""
+    return f"{amount:,.2f}".removesuffix(".00")
+
+
+# region -> (grid class, card copy, sign, number formatter, billing line)
+_REGIONAL: dict[str, tuple[str, dict, str, object, str]] = {
+    "IN": ("plans-in", _COPY_IN, "₹", _rupees, "One-time payment · no auto-renew · GST included"),
+    "AE": ("plans-ae", _COPY_AE, "AED", _aed, "Cancel anytime · VAT included"),
+}
+
+
+def _regional_card(
+    settings: Settings, name: str, plan: dict, yearly: dict | None, delay: int, region: str
 ) -> str:
-    """One India tier: rupees, bought outright for 30 days or 12 months.
+    """One regional tier: the India tiers in rupees, bought outright for 30
+    days or 12 months; the UAE tiers in dirhams, renewing monthly or yearly.
 
     The amount is marked ``native`` so the currency picker leaves it alone —
-    these prices ARE the price, not a conversion — and the period words say
-    "for 30 days" rather than "per month", because nothing renews.
+    these prices ARE the price, not a conversion. A one-time plan's period
+    words say "for 30 days" rather than "per month", because nothing renews.
     """
-    copy = _COPY_IN.get(name, {})
+    _grid, copy_all, sign, fmt, billing = _REGIONAL[region]
+    copy = copy_all.get(name, {})
     minutes = int(plan.get("talk_minutes", 0))
     scans = int(plan.get("image_scans", 0))
-    monthly = float(plan.get("price_inr", 0.0))
-    annual = float(yearly["price_inr"]) if yearly else monthly * 12
+    monthly = settings.plan_price_cents(name) / 100
+    annual = settings.plan_price_cents(name + _YEARLY_SUFFIX) / 100 if yearly else monthly * 12
     per_month = annual / 12
+    saved = monthly * 12 - annual
+    one_time = settings.plan_is_one_time(name)
+    per_m, per_a = ("for 30 days", "for 12 months") if one_time else ("per month", "per year")
+    sep = "" if len(sign) == 1 else " "  # ₹275 but AED 14.17
     feats = [
         f"{minutes:,} talk minutes a month",
         f"{scans:,} image scans a month",
-        "One-time payment · no auto-renew · GST included",
+        billing,
     ]
     feats += [str(x) for x in copy.get("extra", [])]
     amount = (
-        '<div class="plan-amount native"><sup class="code">₹</sup>'
-        f'<span class="pv" data-m="{_rupees(monthly)}" data-a="{_rupees(annual)}">'
-        f"{_rupees(monthly)}</span></div>"
+        f'<div class="plan-amount native"><sup class="code">{sign}</sup>'
+        f'<span class="pv" data-m="{fmt(monthly)}" data-a="{fmt(annual)}">'
+        f"{fmt(monthly)}</span></div>"
         '<div class="plan-period">'
-        '<span class="per" data-m="for 30 days" data-a="for 12 months">for 30 days</span>'
-        f'<span class="ann" style="display:none"> · works out at ₹{_rupees(round(per_month))}/mo</span>'
+        f'<span class="per" data-m="{per_m}" data-a="{per_a}">{per_m}</span>'
+        f'<span class="ann" style="display:none"> · works out at {sign}{sep}'
+        f"{fmt(round(per_month)) if region == 'IN' else fmt(per_month)}/mo</span>"
         + (
             f'<span class="ann" style="display:none"> · <span class="plan-save">'
-            f"Save ₹{_rupees(monthly * 12 - annual)} "
-            f"({round((monthly * 12 - annual) / (monthly * 12) * 100)}%)</span></span>"
-            if monthly * 12 - annual > 0
+            f"Save {sign}{sep}{fmt(saved)} ({round(saved / (monthly * 12) * 100)}%)</span></span>"
+            if saved > 0
             else ""
         )
         + "</div>"
@@ -221,26 +259,38 @@ def _india_card(
     )
 
 
-def india_cards_html(settings: Settings) -> str:
-    """The India price list, hidden until the page decides the visitor is in
-    India (their timezone) or they ask for it. Empty when the catalog has no
-    India tiers, so the slot then costs nothing."""
+def regional_cards_html(settings: Settings, region: str) -> str:
+    """A regional price list, hidden until the page decides the visitor is
+    there (their currency choice, which their timezone seeds) or they ask
+    for it. Empty when the catalog has no tiers for the region, so the slot
+    then costs nothing."""
+    grid = _REGIONAL[region][0]
     catalog = settings.plan_catalog
     monthly = [
         (name, plan)
         for name, plan in catalog.items()
-        if not name.endswith(_YEARLY_SUFFIX) and settings.plan_region(name) == "IN"
+        if not name.endswith(_YEARLY_SUFFIX) and settings.plan_region(name) == region
     ]
     if not monthly:
         return ""
     cards = "".join(
-        _india_card(settings, name, plan, catalog.get(name + _YEARLY_SUFFIX), i)
+        _regional_card(settings, name, plan, catalog.get(name + _YEARLY_SUFFIX), i, region)
         for i, (name, plan) in enumerate(monthly)
     )
     return (
-        f'<div class="plans plans-in" data-region="IN" hidden '
+        f'<div class="plans {grid}" data-region="{region}" hidden '
         f'style="grid-template-columns:repeat({len(monthly)},1fr)">{cards}</div>'
     )
+
+
+def india_cards_html(settings: Settings) -> str:
+    """The India price list (₹, bought for a period)."""
+    return regional_cards_html(settings, "IN")
+
+
+def uae_cards_html(settings: Settings) -> str:
+    """The UAE price list (AED, renewing)."""
+    return regional_cards_html(settings, "AE")
 
 
 def plan_cards_html(settings: Settings) -> str:
@@ -276,5 +326,6 @@ def render(html: str, settings: Settings) -> str:
     return (
         html.replace("<!--PLAN_CARDS-->", plan_cards_html(settings))
         .replace("<!--PLAN_CARDS_IN-->", india_cards_html(settings))
+        .replace("<!--PLAN_CARDS_AE-->", uae_cards_html(settings))
         .replace("<!--TRIAL_MINUTES-->", str(trial_minutes(settings)))
     )

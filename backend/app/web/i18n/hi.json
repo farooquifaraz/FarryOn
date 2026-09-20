@@ -37,6 +37,14 @@
     [
       "^· works out at ₹([0-9,]+)/mo$",
       "· यानी लगभग ₹\\1/माह"
+    ],
+    [
+      "^Save AED ([0-9.,]+) \\((\\d+)%\\)$",
+      "AED \\1 बचत (\\2%)"
+    ],
+    [
+      "^· works out at AED ([0-9.,]+)/mo$",
+      "· यानी लगभग AED \\1/माह"
     ]
   ],
   "_head": {
@@ -309,5 +317,6 @@
   "for 12 months": "12 महीने के लिए",
   "One-time payment · no auto-renew · GST included": "एक बार का भुगतान · ऑटो-रिन्यू नहीं · GST सहित",
   "Everything in साथी": "साथी की सब सुविधाएँ",
-  "Save": "बचत"
+  "Save": "बचत",
+  "Cancel anytime · VAT included": "कभी भी कैंसल करें · VAT सहित"
 }

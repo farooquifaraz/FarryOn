@@ -86,8 +86,9 @@ def test_a_request_from_india_is_india_and_everyone_else_is_global() -> None:
     assert region_from_headers({"x-timezone": "Asia/Calcutta"}) == "IN"
     assert region_from_headers({"x-region": "in"}) == "IN"
     assert region_from_headers({"cf-ipcountry": "IN"}) == "IN"
-    assert region_from_headers({"x-timezone": "Asia/Dubai"}) is None
-    assert region_from_headers({"x-region": "AE"}) is None
+    # the UAE is its own list now (test_uae_plans.py); the rest is global
+    assert region_from_headers({"x-timezone": "Asia/Riyadh"}) is None
+    assert region_from_headers({"x-region": "SA"}) is None
     assert region_from_headers({}) is None
 
 
