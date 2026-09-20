@@ -46,12 +46,16 @@ void main() {
     WidgetTester tester,
     SubscriptionOverview o, {
     void Function(String)? onUpgrade,
-  }) =>
-      tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: SubscriptionView(overview: o, onUpgrade: onUpgrade ?? (_) {}),
-        ),
-      ));
+  }) async {
+    // Tall enough that the plan cards below the usage rows are laid out.
+    await tester.binding.setSurfaceSize(const Size(800, 2600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SubscriptionView(overview: o, onUpgrade: onUpgrade ?? (_) {}),
+      ),
+    ));
+  }
 
   group('the plan card', () {
     testWidgets('free reads as Free, not as \$0.00', (tester) async {
@@ -124,7 +128,7 @@ void main() {
       String? picked;
       await pump(tester, overview(), onUpgrade: (p) => picked = p);
 
-      await tester.tap(find.textContaining('Plus —'));
+      await tester.tap(find.text('Choose Plus'));
       expect(picked, 'plus');
     });
 
@@ -139,7 +143,7 @@ void main() {
 
       expect(find.text('Coming soon'), findsNWidgets(2));
       expect(find.textContaining("aren't switched on yet"), findsOneWidget);
-      await tester.tap(find.textContaining('Plus —'));
+      await tester.tap(find.text('Coming soon').first);
       expect(taps, 0, reason: 'a dead button must not pretend to work');
     });
 
@@ -162,11 +166,36 @@ void main() {
     testWidgets('offers read in whole rupees for a period, never \$ or /mo',
         (tester) async {
       await pump(tester, overview(upgrades: india));
-      expect(find.text('साथी — ₹299 for 30 days'), findsOneWidget);
-      expect(find.text('Plus (yearly) — ₹5,500 for 12 months'), findsOneWidget);
+      // Monthly is the default view: साथी's card, priced for 30 days.
+      expect(find.text('₹299'), findsOneWidget);
+      expect(find.text('for 30 days'), findsOneWidget);
+      expect(find.text('Choose साथी'), findsOneWidget);
       expect(find.textContaining('\$'), findsNothing);
-      expect(find.textContaining('/mo'), findsNothing);
-      expect(find.textContaining('no auto-renew'), findsNWidgets(2));
+      expect(find.text('One-time payment · no auto-renew'), findsOneWidget);
+      // Annual: Plus's yearly card, with the per-month figure, no "(yearly)"
+      // in the title — the switch already says so.
+      await tester.tap(find.text('Annual'));
+      await tester.pumpAndSettle();
+      expect(find.text('₹5,500'), findsOneWidget);
+      expect(find.text('for 12 months'), findsOneWidget);
+      expect(find.text('works out at ₹458/mo'), findsOneWidget);
+      expect(find.text('Choose Plus'), findsOneWidget);
+      expect(find.textContaining('(yearly)'), findsNothing);
+    });
+
+    testWidgets('a yearly card says what the year saves against monthly',
+        (tester) async {
+      await pump(
+        tester,
+        overview(upgrades: const [
+          PlanOffer(name: 'plus_in', priceCents: 59900, title: 'Plus', currency: 'INR', oneTime: true),
+          PlanOffer(name: 'plus_in_yearly', priceCents: 550000, title: 'Plus (yearly)', interval: 'year', currency: 'INR', oneTime: true),
+        ]),
+      );
+      await tester.tap(find.text('Annual'));
+      await tester.pumpAndSettle();
+      // 12 × ₹599 − ₹5,500 = ₹1,688, 23%
+      expect(find.text('Save ₹1,688 (23%)'), findsOneWidget);
     });
 
     testWidgets('a bought plan shows its price, the period and the valid-till date',
@@ -329,9 +358,52 @@ void main() {
         ]),
       );
 
-      expect(find.textContaining('Plus (yearly) — \$165.00/yr'), findsOneWidget);
-      expect(find.textContaining('/mo'), findsNothing);
-      expect(find.textContaining('cheaper than monthly'), findsOneWidget);
+      // Only yearly on offer: no Monthly/Annual switch, the yearly card shows.
+      expect(find.text('Monthly'), findsNothing);
+      expect(find.text('\$165.00'), findsOneWidget);
+      expect(find.text('per year'), findsOneWidget);
+      expect(find.text('works out at \$13.75/mo'), findsOneWidget);
+      expect(find.textContaining('\$165.00/mo'), findsNothing);
+      // nothing to compare against, so no saving is claimed
+      expect(find.textContaining('Save'), findsNothing);
+    });
+
+    testWidgets('the switch pairs each tier, says the saving and lists caps',
+        (tester) async {
+      await pump(
+        tester,
+        overview(upgrades: const [
+          PlanOffer(name: 'plus', priceCents: 1500, title: 'Plus', talkMinutes: 500, imageScans: 500, webSearches: 800),
+          PlanOffer(name: 'plus_yearly', priceCents: 15000, title: 'Plus (yearly)', interval: 'year', talkMinutes: 500),
+          PlanOffer(name: 'lite', priceCents: 600, title: 'Lite'),
+        ]),
+      );
+      expect(find.text('Monthly'), findsOneWidget);
+      expect(find.text('500 talk minutes a month'), findsOneWidget);
+      expect(find.text('800 web searches a month'), findsOneWidget);
+      expect(find.text('Most popular'), findsOneWidget);
+      expect(find.text('Choose Lite'), findsOneWidget);
+      await tester.tap(find.text('Annual'));
+      await tester.pumpAndSettle();
+      expect(find.text('\$150.00'), findsOneWidget);
+      expect(find.text('per year'), findsOneWidget);
+      expect(find.text('Save \$30.00 (17%)'), findsOneWidget);
+      expect(find.text('works out at \$12.50/mo'), findsOneWidget);
+      // Lite has no yearly twin: it drops out of the Annual view
+      expect(find.text('Choose Lite'), findsNothing);
+    });
+
+    test('the wire shape carries the caps a card lists', () {
+      final p = PlanOffer.fromJson({
+        'name': 'plus_yearly', 'price_cents': 15000, 'interval': 'year',
+        'caps': {'talk_minutes': 500, 'image_scans': 500, 'web_searches': 800},
+      });
+      expect(p.tier, 'plus');
+      expect(p.yearly, isTrue);
+      expect(p.talkMinutes, 500);
+      expect(p.webSearches, 800);
+      // an older backend without caps parses to zeros — no feature lines
+      expect(PlanOffer.fromJson({'name': 'plus', 'price_cents': 1500}).talkMinutes, 0);
     });
 
     testWidgets('the current plan card names the year, not the key',

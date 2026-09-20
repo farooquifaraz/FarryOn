@@ -9,6 +9,9 @@ void main() {
     expect(formatMoney(550000, 'INR'), '₹5,500');
     expect(formatMoney(1100000, 'INR'), '₹11,000');
     expect(formatMoney(123456700, 'INR'), '₹12,34,567');
+    // a twelfth of ₹11,000 rounds up to the website's ₹917, never ₹916
+    expect(formatMoney(91667, 'INR'), '₹917');
+    expect(formatMoney(91649, 'INR'), '₹916');
     expect(formatMoney(5500, 'AED'), 'AED 55.00');
     expect(formatMoney(100, 'GBP'), 'GBP 1.00');
   });

@@ -12,7 +12,9 @@ String formatMoney(int minor, String currency) {
     case 'USD':
       return '\$${(minor / 100).toStringAsFixed(2)}';
     case 'INR':
-      return '₹${_groupIndian(minor ~/ 100)}';
+      // Rounded, not truncated: a yearly price divided by twelve
+      // (₹11,000 → 91,666.67 paise) must read ₹917 as the website says.
+      return '₹${_groupIndian((minor / 100).round())}';
     case 'AED':
       return 'AED ${(minor / 100).toStringAsFixed(2)}';
     default:

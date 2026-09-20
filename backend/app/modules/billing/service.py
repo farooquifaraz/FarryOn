@@ -30,6 +30,17 @@ PAGE_SIZE_MAX = 100
 ACTIVE_STATUSES = ("active", "trialing")
 
 
+def _caps_out(name: str) -> dict:
+    from app.config import get_settings
+
+    limits = get_settings().plan_limits.get(name, {})
+    return {
+        "talk_minutes": int(limits.get("voice_seconds", 0)) // 60,
+        "image_scans": int(limits.get("image_scans", 0)),
+        "web_searches": int(limits.get("web_searches", 0)),
+    }
+
+
 def _plan_out(plan: Plan) -> dict:
     from app.config import get_settings
 
@@ -46,6 +57,9 @@ def _plan_out(plan: Plan) -> dict:
         # app words the price "for 30 days" or "/mo" from this.
         "one_time": get_settings().plan_is_one_time(plan.name),
         "region": get_settings().plan_region(plan.name),
+        # What the money buys, for the app's plan cards: the same caps the
+        # meters enforce (plan_limits), in the units a person reads.
+        "caps": _caps_out(plan.name),
         "description": plan.description,
         "features": json.loads(plan.features_json) if plan.features_json else [],
         "is_active": plan.is_active,

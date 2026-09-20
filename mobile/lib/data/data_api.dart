@@ -76,6 +76,9 @@ class PlanOffer {
     this.interval = 'month',
     this.currency = 'USD',
     this.oneTime = false,
+    this.talkMinutes = 0,
+    this.imageScans = 0,
+    this.webSearches = 0,
   });
 
   /// The key checkout is started with (`plus`, `plus_yearly`).
@@ -96,14 +99,31 @@ class PlanOffer {
   /// renewing ("$15/mo") — the India plans.
   final bool oneTime;
 
-  factory PlanOffer.fromJson(Map<String, dynamic> j) => PlanOffer(
-        name: j['name'] as String? ?? '',
-        priceCents: (j['price_cents'] as num?)?.toInt() ?? 0,
-        title: j['title'] as String? ?? '',
-        interval: j['interval'] as String? ?? 'month',
-        currency: j['currency'] as String? ?? 'USD',
-        oneTime: j['one_time'] as bool? ?? false,
-      );
+  /// What the money buys, per month (the caps the meters enforce). Zero when
+  /// an older backend did not send them; the card then shows no allowances.
+  final int talkMinutes;
+  final int imageScans;
+  final int webSearches;
+
+  /// `plus` for both `plus` and `plus_yearly` — the tier a card stands for.
+  String get tier =>
+      name.endsWith('_yearly') ? name.substring(0, name.length - 7) : name;
+  bool get yearly => interval == 'year';
+
+  factory PlanOffer.fromJson(Map<String, dynamic> j) {
+    final caps = j['caps'] as Map<String, dynamic>? ?? const {};
+    return PlanOffer(
+      name: j['name'] as String? ?? '',
+      priceCents: (j['price_cents'] as num?)?.toInt() ?? 0,
+      title: j['title'] as String? ?? '',
+      interval: j['interval'] as String? ?? 'month',
+      currency: j['currency'] as String? ?? 'USD',
+      oneTime: j['one_time'] as bool? ?? false,
+      talkMinutes: (caps['talk_minutes'] as num?)?.toInt() ?? 0,
+      imageScans: (caps['image_scans'] as num?)?.toInt() ?? 0,
+      webSearches: (caps['web_searches'] as num?)?.toInt() ?? 0,
+    );
+  }
 }
 
 /// `GET /api/v1/billing/me` — everything the Subscription screen shows.
