@@ -474,6 +474,9 @@ section{padding:100px 5%;position:relative;overflow:hidden}
   color:var(--t);border:1px solid rgba(0,212,170,.2);font-family:var(--fb);font-size:.86rem}
 .cart-f input:focus,.cart-f select:focus{outline:none;border-color:rgba(0,212,170,.55)}
 .cart-f input.bad{border-color:#ff7b7b}
+.cart-nodeliver{margin-top:10px;padding:10px 12px;border-radius:10px;font-size:.8rem;line-height:1.5;
+  background:rgba(255,155,155,.08);border:1px solid rgba(255,155,155,.3);color:#ffb3b3}
+.cart-nodeliver a{color:#7fe3c8}
 .cart-btns{display:flex;gap:10px;margin-top:14px}
 .cart-btns .cart-checkout{margin-top:0;flex:1}
 .cart-back{padding:14px 18px;border-radius:50px;border:1px solid rgba(0,212,170,.25);background:transparent;
@@ -690,9 +693,10 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
         <label class="cart-f full"><span>Address line 2</span><input name="line2" autocomplete="address-line2" placeholder="Apartment, floor, landmark" maxlength="120"></label>
         <label class="cart-f"><span>PO Box</span><input name="po_box" maxlength="20"></label>
         <label class="cart-f"><span>City</span><input name="city" required autocomplete="address-level2" maxlength="60"></label>
-        <label class="cart-f"><span>State / Emirate</span><input name="state" autocomplete="address-level1" maxlength="60"></label>
-        <label class="cart-f"><span>Country</span><select name="country" required autocomplete="country" data-cart-countries></select></label>
+        <label class="cart-f"><span>State / Emirate</span><input name="state" autocomplete="address-level1" maxlength="60"><select name="state_pick" data-cart-emirates hidden aria-label="Emirate"></select></label>
+        <label class="cart-f"><span>Country</span><select name="country" required autocomplete="country" data-cart-countries onchange="cartCountryChanged()"></select></label>
       </div>
+      <p class="cart-nodeliver" data-cart-nodeliver hidden></p>
       <div class="cart-lines">
         <div class="cart-total"><span>Total</span><b data-cart-total2>AED 0</b></div>
       </div>
@@ -1381,22 +1385,59 @@ function cartStep(n){
   if(n===2){var f=s2.querySelector('input');if(f)f.focus()}
 }
 var CART_FIELDS=['name','email','phone','line1','line2','po_box','city','state','country'];
+/* Where the buyer probably is: their saved form, else the clock's country,
+   else the browser's language region, else the first place we deliver. */
+function cartGuessCountry(){
+  try{var tz=Intl.DateTimeFormat().resolvedOptions().timeZone;if(SHOP&&SHOP.country_zones&&SHOP.country_zones[tz])return SHOP.country_zones[tz]}catch(e){}
+  var l=(navigator.language||'').toUpperCase(),m=l.match(/-([A-Z]{2})$/);
+  if(m&&SHOP&&(SHOP.countries||[]).some(function(c){return c[0]===m[1]}))return m[1];
+  return (SHOP&&SHOP.ship_to&&SHOP.ship_to[0])||'AE';
+}
+function cartDelivers(cc){return !!(SHOP&&(SHOP.ship_to||[]).indexOf(cc)>=0)}
+function cartCountryName(cc){var hit=(SHOP&&SHOP.countries||[]).find(function(c){return c[0]===cc});return hit?hit[1]:cc}
+function cartCountryChanged(){
+  var f=document.querySelector('[data-cart-step="2"]');if(!f)return;
+  var cc=f.elements.country.value,note=document.querySelector('[data-cart-nodeliver]'),pay=document.querySelector('[data-cart-checkout]');
+  /* the UAE gets an emirate picker; everywhere else a free-text state */
+  var pick=f.querySelector('[data-cart-emirates]'),txt=f.elements.state;
+  if(cc==='AE'&&SHOP&&SHOP.emirates){
+    if(!pick.options.length){SHOP.emirates.forEach(function(e){var o=document.createElement('option');o.value=e;o.textContent=e;pick.appendChild(o)})}
+    if(txt.value&&SHOP.emirates.indexOf(txt.value)>=0)pick.value=txt.value;
+    pick.hidden=false;txt.hidden=true;
+  }else{pick.hidden=true;txt.hidden=false}
+  var ok=cartDelivers(cc);
+  if(note){
+    if(ok){note.hidden=true}
+    else{
+      var wa=document.querySelector('a[href*="wa.me"]');
+      note.innerHTML=(CART_HI?'हम अभी '+cartCountryName(cc)+' में डिलीवर नहीं करते — सिर्फ़ '+(SHOP.ship_to_names||[]).join(', ')+' में। ':'We don\'t deliver to '+cartCountryName(cc)+' yet — only to '+(SHOP.ship_to_names||[]).join(', ')+'. ')
+        +(wa?'<a href="'+wa.getAttribute('href')+'" target="_blank" rel="noopener">'+(CART_HI?'WhatsApp पर पूछें':'Ask on WhatsApp')+'</a>':'');
+      note.hidden=false;
+    }
+  }
+  if(pay)pay.disabled=!ok;
+  var ship=document.querySelector('[data-cart-shipto]');if(ship)ship.textContent=cartCountryName(cc);
+}
 function cartFormFill(){
   var f=document.querySelector('[data-cart-step="2"]');if(!f)return;
   var sel=f.querySelector('[data-cart-countries]');
-  if(sel&&!sel.options.length&&SHOP){(SHOP.ship_to||[]).forEach(function(c,i){var o=document.createElement('option');o.value=c;o.textContent=(SHOP.ship_to_names||[])[i]||c;sel.appendChild(o)})}
+  if(sel&&!sel.options.length&&SHOP){(SHOP.countries||[]).forEach(function(c){var o=document.createElement('option');o.value=c[0];o.textContent=c[1];sel.appendChild(o)})}
   var saved={};try{saved=JSON.parse(localStorage.getItem('cart-address')||'{}')}catch(e){}
   CART_FIELDS.forEach(function(k){var el=f.elements[k];if(el&&!el.value&&saved[k])el.value=saved[k]});
+  if(sel&&!saved.country)sel.value=cartGuessCountry();
+  cartCountryChanged();
 }
 function cartFormRead(){
   var f=document.querySelector('[data-cart-step="2"]'),out={};
   CART_FIELDS.forEach(function(k){var el=f.elements[k];out[k]=el?el.value.trim():''});
+  var pick=f.querySelector('[data-cart-emirates]');
+  if(pick&&!pick.hidden)out.state=pick.value;
   try{localStorage.setItem('cart-address',JSON.stringify(out))}catch(e){}
   return out;
 }
 function cartFormCheck(v){
   var f=document.querySelector('[data-cart-step="2"]'),bad=null;
-  var need={name:v.name.length>=2,email:/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email),phone:(v.phone.replace(/\D/g,'').length>=6),line1:v.line1.length>=3,city:v.city.length>=2,country:!!v.country};
+  var need={name:v.name.length>=2,email:/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email),phone:(v.phone.replace(/\D/g,'').length>=6),line1:v.line1.length>=3,city:v.city.length>=2,country:cartDelivers(v.country)};
   Object.keys(need).forEach(function(k){var el=f.elements[k];if(!el)return;el.classList.toggle('bad',!need[k]);if(!need[k]&&!bad)bad=el});
   if(bad){bad.focus();return false}
   return true;

@@ -138,6 +138,12 @@ def test_the_cards_price_and_buy_from_the_one_catalog() -> None:
     assert all(c["in_stock"] for c in catalog["items"]["gs5"]["colours"])
     assert all(v["in_stock"] for v in catalog["items"].values())
     assert catalog["ship_to_names"] == ["United Arab Emirates"]
+    # the picker offers the world, deliverable first; the clock picks a first guess
+    assert catalog["countries"][0] == ["AE", "United Arab Emirates"] and len(catalog["countries"]) >= 50
+    assert ["IN", "India"] in catalog["countries"] and ["US", "United States"] in catalog["countries"]
+    assert catalog["country_zones"]["Asia/Dubai"] == "AE" and catalog["country_zones"]["Asia/Kolkata"] == "IN"
+    assert catalog["emirates"][:2] == ["Abu Dhabi", "Dubai"] and len(catalog["emirates"]) == 7
+    assert "function cartGuessCountry" in page and "data-cart-nodeliver" in page
     assert "data-cart-count" in page and "function cartCheckout" in page
     # the drawer must really be closed on load: `hidden` has to beat display:flex
     assert ".cart[hidden]" in page and "<aside class=\"cart\" data-cart hidden" in page

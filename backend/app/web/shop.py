@@ -17,17 +17,47 @@ from html import escape
 from app.config import Settings
 from app.web.products import COLOURS, MODELS, PRICES_AED, Gallery, galleries
 
-# ISO country -> what the cart says under "Deliver to".
+# ISO country -> name, for the cart's country picker and "Deliver to".
+# The picker lists all of these — the buyer can pick anywhere — and the page
+# says "we don't deliver there yet" for one outside SHOP_SHIP_COUNTRIES.
 _COUNTRY_NAMES = {
-    "AE": "United Arab Emirates",
-    "IN": "India",
-    "SA": "Saudi Arabia",
-    "QA": "Qatar",
-    "OM": "Oman",
-    "BH": "Bahrain",
-    "KW": "Kuwait",
-    "GB": "United Kingdom",
-    "US": "United States",
+    "AE": "United Arab Emirates", "SA": "Saudi Arabia", "QA": "Qatar", "OM": "Oman", "BH": "Bahrain",
+    "KW": "Kuwait", "IN": "India", "PK": "Pakistan", "BD": "Bangladesh", "LK": "Sri Lanka", "NP": "Nepal",
+    "EG": "Egypt", "JO": "Jordan", "LB": "Lebanon", "IQ": "Iraq", "TR": "Türkiye", "MA": "Morocco",
+    "GB": "United Kingdom", "IE": "Ireland", "US": "United States", "CA": "Canada", "AU": "Australia",
+    "NZ": "New Zealand", "SG": "Singapore", "MY": "Malaysia", "ID": "Indonesia", "PH": "Philippines",
+    "TH": "Thailand", "VN": "Vietnam", "JP": "Japan", "KR": "South Korea", "CN": "China", "HK": "Hong Kong",
+    "DE": "Germany", "FR": "France", "ES": "Spain", "IT": "Italy", "NL": "Netherlands", "BE": "Belgium",
+    "CH": "Switzerland", "AT": "Austria", "SE": "Sweden", "NO": "Norway", "DK": "Denmark", "FI": "Finland",
+    "PL": "Poland", "PT": "Portugal", "GR": "Greece", "CZ": "Czechia", "RO": "Romania", "HU": "Hungary",
+    "ZA": "South Africa", "NG": "Nigeria", "KE": "Kenya", "GH": "Ghana", "ET": "Ethiopia", "TZ": "Tanzania",
+    "BR": "Brazil", "MX": "Mexico", "AR": "Argentina", "CL": "Chile", "CO": "Colombia",
+}
+
+# The seven emirates: when the country is the UAE the "State / Emirate" field
+# is a picker, not free text — the courier needs it spelled one way.
+EMIRATES = ["Abu Dhabi", "Dubai", "Sharjah", "Ajman", "Umm Al Quwain", "Ras Al Khaimah", "Fujairah"]
+
+# Where the buyer probably is, from the clock — the country picker's first
+# guess. They can change it; nothing is decided by it.
+_COUNTRY_ZONES = {
+    "Asia/Dubai": "AE", "Asia/Riyadh": "SA", "Asia/Qatar": "QA", "Asia/Muscat": "OM", "Asia/Bahrain": "BH",
+    "Asia/Kuwait": "KW", "Asia/Kolkata": "IN", "Asia/Calcutta": "IN", "Asia/Karachi": "PK", "Asia/Dhaka": "BD",
+    "Asia/Colombo": "LK", "Asia/Kathmandu": "NP", "Africa/Cairo": "EG", "Asia/Amman": "JO", "Asia/Beirut": "LB",
+    "Asia/Baghdad": "IQ", "Europe/Istanbul": "TR", "Africa/Casablanca": "MA", "Europe/London": "GB",
+    "Europe/Dublin": "IE", "America/New_York": "US", "America/Chicago": "US", "America/Denver": "US",
+    "America/Los_Angeles": "US", "America/Phoenix": "US", "America/Toronto": "CA", "America/Vancouver": "CA",
+    "Australia/Sydney": "AU", "Australia/Melbourne": "AU", "Australia/Perth": "AU", "Pacific/Auckland": "NZ",
+    "Asia/Singapore": "SG", "Asia/Kuala_Lumpur": "MY", "Asia/Jakarta": "ID", "Asia/Manila": "PH",
+    "Asia/Bangkok": "TH", "Asia/Ho_Chi_Minh": "VN", "Asia/Tokyo": "JP", "Asia/Seoul": "KR", "Asia/Shanghai": "CN",
+    "Asia/Hong_Kong": "HK", "Europe/Berlin": "DE", "Europe/Paris": "FR", "Europe/Madrid": "ES", "Europe/Rome": "IT",
+    "Europe/Amsterdam": "NL", "Europe/Brussels": "BE", "Europe/Zurich": "CH", "Europe/Vienna": "AT",
+    "Europe/Stockholm": "SE", "Europe/Oslo": "NO", "Europe/Copenhagen": "DK", "Europe/Helsinki": "FI",
+    "Europe/Warsaw": "PL", "Europe/Lisbon": "PT", "Europe/Athens": "GR", "Europe/Prague": "CZ",
+    "Europe/Bucharest": "RO", "Europe/Budapest": "HU", "Africa/Johannesburg": "ZA", "Africa/Lagos": "NG",
+    "Africa/Nairobi": "KE", "Africa/Accra": "GH", "Africa/Addis_Ababa": "ET", "Africa/Dar_es_Salaam": "TZ",
+    "America/Sao_Paulo": "BR", "America/Mexico_City": "MX", "America/Argentina/Buenos_Aires": "AR",
+    "America/Santiago": "CL", "America/Bogota": "CO",
 }
 
 
@@ -94,11 +124,19 @@ def catalog(settings: Settings, sold_out: set[str] | None = None) -> dict:
             ],
             "thumb": thumb_url(found.get(slug)),
         }
-    ship_to = list(getattr(settings, "shop_ship_countries", ["AE"]))
+    ship_to = [c.upper() for c in getattr(settings, "shop_ship_countries", ["AE"])]
+    names = dict(_COUNTRY_NAMES)
+    for c in ship_to:
+        names.setdefault(c, c)
     return {
         "items": items,
         "ship_to": ship_to,
-        "ship_to_names": [_COUNTRY_NAMES.get(c, c) for c in ship_to],
+        "ship_to_names": [names.get(c, c) for c in ship_to],
+        # every country the picker offers, shippable ones first, then A–Z
+        "countries": [[c, names[c]] for c in ship_to]
+        + sorted(([c, n] for c, n in names.items() if c not in ship_to), key=lambda x: x[1]),
+        "country_zones": _COUNTRY_ZONES,
+        "emirates": EMIRATES,
         "enabled": bool(getattr(settings, "stripe_secret_key", None)),
     }
 
