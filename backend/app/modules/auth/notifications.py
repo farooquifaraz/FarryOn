@@ -171,3 +171,9 @@ def send_outage_alert(*, to_email: str, subject: str, text: str) -> None:
         html=f"<pre style=\"font-family:inherit\">{text}</pre>",
         kind="outage",
     )
+
+
+def send_order_confirmation(*, to_email: str, subject: str, text: str, html: str) -> None:
+    """The customer's order confirmation (modules/shop) — same daemon-thread
+    sender as the auth mails, log-only without SMTP."""
+    _send(to_email=to_email, subject=subject, text=text, html=html, kind="order")

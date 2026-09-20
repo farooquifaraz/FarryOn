@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.responses import AppError
 from app.db.models import Order, ShopStock
 from app.logging_conf import get_logger
-from app.modules.shop.schemas import CartItem
+from app.modules.shop.schemas import CartItem, Customer
 from app.web.products import COLOURS, MODELS, PRICES_AED
 
 logger = get_logger(__name__)
@@ -105,7 +105,7 @@ def _line(item: CartItem, sold_out: set[str]) -> dict:
 
 
 def _summary(items: list[CartItem]) -> list[dict]:
-    """The order's own record of what was bought — in metadata and the row."""
+    """The order's own record of what was bought — in the row and the mails."""
     return [
         {
             "slug": i.slug,
@@ -118,11 +118,65 @@ def _summary(items: list[CartItem]) -> list[dict]:
     ]
 
 
-async def create_checkout(db: AsyncSession, *, items: list[CartItem], origin: str) -> dict:
+def _compact(summary: list[dict]) -> str:
+    """The items as Stripe metadata: a value is capped at 500 characters, so
+    ten lines must fit in short keys — ``[{"s":"gs5","c":"Red","q":1,"p":450}]``."""
+    return json.dumps(
+        [{"s": i["slug"], "c": i["colour"], "q": i["qty"], "p": i["price_aed"]} for i in summary],
+        separators=(",", ":"),
+    )
+
+
+def _expand(raw: str | None) -> list[dict]:
+    """Back from :func:`_compact` (older long-form metadata still reads)."""
+    try:
+        rows = json.loads(raw or "[]")
+    except ValueError:
+        return []
+    out = []
+    for r in rows:
+        slug = r.get("s") or r.get("slug") or ""
+        out.append(
+            {
+                "slug": slug,
+                "name": r.get("name") or MODELS.get(slug, slug),
+                "colour": r.get("c") if "c" in r else r.get("colour"),
+                "qty": int(r.get("q") or r.get("qty") or 0),
+                "price_aed": int(r.get("p") or r.get("price_aed") or PRICES_AED.get(slug, 0)),
+            }
+        )
+    return out
+
+
+def _address_of(c: Customer) -> dict:
+    return {
+        "name": c.name,
+        "line1": c.line1,
+        "line2": c.line2,
+        "po_box": c.po_box,
+        "city": c.city,
+        "state": c.state,
+        "postal_code": c.postal_code,
+        "country": c.country,
+    }
+
+
+def address_line(a: dict) -> str:
+    parts = [a.get("line1"), a.get("line2"), f"PO Box {a['po_box']}" if a.get("po_box") else None,
+             a.get("city"), a.get("state"), a.get("postal_code"), a.get("country")]
+    return ", ".join(str(p) for p in parts if p)
+
+
+async def create_checkout(
+    db: AsyncSession, *, items: list[CartItem], customer: Customer, origin: str
+) -> dict:
     """Start a Stripe Checkout for the cart; returns ``{"url": …}``.
 
-    ``origin`` is where the visitor is (https://farryon.izylrn.com, or the
-    developer's localhost) — Stripe sends them back there.
+    The buyer's details (asked for in the cart) ride in the session's
+    metadata — Stripe only takes the card — and come back on the webhook to
+    make the order. ``origin`` is where the visitor is
+    (https://farryon.izylrn.com, or the developer's localhost): Stripe sends
+    them back to the landing page, which shows the order in a modal.
     """
     from app.config import get_settings
     from app.services import stripe_client
@@ -131,18 +185,34 @@ async def create_checkout(db: AsyncSession, *, items: list[CartItem], origin: st
     settings = get_settings()
     if not settings.stripe_secret_key:
         raise AppError("SHOP_NOT_CONFIGURED", "The shop isn't taking orders yet.", status_code=503)
+    if customer.country not in {c.upper() for c in settings.shop_ship_countries}:
+        raise AppError(
+            "SHIP_COUNTRY",
+            f"We deliver to {', '.join(settings.shop_ship_countries)} only for now.",
+            status_code=400,
+        )
     sold_out = await sold_out_keys(db)
     lines = [_line(i, sold_out) for i in items]
     summary = _summary(items)
     total = sum(i["price_aed"] * i["qty"] for i in summary)
+    metadata = {
+        "kind": ORDER_KIND,
+        "items": _compact(summary),
+        "customer": json.dumps(
+            {"email": customer.email, "name": customer.name, "phone": customer.phone},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        "ship": json.dumps(_address_of(customer), ensure_ascii=False, separators=(",", ":")),
+    }
     try:
         session = await stripe_client.create_order_session(
             secret_key=settings.stripe_secret_key,
             line_items=lines,
-            success_url=f"{origin}/shop/success?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{origin}/#glasses",
-            ship_to=list(settings.shop_ship_countries),
-            metadata={"kind": ORDER_KIND, "items": json.dumps(summary, ensure_ascii=False)},
+            success_url=f"{origin}/?order={{CHECKOUT_SESSION_ID}}#glasses",
+            cancel_url=f"{origin}/?cart=cancelled#glasses",
+            metadata=metadata,
+            customer_email=customer.email,
         )
     except StripeError as e:
         raise AppError("STRIPE_ERROR", str(e), status_code=502) from e
@@ -206,18 +276,22 @@ async def record_order(db: AsyncSession, session_obj: dict) -> dict:
         return {**_order_out(existing), "duplicate": True}
 
     meta = session_obj.get("metadata") or {}
-    try:
-        items = json.loads(meta.get("items") or "[]")
-    except ValueError:
-        items = []
+    items = _expand(meta.get("items"))
     details = session_obj.get("customer_details") or {}
-    address = _address(session_obj)
+    # Our cart's details first (metadata); Stripe's own only when a session
+    # came from somewhere else (an old link, a Payment Link).
+    try:
+        ours = json.loads(meta.get("customer") or "{}")
+        ship = json.loads(meta.get("ship") or "{}")
+    except ValueError:
+        ours, ship = {}, {}
+    address = ship if ship.get("line1") else _address(session_obj)
     order = Order(
         session_id=session_id,
         payment_intent=str(session_obj.get("payment_intent") or "") or None,
-        email=details.get("email"),
-        name=address.get("name") or details.get("name"),
-        phone=details.get("phone"),
+        email=ours.get("email") or details.get("email"),
+        name=ours.get("name") or address.get("name") or details.get("name"),
+        phone=ours.get("phone") or details.get("phone"),
         address_json=json.dumps(address, ensure_ascii=False),
         items_json=json.dumps(items, ensure_ascii=False),
         amount_cents=int(session_obj.get("amount_total") or 0),
@@ -229,7 +303,49 @@ async def record_order(db: AsyncSession, session_obj: dict) -> dict:
     await db.commit()
     logger.info("shop.order_recorded", order_id=order.id, amount_cents=order.amount_cents)
     _notify(order, items, address)
+    _confirm(order, items, address)
     return {**_order_out(order), "duplicate": False}
+
+
+def _confirm(order: Order, items: list[dict], address: dict) -> None:
+    """The customer's confirmation: what they bought, what they paid, where
+    it is going, and that a shipping message follows. Log-only without SMTP."""
+    from html import escape
+
+    from app.modules.auth.notifications import send_order_confirmation
+
+    if not order.email:
+        return
+    total = f"{order.currency} {order.amount_cents / 100:.0f}"
+    rows = [f"{i.get('qty')} × {i.get('name')}" + (f" ({i['colour']})" if i.get("colour") else "") for i in items]
+    text = "\n".join(
+        [
+            f"Hi {order.name or ''}".rstrip() + ",",
+            "",
+            f"Thank you for your FarryOn order #{order.id}.",
+            "",
+            *["  " + r for r in rows],
+            "",
+            f"Paid: {total}",
+            f"Delivering to: {address_line(address)}",
+            "",
+            "We will message you on this email and your phone when the glasses ship.",
+            "Questions? Reply to this email or reach us on WhatsApp.",
+            "",
+            "— FarryOn",
+        ]
+    )
+    html = (
+        '<div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;padding:28px;'
+        'background:#0e242b;border-radius:12px;color:#e8f4f2">'
+        f'<h2 style="margin:0 0 12px;color:#7fe3c8">Order #{order.id} received</h2>'
+        f'<p style="color:#cfe6e0">Hi {escape(order.name or "")}, thank you for your FarryOn order.</p>'
+        '<ul style="color:#cfe6e0;line-height:1.7">' + "".join(f"<li>{escape(r)}</li>" for r in rows) + "</ul>"
+        f'<p style="color:#cfe6e0"><b>Paid: {escape(total)}</b><br>Delivering to: {escape(address_line(address))}</p>'
+        '<p style="color:#9fb8b3">We will message you on this email and your phone when the glasses ship. '
+        "Questions? Reply to this email or reach us on WhatsApp.</p></div>"
+    )
+    send_order_confirmation(to_email=order.email, subject=f"Your FarryOn order #{order.id}", text=text, html=html)
 
 
 def _notify(order: Order, items: list[dict], address: dict) -> None:
@@ -294,15 +410,35 @@ async def set_status(db: AsyncSession, order_id: int, *, status: str, note: str 
     return _order_out(order)
 
 
-async def order_summary(session_id: str) -> dict | None:
-    """What the thank-you page shows: fetched from Stripe, never trusted from
-    the URL. None when Stripe can't be asked (no key, bad id)."""
+async def order_summary(db: AsyncSession, session_id: str) -> dict | None:
+    """What the order modal shows after Stripe sends the buyer back.
+
+    The order row first (the webhook usually lands before the redirect, and
+    the row has the order number); Stripe itself when it hasn't yet. Never
+    trusted from the URL: a made-up id gives None.
+    """
     from app.config import get_settings
     from app.services import stripe_client
     from app.services.stripe_client import StripeError
 
+    if not session_id.startswith("cs_") or len(session_id) > 128:
+        return None
+    row = (await db.execute(select(Order).where(Order.session_id == session_id))).scalar_one_or_none()
+    if row:
+        out = _order_out(row)
+        return {
+            "paid": True,
+            "order_id": out["id"],
+            "email": out["email"],
+            "name": out["name"],
+            "amount_cents": out["amount_cents"],
+            "currency": out["currency"],
+            "items": out["items"],
+            "address": out["address"],
+            "address_line": address_line(out["address"]),
+        }
     settings = get_settings()
-    if not settings.stripe_secret_key or not session_id.startswith("cs_"):
+    if not settings.stripe_secret_key:
         return None
     try:
         obj = await stripe_client.retrieve_checkout_session(
@@ -314,13 +450,19 @@ async def order_summary(session_id: str) -> dict | None:
     if meta.get("kind") != ORDER_KIND:
         return None
     try:
-        items = json.loads(meta.get("items") or "[]")
+        ours = json.loads(meta.get("customer") or "{}")
+        ship = json.loads(meta.get("ship") or "{}")
     except ValueError:
-        items = []
+        ours, ship = {}, {}
+    address = ship if ship.get("line1") else _address(obj)
     return {
         "paid": obj.get("payment_status") == "paid",
-        "email": (obj.get("customer_details") or {}).get("email"),
+        "order_id": None,
+        "email": ours.get("email") or (obj.get("customer_details") or {}).get("email"),
+        "name": ours.get("name") or address.get("name"),
         "amount_cents": int(obj.get("amount_total") or 0),
         "currency": str(obj.get("currency") or "aed").upper(),
-        "items": items,
+        "items": _expand(meta.get("items")),
+        "address": address,
+        "address_line": address_line(address),
     }

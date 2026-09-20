@@ -9,18 +9,20 @@ personal passes through here except what Stripe echoes back on the webhook
 
 from __future__ import annotations
 
-from html import escape
-
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_permission
-from app.core.responses import ok
+from app.core.responses import AppError, ok
 from app.db.models import User
 from app.modules.audit.service import write_audit
 from app.modules.shop import service
-from app.modules.shop.schemas import OrderStatusRequest, ShopCheckoutRequest, StockRequest
+from app.modules.shop.schemas import (
+    OrderStatusRequest,
+    ShopCheckoutRequest,
+    StockRequest,
+)
 
 router = APIRouter(prefix="/shop", tags=["shop"])
 page_router = APIRouter(tags=["shop"])
@@ -39,53 +41,29 @@ def _origin(request: Request) -> str:
 async def shop_checkout_endpoint(
     body: ShopCheckoutRequest, request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict:
-    return ok(await service.create_checkout(db, items=body.items, origin=_origin(request)))
+    return ok(
+        await service.create_checkout(
+            db, items=body.items, customer=body.customer, origin=_origin(request)
+        )
+    )
 
 
-_PAGE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title} — FarryOn</title>
-<style>
-  body {{ background:#030912; color:#e7ecf3; font-family:Inter,system-ui,sans-serif; margin:0;
-         min-height:100vh; display:flex; align-items:center; justify-content:center; text-align:center; }}
-  .card {{ padding:36px 28px; max-width:520px; }}
-  h1 {{ font-size:1.5rem; margin:0 0 10px; color:#7fe3c8; }}
-  p {{ color:#93a1b5; line-height:1.6; }}
-  ul {{ list-style:none; padding:0; margin:18px 0; color:#cfe6e0; }}
-  li {{ padding:4px 0; }}
-  a {{ display:inline-block; margin-top:22px; padding:12px 26px; border-radius:50px;
-       background:linear-gradient(135deg,#0F6E56,#00D4AA); color:#030912; font-weight:700; text-decoration:none; }}
-</style></head>
-<body><div class="card"><h1>{title}</h1>{body}<a href="/">Back to FarryOn</a></div></body></html>"""
+@router.get("/orders/{session_id}")
+async def shop_order_summary_endpoint(session_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """The order behind a Checkout Session id, for the modal the landing
+    page shows on return. Unguessable id, no account; a bad id is a 404."""
+    summary = await service.order_summary(db, session_id)
+    if summary is None:
+        raise AppError("NOT_FOUND", "No such order.", status_code=404)
+    return ok(summary)
 
 
 @page_router.get("/shop/success", include_in_schema=False)
-async def shop_success_page(session_id: str = "") -> HTMLResponse:
-    """Where Stripe sends the browser after paying. Reads the session from
-    Stripe (never from the URL) to say what was bought; the order itself is
-    written by the webhook, not here."""
-    summary = await service.order_summary(session_id)
-    if summary and summary["paid"]:
-        items = "".join(
-            f"<li>{i.get('qty')} × {escape(str(i.get('name')))}"
-            + (f" ({escape(str(i['colour']))})" if i.get("colour") else "")
-            + "</li>"
-            for i in summary["items"]
-        )
-        body = (
-            f"<p>Thank you — we have your order.</p><ul>{items}</ul>"
-            f"<p><b>{summary['currency']} {summary['amount_cents'] / 100:.0f}</b> paid"
-            + (f" · a receipt is on its way to {escape(summary['email'])}" if summary["email"] else "")
-            + ".</p><p>We will message you when your glasses ship.</p>"
-        )
-        return HTMLResponse(_PAGE.format(title="Order received \N{PARTY POPPER}", body=body))
-    return HTMLResponse(
-        _PAGE.format(
-            title="Thank you",
-            body="<p>If your payment went through you will get a receipt from Stripe by email, "
-            "and we will message you when your glasses ship.</p>",
-        )
-    )
+async def shop_success_page(session_id: str = "") -> RedirectResponse:
+    """Older success links: back to the landing page, which shows the order
+    in its own modal (the site's CSP allows no styling on a page of ours)."""
+    safe = session_id if session_id.startswith("cs_") and len(session_id) <= 128 else ""
+    return RedirectResponse(url=f"/?order={safe}#glasses" if safe else "/#glasses", status_code=302)
 
 
 @admin_router.get("/orders", dependencies=[Depends(require_permission("billing.read"))])

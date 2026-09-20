@@ -6,21 +6,27 @@ localStorage), and **Checkout**, which opens a Stripe Checkout page.
 
 ## How the money moves
 
-1. `POST /api/v1/shop/checkout` with the cart (`[{slug, qty, colour}]`). No
-   account needed. The backend prices every line from
+1. The cart's second step asks for the buyer's details on our page: name,
+   email, phone, address lines, PO Box, city, state/emirate, country (only
+   the countries in `SHOP_SHIP_COUNTRIES`, default `AE`). Validated in the
+   browser and again by the API.
+2. `POST /api/v1/shop/checkout` with the cart (`[{slug, qty, colour}]`) and
+   the `customer`. No account needed. The backend prices every line from
    `backend/app/web/products.py` → `PRICES_AED` (the client never sends a
-   price), builds a one-payment Checkout Session in AED with
-   **shipping-address and phone collection** (countries from
-   `SHOP_SHIP_COUNTRIES`, default `AE`), and answers `{url}`.
-2. Stripe takes the card, the address and the phone. Success returns the
-   visitor to `/shop/success?session_id=…` (a thank-you page that reads the
-   session back from Stripe); cancel returns to `/#glasses`.
-3. Stripe's `checkout.session.completed` webhook arrives with
+   price), puts the buyer's details in the session's metadata, and builds a
+   one-payment Checkout Session in AED — Stripe only takes the card, with
+   the email prefilled. Answers `{url}`.
+3. Success sends the visitor back to `/?order=<session id>#glasses`: the
+   landing page fetches `GET /api/v1/shop/orders/<id>` and shows the order
+   in a modal (items, total, address, email). Cancel returns to
+   `/?cart=cancelled#glasses`, which reopens the cart with its contents.
+4. Stripe's `checkout.session.completed` webhook arrives with
    `metadata.kind = glasses_order`. `modules/billing/router.py` hands it to
    `modules/shop/service.record_order`, which writes ONE `orders` row (keyed
-   on the session id — redeliveries are no-ops) and mails
-   `SHOP_NOTIFY_EMAIL` (falls back to `FIRST_SUPER_ADMIN_EMAIL`).
-4. Admin panel → **Orders**: customer, phone, address, items, total; move the
+   on the session id — redeliveries are no-ops), mails the buyer a
+   confirmation, and mails `SHOP_NOTIFY_EMAIL` (falls back to
+   `FIRST_SUPER_ADMIN_EMAIL`) what to ship where.
+5. Admin panel → **Orders**: customer, phone, address, items, total; move the
    order paid → shipped → delivered (or cancelled), with a note.
 
 Nothing is written when a checkout starts; an abandoned cart leaves no row.

@@ -23,7 +23,7 @@ from app.db.models import Order, User, UserRole
 from app.db.seed import seed_roles_and_permissions
 from app.main import create_app
 from app.modules.shop import service
-from app.modules.shop.schemas import CartItem
+from app.modules.shop.schemas import CartItem, Customer
 from app.services import stripe_client
 from app.web import products, shop
 
@@ -76,11 +76,19 @@ def _sign(payload: bytes) -> str:
     return f"t={t},v1={v1}"
 
 
-def _session(session_id: str = "cs_test_order1", *, kind: str = "glasses_order") -> dict:
-    items = [
-        {"slug": "gs5", "name": "GS5 MAX", "colour": "Red", "qty": 1, "price_aed": 450},
-        {"slug": "l801", "name": "L801 Business", "colour": None, "qty": 2, "price_aed": 300},
-    ]
+CUSTOMER = Customer(
+    email="buyer@example.com", name="Ayesha K", phone="+971 50 000 0000",
+    line1="12 Marina Walk", line2="Apt 4", po_box="12345", city="Dubai", state="Dubai", country="ae",
+)
+
+
+def _session(session_id: str = "cs_test_order1", *, kind: str = "glasses_order", ours: bool = True) -> dict:
+    items = [{"s": "gs5", "c": "Red", "q": 1, "p": 450}, {"s": "l801", "c": None, "q": 2, "p": 300}]
+    meta = {"kind": kind, "items": json.dumps(items, separators=(",", ":"))}
+    if ours:
+        meta["customer"] = json.dumps({"email": "buyer@example.com", "name": "Ayesha K", "phone": "+971 50 000 0000"})
+        meta["ship"] = json.dumps({"name": "Ayesha K", "line1": "12 Marina Walk", "line2": "Apt 4", "po_box": "12345",
+                                   "city": "Dubai", "state": "Dubai", "postal_code": None, "country": "AE"})
     return {
         "id": session_id,
         "object": "checkout.session",
@@ -89,7 +97,7 @@ def _session(session_id: str = "cs_test_order1", *, kind: str = "glasses_order")
         "payment_intent": "pi_order1",
         "amount_total": 105000,
         "currency": "aed",
-        "metadata": {"kind": kind, "items": json.dumps(items)},
+        "metadata": meta,
         "customer_details": {
             "email": "buyer@example.com",
             "name": "Ayesha",
@@ -155,10 +163,10 @@ def test_sold_out_models_and_colours_are_marked_and_refused(monkeypatch) -> None
         monkeypatch.setattr(settings, "stripe_secret_key", "sk_test_x")
         async with db_base.get_sessionmaker()() as db:
             with pytest.raises(AppError) as err:
-                await service.create_checkout(db, items=[CartItem(slug="l802", qty=1)], origin="https://x")
+                await service.create_checkout(db, items=[CartItem(slug="l802", qty=1)], customer=CUSTOMER, origin="https://x")
             assert err.value.code == "OUT_OF_STOCK"
             with pytest.raises(AppError) as err:
-                await service.create_checkout(db, items=[CartItem(slug="gs5", qty=1, colour="Red")], origin="https://x")
+                await service.create_checkout(db, items=[CartItem(slug="gs5", qty=1, colour="Red")], customer=CUSTOMER, origin="https://x")
             assert err.value.code == "OUT_OF_STOCK"
 
     asyncio.run(refused())
@@ -190,7 +198,7 @@ def test_the_admin_toggles_stock_and_the_page_and_checkout_follow(monkeypatch) -
     # and the checkout refuses them
     s = get_settings()
     monkeypatch.setattr(s, "stripe_secret_key", "sk_test_x")
-    r = client.post("/api/v1/shop/checkout", json={"items": [{"slug": "gs5", "qty": 1, "colour": "Red"}]})
+    r = client.post("/api/v1/shop/checkout", json={"items": [{"slug": "gs5", "qty": 1, "colour": "Red"}], "customer": CUSTOMER.model_dump()})
     assert r.status_code == 400 and r.json()["error"]["code"] == "OUT_OF_STOCK"
 
     # back on sale
@@ -215,6 +223,7 @@ async def test_checkout_prices_the_cart_from_the_catalog_not_the_client(db_sessi
     out = await service.create_checkout(
         db_session,
         items=[CartItem(slug="gs5", qty=2, colour="Cream"), CartItem(slug="l801", qty=1)],
+        customer=CUSTOMER,
         origin="http://localhost:8000",
     )
     assert out == {"url": "https://checkout.stripe.test/cs_1", "total_aed": 1200}
@@ -224,22 +233,39 @@ async def test_checkout_prices_the_cart_from_the_catalog_not_the_client(db_sessi
     assert kw["line_items"][0]["price_data"]["product_data"]["name"] == "GS5 MAX — Cream"
     assert kw["line_items"][0]["quantity"] == 2
     assert kw["line_items"][1]["price_data"]["unit_amount"] == 30000
-    assert kw["ship_to"] == ["AE"]
-    assert kw["success_url"].startswith("http://localhost:8000/shop/success?session_id=")
-    assert kw["cancel_url"] == "http://localhost:8000/#glasses"
+    # our cart took the address: Stripe only takes the card, prefilled email
+    assert kw.get("ship_to") is None and kw["customer_email"] == "buyer@example.com"
+    assert kw["success_url"] == "http://localhost:8000/?order={CHECKOUT_SESSION_ID}#glasses"
+    assert kw["cancel_url"] == "http://localhost:8000/?cart=cancelled#glasses"
     meta = kw["metadata"]
     assert meta["kind"] == "glasses_order"
-    assert json.loads(meta["items"])[0] == {"slug": "gs5", "name": "GS5 MAX", "colour": "Cream", "qty": 2, "price_aed": 450}
+    assert json.loads(meta["items"])[0] == {"s": "gs5", "c": "Cream", "q": 2, "p": 450}
+    assert json.loads(meta["customer"]) == {"email": "buyer@example.com", "name": "Ayesha K", "phone": "+971 50 000 0000"}
+    assert json.loads(meta["ship"])["line1"] == "12 Marina Walk" and json.loads(meta["ship"])["country"] == "AE"
+    assert all(len(v) <= 500 for v in meta.values()), "Stripe caps a metadata value at 500 characters"
+    # ten of everything still fits the cap
+    big = [CartItem(slug="gs5", qty=5, colour="Black")] * 10
+    await service.create_checkout(db_session, items=big, customer=CUSTOMER, origin="https://x")
+    assert len(seen[-1]["metadata"]["items"]) <= 500
+
+
+async def test_checkout_refuses_a_country_we_do_not_deliver_to(db_session, monkeypatch) -> None:
+    s = get_settings()
+    monkeypatch.setattr(s, "stripe_secret_key", "sk_test_x")
+    far = CUSTOMER.model_copy(update={"country": "US"})
+    with pytest.raises(AppError) as err:
+        await service.create_checkout(db_session, items=[CartItem(slug="l801", qty=1)], customer=far, origin="https://x")
+    assert err.value.code == "SHIP_COUNTRY"
 
 
 async def test_checkout_refuses_unknown_models_and_colours(db_session, monkeypatch) -> None:
     s = get_settings()
     monkeypatch.setattr(s, "stripe_secret_key", "sk_test_x")
     with pytest.raises(AppError) as err:
-        await service.create_checkout(db_session, items=[CartItem(slug="gs9", qty=1)], origin="https://x")
+        await service.create_checkout(db_session, items=[CartItem(slug="gs9", qty=1)], customer=CUSTOMER, origin="https://x")
     assert err.value.code == "UNKNOWN_MODEL"
     with pytest.raises(AppError) as err:
-        await service.create_checkout(db_session, items=[CartItem(slug="gs5", qty=1, colour="Pink")], origin="https://x")
+        await service.create_checkout(db_session, items=[CartItem(slug="gs5", qty=1, colour="Pink")], customer=CUSTOMER, origin="https://x")
     assert err.value.code == "UNKNOWN_COLOUR"
 
 
@@ -249,38 +275,53 @@ def test_the_checkout_route_validates_and_answers_503_without_stripe(monkeypatch
     client = TestClient(create_app())
     r = client.post("/api/v1/shop/checkout", json={"items": []})
     assert r.status_code == 422
-    r = client.post("/api/v1/shop/checkout", json={"items": [{"slug": "gs5", "qty": 9}]})
+    cust = CUSTOMER.model_dump()
+    r = client.post("/api/v1/shop/checkout", json={"items": [{"slug": "gs5", "qty": 9}], "customer": cust})
     assert r.status_code == 422
+    # no customer, a bad email, a phone with no digits: all 422 before Stripe is asked
     r = client.post("/api/v1/shop/checkout", json={"items": [{"slug": "gs5", "qty": 1, "colour": "Red"}]})
+    assert r.status_code == 422
+    r = client.post("/api/v1/shop/checkout", json={"items": [{"slug": "l801", "qty": 1}], "customer": {**cust, "email": "nope"}})
+    assert r.status_code == 422
+    r = client.post("/api/v1/shop/checkout", json={"items": [{"slug": "l801", "qty": 1}], "customer": {**cust, "phone": "call me"}})
+    assert r.status_code == 422
+    r = client.post("/api/v1/shop/checkout", json={"items": [{"slug": "gs5", "qty": 1, "colour": "Red"}], "customer": cust})
     assert r.status_code == 503 and r.json()["error"]["code"] == "SHOP_NOT_CONFIGURED"
 
 
 # ---- the order ---------------------------------------------------------------
 
 
-async def test_a_paid_session_becomes_one_order_and_mails_the_operator(db_session, monkeypatch) -> None:
+async def test_a_paid_session_becomes_one_order_and_mails_operator_and_customer(db_session, monkeypatch) -> None:
     s = get_settings()
     monkeypatch.setattr(s, "shop_notify_email", "ops@example.com")
     mails: list[dict] = []
-    monkeypatch.setattr(
-        "app.modules.auth.notifications.send_outage_alert",
-        lambda **kw: mails.append(kw),
-    )
+    confirmations: list[dict] = []
+    monkeypatch.setattr("app.modules.auth.notifications.send_outage_alert", lambda **kw: mails.append(kw))
+    monkeypatch.setattr("app.modules.auth.notifications.send_order_confirmation", lambda **kw: confirmations.append(kw))
     first = await service.record_order(db_session, _session())
     assert first["duplicate"] is False and first["status"] == "paid"
     assert first["amount_cents"] == 105000 and first["currency"] == "AED"
-    assert first["email"] == "buyer@example.com" and first["phone"] == "+971500000000"
-    # the SHIPPING address wins over the billing one
-    assert first["address"]["line1"] == "12 Marina Walk" and first["name"] == "Ayesha K"
-    assert [i["qty"] for i in first["items"]] == [1, 2]
+    # what our cart took wins over what Stripe echoes
+    assert first["email"] == "buyer@example.com" and first["phone"] == "+971 50 000 0000"
+    assert first["address"]["line1"] == "12 Marina Walk" and first["address"]["po_box"] == "12345"
+    assert first["name"] == "Ayesha K"
+    assert [(i["name"], i["qty"], i["price_aed"]) for i in first["items"]] == [("GS5 MAX", 1, 450), ("L801 Business", 2, 300)]
     assert mails and mails[-1]["to_email"] == "ops@example.com"
     assert "1 × GS5 MAX (Red)" in mails[-1]["text"] and "12 Marina Walk" in mails[-1]["text"]
+    assert confirmations and confirmations[-1]["to_email"] == "buyer@example.com"
+    assert f"order #{first['id']}" in confirmations[-1]["subject"]
+    assert "AED 1050" in confirmations[-1]["text"] and "PO Box 12345" in confirmations[-1]["text"]
 
     again = await service.record_order(db_session, _session())
     assert again["duplicate"] is True and again["id"] == first["id"]
-    assert len(mails) == 1, "a redelivery must not mail twice"
+    assert len(mails) == 1 and len(confirmations) == 1, "a redelivery must not mail twice"
+
+    # a session that did not come through our cart still records, from Stripe's details
+    other = await service.record_order(db_session, _session("cs_theirs", ours=False))
+    assert other["email"] == "buyer@example.com" and other["address"]["line1"] == "12 Marina Walk"
     rows = (await db_session.execute(select(Order))).scalars().all()
-    assert len(rows) == 1
+    assert len(rows) == 2, "two sessions, two orders — the redelivery added none"
 
 
 def test_the_webhook_routes_a_glasses_order_to_the_shop_not_to_billing() -> None:
@@ -337,22 +378,59 @@ def test_admins_list_orders_and_move_them_along() -> None:
     assert r.status_code == 403
 
 
-# ---- the thank-you page ------------------------------------------------------------
+# ---- back on the site: the order modal -----------------------------------------------
 
 
-def test_the_success_page_reads_the_session_from_stripe(monkeypatch) -> None:
+def test_the_order_summary_comes_from_our_row_first_then_stripe(monkeypatch) -> None:
     s = get_settings()
     monkeypatch.setattr(s, "stripe_secret_key", "sk_test_x")
+    calls: list[str] = []
 
     async def fake(**kw):
-        assert kw["session_id"] == "cs_paid"
-        return _session("cs_paid")
+        calls.append(kw["session_id"])
+        return _session(kw["session_id"])
 
     monkeypatch.setattr(stripe_client, "retrieve_checkout_session", fake)
     client = TestClient(create_app())
-    r = client.get("/shop/success?session_id=cs_paid")
+
+    # not recorded yet (webhook still on its way): Stripe answers, no order number
+    r = client.get("/api/v1/shop/orders/cs_pending")
     assert r.status_code == 200
-    assert "Order received" in r.text and "1 × GS5 MAX (Red)" in r.text and "AED 1050" in r.text
-    # a junk id never breaks the page
-    r = client.get("/shop/success?session_id=<script>")
-    assert r.status_code == 200 and "Thank you" in r.text and "<script>" not in r.text.split("<body>")[1]
+    d = r.json()["data"]
+    assert d["paid"] is True and d["order_id"] is None and d["amount_cents"] == 105000
+    assert d["items"][0]["name"] == "GS5 MAX" and d["address_line"].startswith("12 Marina Walk")
+    assert calls == ["cs_pending"]
+
+    # recorded: our row answers, with the number, and Stripe is not asked
+    async def seed() -> None:
+        async with db_base.get_sessionmaker()() as db:
+            await service.record_order(db, _session("cs_done"))
+
+    asyncio.run(seed())
+    r = client.get("/api/v1/shop/orders/cs_done")
+    assert r.status_code == 200 and r.json()["data"]["order_id"] >= 1 and r.json()["data"]["email"] == "buyer@example.com"
+    assert calls == ["cs_pending"]
+
+    # junk is a 404, never a Stripe call
+    assert client.get("/api/v1/shop/orders/nope").status_code == 404
+    assert calls == ["cs_pending"]
+
+
+def test_old_success_links_land_back_on_the_site() -> None:
+    client = TestClient(create_app())
+    r = client.get("/shop/success?session_id=cs_abc", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == "/?order=cs_abc#glasses"
+    r = client.get("/shop/success?session_id=<script>", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == "/#glasses"
+
+
+def test_the_page_carries_the_delivery_form_and_the_order_modal() -> None:
+    from pathlib import Path
+
+    import app.web.router as web_router
+
+    page = shop.render(Path(web_router._INDEX).read_text(encoding="utf-8"), get_settings())
+    for name in ("name", "email", "phone", "line1", "line2", "po_box", "city", "state", "country"):
+        assert f'name="{name}"' in page, name
+    assert "data-order-modal" in page and "function orderShow" in page and "/api/v1/shop/orders/" in page
+    assert "Continue to delivery" in page and "Pay securely" in page

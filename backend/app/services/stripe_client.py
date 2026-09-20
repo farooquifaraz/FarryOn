@@ -123,18 +123,21 @@ async def create_order_session(
     line_items: list[dict[str, Any]],
     success_url: str,
     cancel_url: str,
-    ship_to: list[str],
     metadata: dict[str, str],
+    customer_email: str | None = None,
+    ship_to: list[str] | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
     """A one-payment Checkout for physical goods (the glasses shop).
 
-    Prices ride inline as ``price_data`` — the catalog is ours, not Stripe's
-    — and Stripe collects the shipping address (``ship_to`` countries) and a
-    phone number, so nothing personal is typed on our page. ``metadata``
-    (``kind=glasses_order`` + the items) is echoed on the completed-session
-    event and copied to the PaymentIntent, which is how the webhook knows an
-    order from a plan.
+    Prices ride inline as ``price_data`` — the catalog is ours, not Stripe's.
+    The buyer's name, phone and delivery address were taken in our own cart
+    and ride in ``metadata`` (with ``kind=glasses_order`` and the items), so
+    Stripe only takes the card; ``customer_email`` prefills the one field it
+    still shows. ``ship_to`` — asking Stripe to collect the address instead —
+    is kept for a caller that wants it. The metadata is echoed on the
+    completed-session event and copied to the PaymentIntent, which is how
+    the webhook knows an order from a plan.
     """
     params = _flatten(
         {
@@ -144,8 +147,15 @@ async def create_order_session(
             "line_items": line_items,
             "metadata": metadata,
             "payment_intent_data": {"metadata": metadata},
-            "shipping_address_collection": {"allowed_countries": ship_to},
-            "phone_number_collection": {"enabled": True},
+            **({"customer_email": customer_email} if customer_email else {}),
+            **(
+                {
+                    "shipping_address_collection": {"allowed_countries": ship_to},
+                    "phone_number_collection": {"enabled": True},
+                }
+                if ship_to
+                else {}
+            ),
         }
     )
     return await _post("/v1/checkout/sessions", params, secret_key=secret_key, client=client)

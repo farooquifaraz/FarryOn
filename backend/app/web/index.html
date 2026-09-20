@@ -466,6 +466,32 @@ section{padding:100px 5%;position:relative;overflow:hidden}
 .cart-lines div{display:flex;justify-content:space-between}
 .cart-lines .cart-total{font-size:1.05rem;color:var(--t);margin:6px 0 0;padding-top:8px;border-top:1px solid rgba(0,212,170,.12)}
 .cart-trust{display:flex;align-items:center;justify-content:center;gap:8px;font-size:.72rem;color:var(--td);margin-top:10px}
+.cart-h4{font-family:var(--fd);font-size:1rem;margin:4px 0 12px}
+.cart-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.cart-f{display:flex;flex-direction:column;gap:5px;font-size:.74rem;color:var(--tm)}
+.cart-f.full{grid-column:1/3}
+.cart-f input,.cart-f select{width:100%;padding:10px 12px;border-radius:9px;background:rgba(6,11,24,.9);
+  color:var(--t);border:1px solid rgba(0,212,170,.2);font-family:var(--fb);font-size:.86rem}
+.cart-f input:focus,.cart-f select:focus{outline:none;border-color:rgba(0,212,170,.55)}
+.cart-f input.bad{border-color:#ff7b7b}
+.cart-btns{display:flex;gap:10px;margin-top:14px}
+.cart-btns .cart-checkout{margin-top:0;flex:1}
+.cart-back{padding:14px 18px;border-radius:50px;border:1px solid rgba(0,212,170,.25);background:transparent;
+  color:var(--t);cursor:pointer;font-family:var(--fb);font-weight:600;font-size:.9rem}
+.order-backdrop{position:fixed;inset:0;background:rgba(3,9,18,.8);z-index:10003;display:flex;align-items:center;
+  justify-content:center;padding:20px;backdrop-filter:blur(4px)}
+.order-backdrop[hidden]{display:none!important}
+.order-modal{width:min(480px,100%);background:rgba(6,11,24,.98);border:1px solid rgba(0,212,170,.2);border-radius:20px;
+  padding:30px 28px;text-align:center;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+.order-tick{width:58px;height:58px;margin:0 auto 14px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#0F6E56,#00D4AA);color:#030912;font-size:1.7rem;font-weight:800;box-shadow:0 0 40px rgba(0,212,170,.4)}
+.order-modal h3{font-family:var(--fd);font-size:1.5rem;margin-bottom:4px}
+.order-no{color:var(--tm);font-size:.86rem;margin-bottom:14px}
+.order-items{list-style:none;text-align:left;margin:0 0 12px;display:flex;flex-direction:column;gap:6px}
+.order-items li{display:flex;justify-content:space-between;padding:8px 12px;border-radius:10px;background:rgba(0,212,170,.05);font-size:.88rem}
+.order-lines{text-align:left;display:flex;flex-direction:column;gap:6px;font-size:.84rem;color:var(--tm);margin-bottom:12px}
+.order-lines div{display:flex;justify-content:space-between;gap:14px}.order-lines b,.order-lines span:last-child{color:var(--t);text-align:right}
+.order-note{font-size:.8rem;color:var(--td);margin-bottom:14px}
 .cart-toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:10002;
   background:rgba(6,11,24,.97);border:1px solid rgba(0,212,170,.3);border-radius:50px;padding:12px 20px;
   font-size:.86rem;color:var(--t);box-shadow:0 10px 40px rgba(0,0,0,.5);display:flex;gap:14px;align-items:center}
@@ -641,20 +667,61 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
   </div>
   <ul class="cart-list" data-cart-list></ul>
   <div class="cart-foot" data-cart-foot hidden>
-    <div class="cart-deliver">
-      <div><span>Deliver to:</span> <b data-cart-shipto>United Arab Emirates</b></div>
-      <div>Delivery is free. Your address and phone number are entered on the secure payment page.</div>
+    <div data-cart-step="1">
+      <div class="cart-deliver">
+        <div><span>Deliver to:</span> <b data-cart-shipto>United Arab Emirates</b></div>
+        <div>Delivery is free. Next step: your delivery details, then the secure payment page.</div>
+      </div>
+      <div class="cart-lines">
+        <div><span>Subtotal</span><span data-cart-subtotal>AED 0</span></div>
+        <div><span>Delivery</span><span>Free</span></div>
+        <div class="cart-total"><span>Total</span><b data-cart-total>AED 0</b></div>
+      </div>
+      <p class="cart-err" data-cart-err hidden></p>
+      <button type="button" class="cart-checkout" onclick="cartStep(2)" data-cart-next>Continue to delivery</button>
     </div>
-    <div class="cart-lines">
-      <div><span>Subtotal</span><span data-cart-subtotal>AED 0</span></div>
-      <div><span>Delivery</span><span>Free</span></div>
-      <div class="cart-total"><span>Total</span><b data-cart-total>AED 0</b></div>
-    </div>
-    <p class="cart-err" data-cart-err hidden></p>
-    <button type="button" class="cart-checkout" onclick="cartCheckout()" data-cart-checkout>Checkout securely</button>
-    <div class="cart-trust"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span>Secure payment by Stripe · Visa, Mastercard, Apple Pay, Google Pay</span></div>
+    <form data-cart-step="2" hidden onsubmit="cartCheckout(event)" novalidate>
+      <h4 class="cart-h4">Delivery details</h4>
+      <div class="cart-grid">
+        <label class="cart-f full"><span>Full name</span><input name="name" required autocomplete="name" maxlength="100"></label>
+        <label class="cart-f"><span>Email</span><input name="email" type="email" required autocomplete="email" maxlength="254"></label>
+        <label class="cart-f"><span>Phone</span><input name="phone" type="tel" required autocomplete="tel" placeholder="+971 50 000 0000" maxlength="30"></label>
+        <label class="cart-f full"><span>Address line 1</span><input name="line1" required autocomplete="address-line1" placeholder="Building, street" maxlength="120"></label>
+        <label class="cart-f full"><span>Address line 2</span><input name="line2" autocomplete="address-line2" placeholder="Apartment, floor, landmark" maxlength="120"></label>
+        <label class="cart-f"><span>PO Box</span><input name="po_box" maxlength="20"></label>
+        <label class="cart-f"><span>City</span><input name="city" required autocomplete="address-level2" maxlength="60"></label>
+        <label class="cart-f"><span>State / Emirate</span><input name="state" autocomplete="address-level1" maxlength="60"></label>
+        <label class="cart-f"><span>Country</span><select name="country" required autocomplete="country" data-cart-countries></select></label>
+      </div>
+      <div class="cart-lines">
+        <div class="cart-total"><span>Total</span><b data-cart-total2>AED 0</b></div>
+      </div>
+      <p class="cart-err" data-cart-err2 hidden></p>
+      <div class="cart-btns">
+        <button type="button" class="cart-back" onclick="cartStep(1)">Back</button>
+        <button type="submit" class="cart-checkout" data-cart-checkout>Pay securely</button>
+      </div>
+      <div class="cart-trust"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span>Secure payment by Stripe · Visa, Mastercard, Apple Pay, Google Pay</span></div>
+    </form>
   </div>
 </aside>
+
+<!-- ORDER MODAL: shown when Stripe sends the buyer back with ?order=cs_… -->
+<div class="order-backdrop" data-order-modal hidden onclick="orderClose()">
+  <div class="order-modal" onclick="event.stopPropagation()" role="dialog" aria-modal="true">
+    <div class="order-tick">✓</div>
+    <h3>Order received</h3>
+    <p class="order-no" data-order-no></p>
+    <ul class="order-items" data-order-items></ul>
+    <div class="order-lines">
+      <div><span>Paid</span><b data-order-total></b></div>
+      <div><span>Delivering to</span><span data-order-address></span></div>
+      <div><span>Confirmation sent to</span><span data-order-email></span></div>
+    </div>
+    <p class="order-note">We will message you on your email and phone when your glasses ship.</p>
+    <button type="button" class="cart-checkout" onclick="orderClose()">Done</button>
+  </div>
+</div>
 <div class="cart-toast" data-cart-toast hidden><span data-cart-toast-text>Added to cart</span><a onclick="cartOpen()">View cart</a></div>
 <!--SHOP_CATALOG-->
 
@@ -1247,8 +1314,8 @@ function toggleFaq(btn){
 var SHOP=(function(){try{return JSON.parse(document.getElementById('shop-catalog').textContent)}catch(e){return null}})();
 var CART_HI=document.documentElement.lang==='hi';
 var CART_T=CART_HI
-  ?{added:'कार्ट में जुड़ गया',remove:'हटाएँ',na:'अभी उपलब्ध नहीं — कार्ट से हटाएँ',off:'शॉप अभी ऑर्डर नहीं ले रही — WhatsApp पर पूछें।',fail:'चेकआउट शुरू नहीं हो सका, फिर कोशिश करें।',net:'नेटवर्क में दिक्कत — फिर कोशिश करें।',out:'यह रंग अभी उपलब्ध नहीं है।'}
-  :{added:'Added to cart',remove:'Remove',na:'No longer available — please remove',off:'The shop is not taking orders yet — ask on WhatsApp.',fail:'Could not start checkout — please try again.',net:'Network problem — please try again.',out:'That colour is out of stock right now.'};
+  ?{added:'कार्ट में जुड़ गया',remove:'हटाएँ',na:'अभी उपलब्ध नहीं — कार्ट से हटाएँ',off:'शॉप अभी ऑर्डर नहीं ले रही — WhatsApp पर पूछें।',fail:'चेकआउट शुरू नहीं हो सका, फिर कोशिश करें।',net:'नेटवर्क में दिक्कत — फिर कोशिश करें।',out:'यह रंग अभी उपलब्ध नहीं है।',form:'हाइलाइट किए गए फ़ील्ड जाँचें।'}
+  :{added:'Added to cart',remove:'Remove',na:'No longer available — please remove',off:'The shop is not taking orders yet — ask on WhatsApp.',fail:'Could not start checkout — please try again.',net:'Network problem — please try again.',out:'That colour is out of stock right now.',form:'Please check the highlighted fields.'};
 function cartLoad(){try{var c=JSON.parse(localStorage.getItem('cart')||'[]');return Array.isArray(c)?c:[]}catch(e){return []}}
 function cartSave(c){try{localStorage.setItem('cart',JSON.stringify(c))}catch(e){}cartRender()}
 function cartColour(slug){var sel=document.querySelector('select[data-colour="'+slug+'"]');return sel?sel.value:null}
@@ -1302,23 +1369,89 @@ function cartRender(){
   var ship=document.querySelector('[data-cart-shipto]');if(ship&&SHOP.ship_to_names)ship.textContent=SHOP.ship_to_names.join(', ');
   var btn=document.querySelector('[data-cart-checkout]');if(btn)btn.disabled=blocked||!n;
 }
-function cartOpen(){var d=document.querySelector('[data-cart]'),b=document.querySelector('[data-cart-backdrop]');if(!d)return;cartRender();d.hidden=false;b.hidden=false;document.body.style.overflow='hidden';var t=document.querySelector('[data-cart-toast]');if(t)t.hidden=true}
+function cartOpen(){var d=document.querySelector('[data-cart]'),b=document.querySelector('[data-cart-backdrop]');if(!d)return;cartRender();cartStep(1);d.hidden=false;b.hidden=false;document.body.style.overflow='hidden';var t=document.querySelector('[data-cart-toast]');if(t)t.hidden=true}
 function cartClose(){var d=document.querySelector('[data-cart]'),b=document.querySelector('[data-cart-backdrop]');if(!d)return;d.hidden=true;b.hidden=true;document.body.style.overflow=''}
-function cartCheckout(){
-  var c=cartLoad(),btn=document.querySelector('[data-cart-checkout]'),err=document.querySelector('[data-cart-err]');
+/* step 1 = the items and the total; step 2 = who and where (asked for here,
+   on our page, before the card — the payment page then only takes the card) */
+function cartStep(n){
+  var s1=document.querySelector('[data-cart-step="1"]'),s2=document.querySelector('[data-cart-step="2"]');
+  if(!s1||!s2)return;
+  if(n===2){cartFormFill();var t=document.querySelector('[data-cart-total]');var t2=document.querySelector('[data-cart-total2]');if(t&&t2)t2.textContent=t.textContent}
+  s1.hidden=(n===2);s2.hidden=(n!==2);
+  if(n===2){var f=s2.querySelector('input');if(f)f.focus()}
+}
+var CART_FIELDS=['name','email','phone','line1','line2','po_box','city','state','country'];
+function cartFormFill(){
+  var f=document.querySelector('[data-cart-step="2"]');if(!f)return;
+  var sel=f.querySelector('[data-cart-countries]');
+  if(sel&&!sel.options.length&&SHOP){(SHOP.ship_to||[]).forEach(function(c,i){var o=document.createElement('option');o.value=c;o.textContent=(SHOP.ship_to_names||[])[i]||c;sel.appendChild(o)})}
+  var saved={};try{saved=JSON.parse(localStorage.getItem('cart-address')||'{}')}catch(e){}
+  CART_FIELDS.forEach(function(k){var el=f.elements[k];if(el&&!el.value&&saved[k])el.value=saved[k]});
+}
+function cartFormRead(){
+  var f=document.querySelector('[data-cart-step="2"]'),out={};
+  CART_FIELDS.forEach(function(k){var el=f.elements[k];out[k]=el?el.value.trim():''});
+  try{localStorage.setItem('cart-address',JSON.stringify(out))}catch(e){}
+  return out;
+}
+function cartFormCheck(v){
+  var f=document.querySelector('[data-cart-step="2"]'),bad=null;
+  var need={name:v.name.length>=2,email:/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email),phone:(v.phone.replace(/\D/g,'').length>=6),line1:v.line1.length>=3,city:v.city.length>=2,country:!!v.country};
+  Object.keys(need).forEach(function(k){var el=f.elements[k];if(!el)return;el.classList.toggle('bad',!need[k]);if(!need[k]&&!bad)bad=el});
+  if(bad){bad.focus();return false}
+  return true;
+}
+function cartCheckout(e){
+  if(e&&e.preventDefault)e.preventDefault();
+  var c=cartLoad(),btn=document.querySelector('[data-cart-checkout]'),err=document.querySelector('[data-cart-err2]');
   if(!c.length)return;
   if(SHOP&&!SHOP.enabled){err.textContent=CART_T.off;err.hidden=false;return}
+  var v=cartFormRead();
+  if(!cartFormCheck(v)){err.textContent=CART_T.form;err.hidden=false;return}
   btn.disabled=true;err.hidden=true;
-  fetch('/api/v1/shop/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:c.map(function(i){return {slug:i.slug,qty:i.qty,colour:i.colour||null}})})})
+  var customer={email:v.email,name:v.name,phone:v.phone,line1:v.line1,line2:v.line2||null,po_box:v.po_box||null,city:v.city,state:v.state||null,postal_code:null,country:v.country};
+  fetch('/api/v1/shop/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:c.map(function(i){return {slug:i.slug,qty:i.qty,colour:i.colour||null}}),customer:customer})})
     .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j}})})
     .then(function(x){
       var url=x.ok&&x.j&&x.j.data&&x.j.data.url;
       if(url){window.location.href=url;return}
-      err.textContent=(x.j&&x.j.error&&x.j.error.message)||CART_T.fail;err.hidden=false;btn.disabled=false;
+      var m=(x.j&&x.j.error&&x.j.error.message)||CART_T.fail;
+      if(x.j&&x.j.detail&&x.j.detail.length)m=CART_T.form;
+      err.textContent=m;err.hidden=false;btn.disabled=false;
     })
     .catch(function(){err.textContent=CART_T.net;err.hidden=false;btn.disabled=false});
 }
-document.addEventListener('keydown',function(e){if(e.key==='Escape')cartClose()});
+/* back from Stripe: ?order=cs_… shows the order; ?cart=cancelled reopens the cart */
+function orderShow(o){
+  var m=document.querySelector('[data-order-modal]');if(!m)return;
+  document.querySelector('[data-order-no]').textContent=o.order_id?(CART_HI?'ऑर्डर नंबर #':'Order #')+o.order_id:(CART_HI?'पेमेंट हो गया — ऑर्डर नंबर ईमेल में आएगा':'Payment received — your order number is on its way by email');
+  document.querySelector('[data-order-items]').innerHTML=(o.items||[]).map(function(i){return '<li><span>'+i.qty+' × '+i.name+(i.colour?' · '+i.colour:'')+'</span><b>AED '+(i.price_aed*i.qty)+'</b></li>'}).join('');
+  document.querySelector('[data-order-total]').textContent=o.currency+' '+Math.round(o.amount_cents/100);
+  document.querySelector('[data-order-address]').textContent=o.address_line||'';
+  document.querySelector('[data-order-email]').textContent=o.email||'';
+  m.hidden=false;document.body.style.overflow='hidden';
+}
+function orderClose(){var m=document.querySelector('[data-order-modal]');if(m)m.hidden=true;document.body.style.overflow=''}
+(function(){
+  var q=new URLSearchParams(window.location.search);
+  var order=q.get('order'),cart=q.get('cart');
+  if(!order&&!cart)return;
+  try{history.replaceState(null,'',window.location.pathname+window.location.hash)}catch(e){}
+  if(cart==='cancelled'){
+    var go=function(){cartOpen();var err=document.querySelector('[data-cart-err]');if(err){err.textContent=CART_HI?'पेमेंट रद्द हुआ — आपका कार्ट सुरक्षित है।':'Payment cancelled — your cart is saved.';err.hidden=false}};
+    if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();
+    return;
+  }
+  if(!/^cs_[A-Za-z0-9_]+$/.test(order))return;
+  fetch('/api/v1/shop/orders/'+encodeURIComponent(order)).then(function(r){return r.ok?r.json():null}).then(function(j){
+    var o=j&&j.data;if(!o||!o.paid)return;
+    try{localStorage.removeItem('cart');localStorage.removeItem('cart-address')}catch(e){}
+    cartRender();
+    var go=function(){orderShow(o)};
+    if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();
+  }).catch(function(){});
+})();
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){cartClose();orderClose()}});
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',cartRender);else cartRender();
 /* a currency change re-prices the cart too */
 (function(){var f=window.fxApply;if(typeof f==='function'){window.fxApply=function(){f();cartRender()}}})();
