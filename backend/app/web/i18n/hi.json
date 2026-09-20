@@ -339,7 +339,6 @@
   "Secure payment by Stripe · Visa, Mastercard, Apple Pay, Google Pay": "Stripe से सुरक्षित पेमेंट · Visa, Mastercard, Apple Pay, Google Pay",
   "Added to cart": "कार्ट में जुड़ गया",
   "View cart": "कार्ट देखें",
-  "Delivery is free. Next step: your delivery details, then the secure payment page.": "डिलीवरी फ्री है। अगला स्टेप: डिलीवरी की जानकारी, फिर सुरक्षित पेमेंट पेज।",
   "Continue to delivery": "डिलीवरी की जानकारी भरें",
   "Delivery details": "डिलीवरी की जानकारी",
   "Full name": "पूरा नाम",
@@ -357,5 +356,7 @@
   "Delivering to": "डिलीवरी यहाँ",
   "Confirmation sent to": "पुष्टि भेजी गई",
   "We will message you on your email and phone when your glasses ship.": "ग्लासेस भेजते ही हम आपको ईमेल और फ़ोन पर बताएँगे।",
-  "Done": "ठीक है"
+  "Done": "ठीक है",
+  "Pay in": "भुगतान इसमें",
+  "Free delivery within the UAE; a courier charge applies elsewhere. Next step: your delivery details, then the secure payment page.": "UAE के अंदर डिलीवरी फ्री; बाहर कूरियर चार्ज लगेगा। अगला स्टेप: डिलीवरी की जानकारी, फिर सुरक्षित पेमेंट पेज।"
 }

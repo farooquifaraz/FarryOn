@@ -122,8 +122,8 @@ def test_the_cards_price_and_buy_from_the_one_catalog(monkeypatch) -> None:
     import app.web.router as web_router
 
     settings = get_settings()
-    # the developer's .env may list more countries; the test pins the default
-    monkeypatch.setattr(settings, "shop_ship_countries", ["AE"])
+    # the developer's .env may narrow the list; the test pins the default (everywhere)
+    monkeypatch.setattr(settings, "shop_ship_countries", ["*"])
     page = shop.render(Path(web_router._INDEX).read_text(encoding="utf-8"), settings)
     assert "<!--PRICE_AED:" not in page and "<!--BUY_ROW:" not in page and "<!--SHOP_CATALOG-->" not in page
     for slug, price in products.PRICES_AED.items():
@@ -139,9 +139,13 @@ def test_the_cards_price_and_buy_from_the_one_catalog(monkeypatch) -> None:
     assert [c["name"] for c in catalog["items"]["gs5"]["colours"]] == ["Black", "Red", "Cream"]
     assert all(c["in_stock"] for c in catalog["items"]["gs5"]["colours"])
     assert all(v["in_stock"] for v in catalog["items"].values())
-    assert catalog["ship_to_names"] == ["United Arab Emirates"]
-    # the picker offers the world, deliverable first; the clock picks a first guess
-    assert catalog["countries"][0] == ["AE", "United Arab Emirates"] and len(catalog["countries"]) >= 50
+    assert catalog["ship_to_names"][0] == "United Arab Emirates" and len(catalog["ship_to"]) >= 50
+    assert catalog["items"]["gs5"]["prices"] == {"AED": 450, "INR": 11999, "USD": 129}
+    assert catalog["currencies"] == ["AED", "INR", "USD"]
+    assert catalog["delivery"]["AE"]["AED"] == 0 and catalog["delivery"]["IN"]["INR"] == 1500 and catalog["delivery"]["*"]["USD"] == 30
+    # the picker offers the world, the countries with their own delivery price first
+    assert catalog["countries"][:2] == [["AE", "United Arab Emirates"], ["IN", "India"]] and len(catalog["countries"]) >= 50
+    assert 'data-inr="11999" data-usd="129"' in page, "the card carries its fixed rupee/dollar price"
     assert ["IN", "India"] in catalog["countries"] and ["US", "United States"] in catalog["countries"]
     assert catalog["country_zones"]["Asia/Dubai"] == "AE" and catalog["country_zones"]["Asia/Kolkata"] == "IN"
     assert catalog["regions"]["AE"][:2] == ["Abu Dhabi", "Dubai"] and len(catalog["regions"]["AE"]) == 7
@@ -235,13 +239,14 @@ async def test_checkout_prices_the_cart_from_the_catalog_not_the_client(db_sessi
         customer=CUSTOMER,
         origin="http://localhost:8000",
     )
-    assert out == {"url": "https://checkout.stripe.test/cs_1", "total_aed": 1200}
+    assert out == {"url": "https://checkout.stripe.test/cs_1", "total": 1200, "currency": "AED", "delivery": 0}
     kw = seen[-1]
     assert kw["line_items"][0]["price_data"]["unit_amount"] == 45000
     assert kw["line_items"][0]["price_data"]["currency"] == "aed"
     assert kw["line_items"][0]["price_data"]["product_data"]["name"] == "GS5 MAX — Cream"
     assert kw["line_items"][0]["quantity"] == 2
     assert kw["line_items"][1]["price_data"]["unit_amount"] == 30000
+    assert len(kw["line_items"]) == 2, "delivery within the UAE is free — no line"
     # our cart took the address: Stripe only takes the card, prefilled email
     assert kw.get("ship_to") is None and kw["customer_email"] == "buyer@example.com"
     assert kw["success_url"] == "http://localhost:8000/?order={CHECKOUT_SESSION_ID}#glasses"
@@ -249,6 +254,7 @@ async def test_checkout_prices_the_cart_from_the_catalog_not_the_client(db_sessi
     meta = kw["metadata"]
     assert meta["kind"] == "glasses_order"
     assert json.loads(meta["items"])[0] == {"s": "gs5", "c": "Cream", "q": 2, "p": 450}
+    assert meta["currency"] == "AED" and meta["delivery"] == "0"
     assert json.loads(meta["customer"]) == {"email": "buyer@example.com", "name": "Ayesha K", "phone": "+971 50 000 0000"}
     assert json.loads(meta["ship"])["line1"] == "12 Marina Walk" and json.loads(meta["ship"])["country"] == "AE"
     assert all(len(v) <= 500 for v in meta.values()), "Stripe caps a metadata value at 500 characters"
@@ -261,10 +267,51 @@ async def test_checkout_prices_the_cart_from_the_catalog_not_the_client(db_sessi
 async def test_checkout_refuses_a_country_we_do_not_deliver_to(db_session, monkeypatch) -> None:
     s = get_settings()
     monkeypatch.setattr(s, "stripe_secret_key", "sk_test_x")
+    monkeypatch.setattr(s, "shop_ship_countries", ["AE"])
     far = CUSTOMER.model_copy(update={"country": "US"})
     with pytest.raises(AppError) as err:
         await service.create_checkout(db_session, items=[CartItem(slug="l801", qty=1)], customer=far, origin="https://x")
     assert err.value.code == "SHIP_COUNTRY"
+
+
+async def test_the_buyer_pays_in_their_currency_and_delivery_is_priced_by_destination(db_session, monkeypatch) -> None:
+    """An Indian in Dubai sends a pair home: rupees, plus India delivery."""
+    s = get_settings()
+    monkeypatch.setattr(s, "stripe_secret_key", "sk_test_x")
+    monkeypatch.setattr(s, "shop_ship_countries", ["*"])
+    seen: list[dict] = []
+
+    async def fake(**kw):
+        seen.append(kw)
+        return {"url": "https://checkout.stripe.test/cs_in"}
+
+    monkeypatch.setattr(stripe_client, "create_order_session", fake)
+    home = CUSTOMER.model_copy(update={"country": "IN", "state": "Maharashtra", "city": "Mumbai"})
+    out = await service.create_checkout(db_session, items=[CartItem(slug="gs5", qty=1, colour="Black")], customer=home, origin="https://x", currency="INR")
+    assert out == {"url": "https://checkout.stripe.test/cs_in", "total": 11999 + 1500, "currency": "INR", "delivery": 1500}
+    li = seen[-1]["line_items"]
+    assert li[0]["price_data"] == {"currency": "inr", "unit_amount": 1199900, "product_data": {"name": "GS5 MAX — Black"}}
+    assert li[1]["price_data"] == {"currency": "inr", "unit_amount": 150000, "product_data": {"name": "Delivery to IN"}}
+    assert seen[-1]["metadata"]["currency"] == "INR" and seen[-1]["metadata"]["delivery"] == "1500"
+    assert json.loads(seen[-1]["metadata"]["items"])[0]["p"] == 11999
+
+    # anyone else: dollars, plus rest-of-world delivery
+    abroad = CUSTOMER.model_copy(update={"country": "GB", "state": None, "city": "London"})
+    out = await service.create_checkout(db_session, items=[CartItem(slug="l801", qty=2)], customer=abroad, origin="https://x", currency="USD")
+    assert out["currency"] == "USD" and out["delivery"] == 30 and out["total"] == 89 * 2 + 30
+    assert seen[-1]["line_items"][0]["price_data"]["unit_amount"] == 8900
+    assert seen[-1]["line_items"][1]["price_data"] == {"currency": "usd", "unit_amount": 3000, "product_data": {"name": "Delivery to GB"}}
+
+    # an unknown currency is refused before Stripe is asked
+    with pytest.raises(AppError) as err:
+        await service.create_checkout(db_session, items=[CartItem(slug="l801", qty=1)], customer=CUSTOMER, origin="https://x", currency="EUR")
+    assert err.value.code == "CURRENCY"
+
+
+def test_money_reads_the_way_each_currency_is_read() -> None:
+    assert service.money(45000, "AED") == "AED 450"
+    assert service.money(1199900, "INR") == "₹11,999"
+    assert service.money(8900, "USD") == "$89.00"
 
 
 async def test_checkout_refuses_unknown_models_and_colours(db_session, monkeypatch) -> None:
@@ -294,6 +341,8 @@ def test_the_checkout_route_validates_and_answers_503_without_stripe(monkeypatch
     assert r.status_code == 422
     r = client.post("/api/v1/shop/checkout", json={"items": [{"slug": "l801", "qty": 1}], "customer": {**cust, "phone": "call me"}})
     assert r.status_code == 422
+    r = client.post("/api/v1/shop/checkout", json={"items": [{"slug": "gs5", "qty": 1, "colour": "Red"}], "customer": cust, "currency": "EUR"})
+    assert r.status_code == 422, "the currency is one of AED, INR, USD"
     r = client.post("/api/v1/shop/checkout", json={"items": [{"slug": "gs5", "qty": 1, "colour": "Red"}], "customer": cust})
     assert r.status_code == 503 and r.json()["error"]["code"] == "SHOP_NOT_CONFIGURED"
 
@@ -315,12 +364,14 @@ async def test_a_paid_session_becomes_one_order_and_mails_operator_and_customer(
     assert first["email"] == "buyer@example.com" and first["phone"] == "+971 50 000 0000"
     assert first["address"]["line1"] == "12 Marina Walk" and first["address"]["po_box"] == "12345"
     assert first["name"] == "Ayesha K"
-    assert [(i["name"], i["qty"], i["price_aed"]) for i in first["items"]] == [("GS5 MAX", 1, 450), ("L801 Business", 2, 300)]
+    assert [(i["name"], i["qty"], i["price"]) for i in first["items"]] == [("GS5 MAX", 1, 450), ("L801 Business", 2, 300)]
+    assert first["delivery"] == 0
     assert mails and mails[-1]["to_email"] == "ops@example.com"
     assert "1 × GS5 MAX (Red)" in mails[-1]["text"] and "12 Marina Walk" in mails[-1]["text"]
     assert confirmations and confirmations[-1]["to_email"] == "buyer@example.com"
     assert f"order #{first['id']}" in confirmations[-1]["subject"]
-    assert "AED 1050" in confirmations[-1]["text"] and "PO Box 12345" in confirmations[-1]["text"]
+    assert "AED 1,050" in confirmations[-1]["text"] and "PO Box 12345" in confirmations[-1]["text"]
+    assert "Delivery to AE — AED 0" in confirmations[-1]["text"]
 
     again = await service.record_order(db_session, _session())
     assert again["duplicate"] is True and again["id"] == first["id"]

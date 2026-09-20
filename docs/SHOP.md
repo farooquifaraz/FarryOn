@@ -31,6 +31,22 @@ localStorage), and **Checkout**, which opens a Stripe Checkout page.
 
 Nothing is written when a checkout starts; an abandoned cart leaves no row.
 
+## Currency and delivery
+
+The buyer pays in **their** currency — where they are, not where the
+parcel goes: the site's currency picker (their clock's first guess:
+Asia/Dubai → AED, India → INR, else USD; changeable in the cart) selects
+one of three fixed price lists in `backend/app/web/products.py` → `PRICES`
+(AED / INR / USD per model). The figure on the card is the figure charged;
+nothing is converted at a rate.
+
+Delivery is priced by **destination** (`DELIVERY`, per country and
+currency): free within the UAE, a courier charge to India, another to the
+rest of the world, added as its own line on the Stripe page and in the
+order. So an Indian in Dubai can send a pair home and pays rupees plus the
+India courier. `SHOP_SHIP_COUNTRIES` (default `*` = every country the
+picker names) narrows where we deliver at all.
+
 ## Sold out
 
 Admin panel → **Orders** → the **Stock** card at the top: click a model's

@@ -460,6 +460,7 @@ section{padding:100px 5%;position:relative;overflow:hidden}
 .cart-item .cart-rm{grid-column:3;grid-row:3;justify-self:end}
 .cart-item.na{opacity:.6}.cart-item.na b{text-decoration:line-through}
 .cart-na{grid-column:2;font-size:.74rem;color:#ff9b9b}
+.cart-cur{display:flex;align-items:center;gap:8px;font-size:.78rem;color:var(--tm);margin-bottom:10px;flex-wrap:wrap}
 .cart-deliver{border:1px solid rgba(0,212,170,.12);border-radius:12px;padding:12px 14px;font-size:.8rem;color:var(--tm);line-height:1.55}
 .cart-deliver b{color:var(--t);font-weight:600}
 .cart-lines{display:flex;flex-direction:column;gap:6px;font-size:.88rem;color:var(--tm)}
@@ -671,13 +672,19 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
   <ul class="cart-list" data-cart-list></ul>
   <div class="cart-foot" data-cart-foot hidden>
     <div data-cart-step="1">
+      <div class="cart-cur">
+        <span>Pay in</span>
+        <button type="button" class="fx-btn" data-cart-cur="AED" onclick="fxSet('AED')">AED</button>
+        <button type="button" class="fx-btn" data-cart-cur="INR" onclick="fxSet('INR')">₹ INR</button>
+        <button type="button" class="fx-btn" data-cart-cur="USD" onclick="fxSet('USD')">$ USD</button>
+      </div>
       <div class="cart-deliver">
-        <div><span>Deliver to:</span> <b data-cart-shipto>United Arab Emirates</b></div>
-        <div>Delivery is free. Next step: your delivery details, then the secure payment page.</div>
+        <div><span>Deliver to:</span> <b data-cart-shipto>United Arab Emirates</b> <span data-cart-shipfee></span></div>
+        <div>Free delivery within the UAE; a courier charge applies elsewhere. Next step: your delivery details, then the secure payment page.</div>
       </div>
       <div class="cart-lines">
         <div><span>Subtotal</span><span data-cart-subtotal>AED 0</span></div>
-        <div><span>Delivery</span><span>Free</span></div>
+        <div><span>Delivery</span><span data-cart-delivery>Free</span></div>
         <div class="cart-total"><span>Total</span><b data-cart-total>AED 0</b></div>
       </div>
       <p class="cart-err" data-cart-err hidden></p>
@@ -698,6 +705,8 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
       </div>
       <p class="cart-nodeliver" data-cart-nodeliver hidden></p>
       <div class="cart-lines">
+        <div><span>Subtotal</span><span data-cart-subtotal2>AED 0</span></div>
+        <div><span>Delivery</span><span data-cart-delivery2>Free</span></div>
         <div class="cart-total"><span>Total</span><b data-cart-total2>AED 0</b></div>
       </div>
       <p class="cart-err" data-cart-err2 hidden></p>
@@ -881,7 +890,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
           <div class="spec-head">
             <span class="spec-icon">🕶</span>
             <div><div class="spec-model">L801 Business</div><div class="spec-type">Classic black frame · Everyday</div></div>
-            <div class="spec-price"><span class="fx" data-aed="<!--PRICE_AED:l801-->">AED <!--PRICE_AED:l801--></span><small>glasses only</small></div>
+            <div class="spec-price"><span class="fx" data-aed="<!--PRICE_AED:l801-->" <!--PRICE_FIXED:l801-->>AED <!--PRICE_AED:l801--></span><small>glasses only</small></div>
           </div>
           <div class="spec-rows">
             <div class="spec-row"><span class="spec-key">Camera</span><span class="spec-val hi">8MP · 1200P video</span></div>
@@ -903,7 +912,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
           <div class="spec-head">
             <span class="spec-icon">🥽</span>
             <div><div class="spec-model">L802 Premium</div><div class="spec-type">Black browline frame</div></div>
-            <div class="spec-price"><span class="fx" data-aed="<!--PRICE_AED:l802-->">AED <!--PRICE_AED:l802--></span><small>glasses only</small></div>
+            <div class="spec-price"><span class="fx" data-aed="<!--PRICE_AED:l802-->" <!--PRICE_FIXED:l802-->>AED <!--PRICE_AED:l802--></span><small>glasses only</small></div>
           </div>
           <div class="spec-rows">
             <div class="spec-row"><span class="spec-key">Camera</span><span class="spec-val hi">8MP · 4K video</span></div>
@@ -925,7 +934,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
           <div class="spec-head">
             <span class="spec-icon">🕶</span>
             <div><div class="spec-model">Farry-GS4</div><div class="spec-type">Matte black TR frame · 35 g</div></div>
-            <div class="spec-price"><span class="fx" data-aed="<!--PRICE_AED:gs4-->">AED <!--PRICE_AED:gs4--></span><small>glasses only</small></div>
+            <div class="spec-price"><span class="fx" data-aed="<!--PRICE_AED:gs4-->" <!--PRICE_FIXED:gs4-->>AED <!--PRICE_AED:gs4--></span><small>glasses only</small></div>
           </div>
           <div class="spec-rows">
             <div class="spec-row"><span class="spec-key">Camera</span><span class="spec-val hi">8MP · 4K video</span></div>
@@ -948,7 +957,7 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
           <div class="spec-head">
             <span class="spec-icon">🕶</span>
             <div><div class="spec-model">GS5 MAX</div><div class="spec-type">Metal frame · 3 colours · case</div></div>
-            <div class="spec-price"><span class="fx" data-aed="<!--PRICE_AED:gs5-->">AED <!--PRICE_AED:gs5--></span><small>glasses only</small></div>
+            <div class="spec-price"><span class="fx" data-aed="<!--PRICE_AED:gs5-->" <!--PRICE_FIXED:gs5-->>AED <!--PRICE_AED:gs5--></span><small>glasses only</small></div>
           </div>
           <div class="spec-rows">
             <div class="spec-row"><span class="spec-key">Camera</span><span class="spec-val hi">Sony 8MP · 4K video</span></div>
@@ -1217,7 +1226,11 @@ function fxApply(){
     el.textContent=cur==='USD'?'$'+el.dataset.usd:fxMoney(parseFloat(el.dataset.usd),'USD',cur);
   });
   document.querySelectorAll('.fx[data-aed]').forEach(function(el){
-    el.textContent=cur==='AED'?'AED '+el.dataset.aed:fxMoney(parseFloat(el.dataset.aed),'AED',cur);
+    /* a glasses card carries its own rupee/dollar price list (data-inr /
+       data-usd): that is the price charged, so it is shown as-is, never
+       converted; anything else converts at today's rate */
+    var fixed=el.dataset[cur.toLowerCase()];
+    el.textContent=cur==='AED'?'AED '+el.dataset.aed:(fixed?FX_SYM[cur]+fxNum(parseFloat(fixed),cur):fxMoney(parseFloat(el.dataset.aed),'AED',cur));
   });
   document.querySelectorAll('.fx-btn').forEach(function(b){
     b.classList.toggle('on',b.dataset.fx===cur);b.setAttribute('aria-pressed',b.dataset.fx===cur?'true':'false');
@@ -1348,17 +1361,23 @@ function cartAdd(slug,open){
 function cartBuy(slug){cartAdd(slug,true)}
 function cartQty(i,d){var c=cartLoad();if(!c[i])return;c[i].qty=Math.max(0,Math.min(5,c[i].qty+d));if(!c[i].qty)c.splice(i,1);cartSave(c)}
 function cartRemove(i){var c=cartLoad();c.splice(i,1);cartSave(c)}
-function cartMoney(aed){return (typeof FX!=='undefined'&&FX&&fxCur!=='AED')?fxMoney(aed,'AED',fxCur):'AED '+aed}
+/* the buyer's currency: the site's picker (their clock, or their choice) */
+function cartCur(){var c=(typeof fxCur!=='undefined'&&fxCur)||'AED';return (SHOP&&SHOP.currencies&&SHOP.currencies.indexOf(c)>=0)?c:'AED'}
+function cartPrice(slug){var p=SHOP&&SHOP.items[slug];if(!p)return 0;var c=cartCur();return (p.prices&&p.prices[c])||p.price_aed}
+function cartFmt(v,c){c=c||cartCur();if(c==='INR')return '₹'+Math.round(v).toLocaleString('en-IN');if(c==='USD')return '$'+Number(v).toFixed(2);return 'AED '+(v%1?Number(v).toFixed(2):v)}
+function cartMoney(v){return cartFmt(v)}
+function cartDeliveryFee(cc){var t=(SHOP&&SHOP.delivery)||{};var row=t[cc]||t['*']||{};return row[cartCur()]||0}
+function cartCountry(){var f=document.querySelector('[data-cart-step="2"]');var v=f&&f.elements.country&&f.elements.country.value;if(v)return v;try{var s=JSON.parse(localStorage.getItem('cart-address')||'{}');if(s.country)return s.country}catch(e){}return cartGuessCountry()}
 function cartRender(){
   var c=cartLoad(),list=document.querySelector('[data-cart-list]');if(!list||!SHOP)return;
   var n=0,total=0,html='',blocked=false;
   c.forEach(function(it,i){
     var p=SHOP.items[it.slug];if(!p)return;
     var ok=cartStock(it.slug,it.colour);if(!ok)blocked=true;
-    n+=it.qty;if(ok)total+=p.price_aed*it.qty;
+    n+=it.qty;if(ok)total+=cartPrice(it.slug)*it.qty;
     var thumb=p.thumb?'<img class="cart-thumb" src="'+p.thumb+'" alt="" loading="lazy">':'<div class="cart-thumb ph">🕶</div>';
     html+='<li class="cart-item'+(ok?'':' na')+'">'+thumb+'<div><b>'+p.name+'</b>'+(it.colour?'<small>'+it.colour+'</small>':'')+'</div>'
-      +'<span class="cart-price">'+cartMoney(p.price_aed*it.qty)+'</span>'
+      +'<span class="cart-price">'+cartMoney(cartPrice(it.slug)*it.qty)+'</span>'
       +'<div class="cart-qty"><button type="button" onclick="cartQty('+i+',-1)" aria-label="less">−</button><span>'+it.qty+'</span><button type="button" onclick="cartQty('+i+',1)" aria-label="more">+</button></div>'
       +(ok?'':'<div class="cart-na">'+CART_T.na+'</div>')
       +'<button type="button" class="cart-rm" onclick="cartRemove('+i+')">'+CART_T.remove+'</button></li>';
@@ -1368,10 +1387,17 @@ function cartRender(){
   var nn=document.querySelector('[data-cart-n]');if(nn)nn.textContent=n;
   var empty=document.querySelector('[data-cart-empty]');if(empty)empty.hidden=!!n;
   var foot=document.querySelector('[data-cart-foot]');if(foot)foot.hidden=!n;
-  var sub=document.querySelector('[data-cart-subtotal]');if(sub)sub.textContent=cartMoney(total);
-  var tot=document.querySelector('[data-cart-total]');if(tot)tot.textContent=cartMoney(total);
-  var ship=document.querySelector('[data-cart-shipto]');if(ship&&SHOP.ship_to_names)ship.textContent=SHOP.ship_to_names.join(', ');
-  var btn=document.querySelector('[data-cart-checkout]');if(btn)btn.disabled=blocked||!n;
+  var cc=cartCountry(),fee=cartDeliveryFee(cc),grand=total+(n?fee:0);
+  var free=CART_HI?'फ्री':'Free';
+  ['','2'].forEach(function(k){
+    var sub=document.querySelector('[data-cart-subtotal'+k+']');if(sub)sub.textContent=cartMoney(total);
+    var del=document.querySelector('[data-cart-delivery'+k+']');if(del)del.textContent=fee?cartMoney(fee):free;
+    var tot=document.querySelector('[data-cart-total'+k+']');if(tot)tot.textContent=cartMoney(grand);
+  });
+  var ship=document.querySelector('[data-cart-shipto]');if(ship)ship.textContent=cartCountryName(cc);
+  var sf=document.querySelector('[data-cart-shipfee]');if(sf)sf.textContent=fee?'· '+(CART_HI?'डिलीवरी ':'delivery ')+cartMoney(fee):'· '+(CART_HI?'फ्री डिलीवरी':'free delivery');
+  document.querySelectorAll('[data-cart-cur]').forEach(function(b){b.classList.toggle('on',b.dataset.cur===cartCur())});
+  var btn=document.querySelector('[data-cart-checkout]');if(btn)btn.disabled=blocked||!n||!cartDelivers(cc);
 }
 function cartOpen(){var d=document.querySelector('[data-cart]'),b=document.querySelector('[data-cart-backdrop]');if(!d)return;cartRender();cartStep(1);d.hidden=false;b.hidden=false;document.body.style.overflow='hidden';var t=document.querySelector('[data-cart-toast]');if(t)t.hidden=true}
 function cartClose(){var d=document.querySelector('[data-cart]'),b=document.querySelector('[data-cart-backdrop]');if(!d)return;d.hidden=true;b.hidden=true;document.body.style.overflow=''}
@@ -1380,7 +1406,7 @@ function cartClose(){var d=document.querySelector('[data-cart]'),b=document.quer
 function cartStep(n){
   var s1=document.querySelector('[data-cart-step="1"]'),s2=document.querySelector('[data-cart-step="2"]');
   if(!s1||!s2)return;
-  if(n===2){cartFormFill();var t=document.querySelector('[data-cart-total]');var t2=document.querySelector('[data-cart-total2]');if(t&&t2)t2.textContent=t.textContent}
+  if(n===2){cartFormFill();cartRender()}
   s1.hidden=(n===2);s2.hidden=(n!==2);
   if(n===2){var f=s2.querySelector('input');if(f)f.focus()}
 }
@@ -1418,7 +1444,7 @@ function cartCountryChanged(){
     }
   }
   if(pay)pay.disabled=!ok;
-  var ship=document.querySelector('[data-cart-shipto]');if(ship)ship.textContent=cartCountryName(cc);
+  cartRender();
 }
 function cartFormFill(){
   var f=document.querySelector('[data-cart-step="2"]');if(!f)return;
@@ -1459,7 +1485,7 @@ function cartCheckout(e){
   if(!cartFormCheck(v)){err.textContent=CART_T.form;err.hidden=false;return}
   btn.disabled=true;err.hidden=true;
   var customer={email:v.email,name:v.name,phone:v.phone,line1:v.line1,line2:v.line2||null,po_box:v.po_box||null,city:v.city,state:v.state||null,postal_code:null,country:v.country};
-  fetch('/api/v1/shop/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:c.map(function(i){return {slug:i.slug,qty:i.qty,colour:i.colour||null}}),customer:customer})})
+  fetch('/api/v1/shop/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:c.map(function(i){return {slug:i.slug,qty:i.qty,colour:i.colour||null}}),customer:customer,currency:cartCur()})})
     .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j}})})
     .then(function(x){
       var url=x.ok&&x.j&&x.j.data&&x.j.data.url;
@@ -1474,8 +1500,10 @@ function cartCheckout(e){
 function orderShow(o){
   var m=document.querySelector('[data-order-modal]');if(!m)return;
   document.querySelector('[data-order-no]').textContent=o.order_id?(CART_HI?'ऑर्डर नंबर #':'Order #')+o.order_id:(CART_HI?'पेमेंट हो गया — ऑर्डर नंबर ईमेल में आएगा':'Payment received — your order number is on its way by email');
-  document.querySelector('[data-order-items]').innerHTML=(o.items||[]).map(function(i){return '<li><span>'+i.qty+' × '+i.name+(i.colour?' · '+i.colour:'')+'</span><b>AED '+(i.price_aed*i.qty)+'</b></li>'}).join('');
-  document.querySelector('[data-order-total]').textContent=o.currency+' '+Math.round(o.amount_cents/100);
+  var cur=o.currency||'AED';
+  document.querySelector('[data-order-items]').innerHTML=(o.items||[]).map(function(i){var u=(i.price!=null?i.price:i.price_aed);return '<li><span>'+i.qty+' × '+i.name+(i.colour?' · '+i.colour:'')+'</span><b>'+cartFmt(u*i.qty,cur)+'</b></li>'}).join('')
+    +'<li><span>'+(CART_HI?'डिलीवरी':'Delivery')+'</span><b>'+(o.delivery?cartFmt(o.delivery,cur):(CART_HI?'फ्री':'Free'))+'</b></li>';
+  document.querySelector('[data-order-total]').textContent=cartFmt(o.amount_cents/100,cur);
   document.querySelector('[data-order-address]').textContent=o.address_line||'';
   document.querySelector('[data-order-email]').textContent=o.email||'';
   m.hidden=false;document.body.style.overflow='hidden';

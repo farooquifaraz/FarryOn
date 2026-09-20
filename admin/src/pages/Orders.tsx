@@ -136,7 +136,7 @@ export default function Orders() {
                       <div key={k}>{i.qty} × {i.name}{i.colour ? ` (${i.colour})` : ""}</div>
                     ))}
                   </td>
-                  <td className="num">{row.currency} {(row.amount_cents / 100).toFixed(0)}</td>
+                  <td className="num">{row.currency === "USD" ? `$${(row.amount_cents / 100).toFixed(2)}` : row.currency === "INR" ? `₹${Math.round(row.amount_cents / 100).toLocaleString("en-IN")}` : `${row.currency} ${(row.amount_cents / 100).toFixed(0)}`}</td>
                   <td>
                     <Can permission="billing.manage">
                       <select value={row.status} onChange={(e) => void setStatus(row, e.target.value)}>

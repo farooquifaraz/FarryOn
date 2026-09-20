@@ -55,6 +55,9 @@ class Customer(BaseModel):
 class ShopCheckoutRequest(BaseModel):
     items: list[CartItem] = Field(min_length=1, max_length=10)
     customer: Customer
+    # The buyer's currency — where THEY are (AED / INR / USD), chosen on the
+    # page from their clock and changeable — not where the parcel goes.
+    currency: Literal["AED", "INR", "USD"] = "AED"
 
 
 class OrderStatusRequest(BaseModel):

@@ -18,7 +18,14 @@ from app.core.responses import AppError
 from app.db.models import Order, ShopStock
 from app.logging_conf import get_logger
 from app.modules.shop.schemas import CartItem, Customer
-from app.web.products import COLOURS, MODELS, PRICES_AED
+from app.web.products import (
+    COLOURS,
+    CURRENCIES,
+    MODELS,
+    PRICES,
+    PRICES_AED,
+    delivery_charge,
+)
 
 logger = get_logger(__name__)
 
@@ -66,7 +73,7 @@ async def set_stock(db: AsyncSession, key: str, *, in_stock: bool) -> dict:
     return {**known[key], "in_stock": in_stock}
 
 
-def _line(item: CartItem, sold_out: set[str]) -> dict:
+def _line(item: CartItem, sold_out: set[str], currency: str = "AED") -> dict:
     """One Stripe line item, priced from the catalog — never from the client.
 
     Refuses a model or colour that is sold out: the page greys those out,
@@ -97,21 +104,40 @@ def _line(item: CartItem, sold_out: set[str]) -> dict:
     return {
         "quantity": item.qty,
         "price_data": {
-            "currency": "aed",
-            "unit_amount": PRICES_AED[item.slug] * 100,
+            "currency": currency.lower(),
+            "unit_amount": PRICES[item.slug][currency] * 100,
             "product_data": {"name": name},
         },
     }
 
 
-def _summary(items: list[CartItem]) -> list[dict]:
-    """The order's own record of what was bought — in the row and the mails."""
+def _delivery_line(country: str, currency: str) -> dict | None:
+    """The courier, as a line of its own on the Stripe page — or None when
+    delivery there is free."""
+    amount = delivery_charge(country, currency)
+    if amount <= 0:
+        return None
+    return {
+        "quantity": 1,
+        "price_data": {
+            "currency": currency.lower(),
+            "unit_amount": amount * 100,
+            "product_data": {"name": f"Delivery to {country}"},
+        },
+    }
+
+
+def _summary(items: list[CartItem], currency: str = "AED") -> list[dict]:
+    """The order's own record of what was bought — in the row and the mails.
+    ``price`` is per unit in the order's currency; ``price_aed`` stays for
+    older readers."""
     return [
         {
             "slug": i.slug,
             "name": MODELS[i.slug],
             "colour": (i.colour or None) if COLOURS.get(i.slug) else None,
             "qty": i.qty,
+            "price": PRICES[i.slug][currency],
             "price_aed": PRICES_AED[i.slug],
         }
         for i in items
@@ -120,9 +146,10 @@ def _summary(items: list[CartItem]) -> list[dict]:
 
 def _compact(summary: list[dict]) -> str:
     """The items as Stripe metadata: a value is capped at 500 characters, so
-    ten lines must fit in short keys — ``[{"s":"gs5","c":"Red","q":1,"p":450}]``."""
+    ten lines must fit in short keys — ``[{"s":"gs5","c":"Red","q":1,"p":450}]``
+    (``p`` = unit price in the order's currency)."""
     return json.dumps(
-        [{"s": i["slug"], "c": i["colour"], "q": i["qty"], "p": i["price_aed"]} for i in summary],
+        [{"s": i["slug"], "c": i["colour"], "q": i["qty"], "p": i["price"]} for i in summary],
         separators=(",", ":"),
     )
 
@@ -136,13 +163,15 @@ def _expand(raw: str | None) -> list[dict]:
     out = []
     for r in rows:
         slug = r.get("s") or r.get("slug") or ""
+        price = int(r.get("p") or r.get("price") or r.get("price_aed") or PRICES_AED.get(slug, 0))
         out.append(
             {
                 "slug": slug,
                 "name": r.get("name") or MODELS.get(slug, slug),
                 "colour": r.get("c") if "c" in r else r.get("colour"),
                 "qty": int(r.get("q") or r.get("qty") or 0),
-                "price_aed": int(r.get("p") or r.get("price_aed") or PRICES_AED.get(slug, 0)),
+                "price": price,
+                "price_aed": price,  # older readers; the order's currency says what it is
             }
         )
     return out
@@ -161,6 +190,16 @@ def _address_of(c: Customer) -> dict:
     }
 
 
+def money(minor: int, currency: str) -> str:
+    """"AED 450", "₹11,999", "$129.00" — the way each currency is read."""
+    c = (currency or "AED").upper()
+    if c == "INR":
+        return f"₹{round(minor / 100):,}"
+    if c == "USD":
+        return f"${minor / 100:,.2f}"
+    return f"{c} {minor / 100:,.0f}" if minor % 100 == 0 else f"{c} {minor / 100:,.2f}"
+
+
 def address_line(a: dict) -> str:
     parts = [a.get("line1"), a.get("line2"), f"PO Box {a['po_box']}" if a.get("po_box") else None,
              a.get("city"), a.get("state"), a.get("postal_code"), a.get("country")]
@@ -168,7 +207,7 @@ def address_line(a: dict) -> str:
 
 
 async def create_checkout(
-    db: AsyncSession, *, items: list[CartItem], customer: Customer, origin: str
+    db: AsyncSession, *, items: list[CartItem], customer: Customer, origin: str, currency: str = "AED"
 ) -> dict:
     """Start a Stripe Checkout for the cart; returns ``{"url": …}``.
 
@@ -185,19 +224,31 @@ async def create_checkout(
     settings = get_settings()
     if not settings.stripe_secret_key:
         raise AppError("SHOP_NOT_CONFIGURED", "The shop isn't taking orders yet.", status_code=503)
-    if customer.country not in {c.upper() for c in settings.shop_ship_countries}:
+    from app.web.shop import ship_countries
+
+    currency = currency.upper()
+    if currency not in CURRENCIES:
+        raise AppError("CURRENCY", f"Pay in one of {', '.join(CURRENCIES)}.", status_code=400)
+    allowed = ship_countries(settings)
+    if customer.country not in allowed:
         raise AppError(
             "SHIP_COUNTRY",
-            f"We deliver to {', '.join(settings.shop_ship_countries)} only for now.",
+            "We don't deliver to that country yet — ask us on WhatsApp.",
             status_code=400,
         )
     sold_out = await sold_out_keys(db)
-    lines = [_line(i, sold_out) for i in items]
-    summary = _summary(items)
-    total = sum(i["price_aed"] * i["qty"] for i in summary)
+    lines = [_line(i, sold_out, currency) for i in items]
+    delivery = delivery_charge(customer.country, currency)
+    courier = _delivery_line(customer.country, currency)
+    if courier:
+        lines.append(courier)
+    summary = _summary(items, currency)
+    total = sum(i["price"] * i["qty"] for i in summary) + delivery
     metadata = {
         "kind": ORDER_KIND,
         "items": _compact(summary),
+        "currency": currency,
+        "delivery": str(delivery),
         "customer": json.dumps(
             {"email": customer.email, "name": customer.name, "phone": customer.phone},
             ensure_ascii=False,
@@ -216,8 +267,8 @@ async def create_checkout(
         )
     except StripeError as e:
         raise AppError("STRIPE_ERROR", str(e), status_code=502) from e
-    logger.info("shop.checkout_started", items=len(lines), total_aed=total)
-    return {"url": session["url"], "total_aed": total}
+    logger.info("shop.checkout_started", items=len(items), currency=currency, total=total, delivery=delivery)
+    return {"url": session["url"], "total": total, "currency": currency, "delivery": delivery}
 
 
 def _address(obj: dict) -> dict:
@@ -240,6 +291,17 @@ def _address(obj: dict) -> dict:
     }
 
 
+def _delivery_of(o: Order) -> int:
+    """The courier charge inside the order total, in whole units: what was
+    paid minus the items (older rows without it come out as 0)."""
+    try:
+        items = json.loads(o.items_json or "[]")
+    except ValueError:
+        return 0
+    goods = sum(int(i.get("price") or i.get("price_aed") or 0) * int(i.get("qty") or 0) for i in items)
+    return max(0, o.amount_cents // 100 - goods)
+
+
 def _order_out(o: Order) -> dict:
     return {
         "id": o.id,
@@ -252,6 +314,7 @@ def _order_out(o: Order) -> dict:
         "items": json.loads(o.items_json) if o.items_json else [],
         "amount_cents": o.amount_cents,
         "currency": o.currency,
+        "delivery": _delivery_of(o),
         "status": o.status,
         "note": o.note,
         "created_at": o.created_at.isoformat() if o.created_at else None,
@@ -295,7 +358,7 @@ async def record_order(db: AsyncSession, session_obj: dict) -> dict:
         address_json=json.dumps(address, ensure_ascii=False),
         items_json=json.dumps(items, ensure_ascii=False),
         amount_cents=int(session_obj.get("amount_total") or 0),
-        currency=str(session_obj.get("currency") or "aed").upper(),
+        currency=str(session_obj.get("currency") or meta.get("currency") or "aed").upper(),
         status="paid",
     )
     db.add(order)
@@ -316,8 +379,13 @@ def _confirm(order: Order, items: list[dict], address: dict) -> None:
 
     if not order.email:
         return
-    total = f"{order.currency} {order.amount_cents / 100:.0f}"
-    rows = [f"{i.get('qty')} × {i.get('name')}" + (f" ({i['colour']})" if i.get("colour") else "") for i in items]
+    total = money(order.amount_cents, order.currency)
+    rows = [
+        f"{i.get('qty')} × {i.get('name')}" + (f" ({i['colour']})" if i.get("colour") else "")
+        + f" — {money(int(i.get('price') or i.get('price_aed') or 0) * int(i.get('qty') or 0) * 100, order.currency)}"
+        for i in items
+    ]
+    rows.append(f"Delivery to {address.get('country') or '-'} — {money(_delivery_of(order) * 100, order.currency)}")
     text = "\n".join(
         [
             f"Hi {order.name or ''}".rstrip() + ",",
@@ -359,13 +427,15 @@ def _notify(order: Order, items: list[dict], address: dict) -> None:
         logger.info("shop.order_notify_skipped", reason="no address configured")
         return
     lines = [
-        f"Order #{order.id} — {order.currency} {order.amount_cents / 100:.2f}",
+        f"Order #{order.id} — {money(order.amount_cents, order.currency)}",
         "",
         "Items:",
         *[
             f"  {i.get('qty')} × {i.get('name')}" + (f" ({i['colour']})" if i.get("colour") else "")
+            + f" — {money(int(i.get('price') or i.get('price_aed') or 0) * int(i.get('qty') or 0) * 100, order.currency)}"
             for i in items
         ],
+        f"  Delivery: {money(_delivery_of(order) * 100, order.currency)}",
         "",
         f"Customer: {order.name or '-'} · {order.email or '-'} · {order.phone or '-'}",
         "Ship to: "
@@ -433,6 +503,7 @@ async def order_summary(db: AsyncSession, session_id: str) -> dict | None:
             "name": out["name"],
             "amount_cents": out["amount_cents"],
             "currency": out["currency"],
+            "delivery": out["delivery"],
             "items": out["items"],
             "address": out["address"],
             "address_line": address_line(out["address"]),
@@ -455,13 +526,18 @@ async def order_summary(db: AsyncSession, session_id: str) -> dict | None:
     except ValueError:
         ours, ship = {}, {}
     address = ship if ship.get("line1") else _address(obj)
+    try:
+        delivery = int(meta.get("delivery") or 0)
+    except ValueError:
+        delivery = 0
     return {
         "paid": obj.get("payment_status") == "paid",
         "order_id": None,
         "email": ours.get("email") or (obj.get("customer_details") or {}).get("email"),
         "name": ours.get("name") or address.get("name"),
         "amount_cents": int(obj.get("amount_total") or 0),
-        "currency": str(obj.get("currency") or "aed").upper(),
+        "currency": str(obj.get("currency") or meta.get("currency") or "aed").upper(),
+        "delivery": delivery,
         "items": _expand(meta.get("items")),
         "address": address,
         "address_line": address_line(address),

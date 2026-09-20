@@ -43,7 +43,7 @@ async def shop_checkout_endpoint(
 ) -> dict:
     return ok(
         await service.create_checkout(
-            db, items=body.items, customer=body.customer, origin=_origin(request)
+            db, items=body.items, customer=body.customer, origin=_origin(request), currency=body.currency
         )
     )
 

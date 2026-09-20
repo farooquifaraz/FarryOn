@@ -388,10 +388,12 @@ class Settings(BaseSettings):
         default="https://farryon.app/billing/success?session_id={CHECKOUT_SESSION_ID}"
     )
     stripe_cancel_url: str = Field(default="https://farryon.app/billing/cancel")
-    # The glasses shop (modules/shop): where Stripe may collect a shipping
-    # address (ISO country codes) and who is mailed when an order is paid
-    # (falls back to the first super admin). Same Stripe keys as billing.
-    shop_ship_countries: list[str] = Field(default_factory=lambda: ["AE"])
+    # The glasses shop (modules/shop): where we deliver — ISO country codes,
+    # or "*" for every country the cart's picker names, priced by
+    # destination (web/products.py DELIVERY) — and who is mailed when an
+    # order is paid (falls back to the first super admin). Same Stripe keys
+    # as billing.
+    shop_ship_countries: list[str] = Field(default_factory=lambda: ["*"])
     shop_notify_email: str | None = Field(default=None)
     # What is sold out right now: model slugs ("l802") and colour variants
     # ("gs5:Red"). The card says "Out of stock", the colour is greyed out in

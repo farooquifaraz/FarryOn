@@ -15,7 +15,16 @@ import json
 from html import escape
 
 from app.config import Settings
-from app.web.products import COLOURS, MODELS, PRICES_AED, Gallery, galleries
+from app.web.products import (
+    COLOURS,
+    CURRENCIES,
+    DELIVERY,
+    MODELS,
+    PRICES,
+    PRICES_AED,
+    Gallery,
+    galleries,
+)
 
 # ISO country -> name, for the cart's country picker and "Deliver to".
 # The picker lists all of these — the buyer can pick anywhere — and the page
@@ -127,6 +136,7 @@ def catalog(settings: Settings, sold_out: set[str] | None = None) -> dict:
         items[slug] = {
             "name": name,
             "price_aed": PRICES_AED[slug],
+            "prices": PRICES[slug],
             "in_stock": model_in_stock(sold_out, slug),
             "colours": [
                 {"name": c, "in_stock": colour_in_stock(sold_out, slug, c)}
@@ -134,21 +144,33 @@ def catalog(settings: Settings, sold_out: set[str] | None = None) -> dict:
             ],
             "thumb": thumb_url(found.get(slug)),
         }
-    ship_to = [c.upper() for c in getattr(settings, "shop_ship_countries", ["AE"])]
+    ship_to = ship_countries(settings)
     names = dict(_COUNTRY_NAMES)
     for c in ship_to:
         names.setdefault(c, c)
+    # the countries with their own delivery price first, then the rest A–Z
+    priced = [c for c in DELIVERY if c != "*" and c in ship_to]
     return {
         "items": items,
+        "currencies": list(CURRENCIES),
+        "delivery": DELIVERY,
         "ship_to": ship_to,
         "ship_to_names": [names.get(c, c) for c in ship_to],
-        # every country the picker offers, shippable ones first, then A–Z
-        "countries": [[c, names[c]] for c in ship_to]
-        + sorted(([c, n] for c, n in names.items() if c not in ship_to), key=lambda x: x[1]),
+        "countries": [[c, names[c]] for c in priced]
+        + sorted(([c, n] for c, n in names.items() if c not in priced), key=lambda x: x[1]),
         "country_zones": _COUNTRY_ZONES,
         "regions": REGIONS,
         "enabled": bool(getattr(settings, "stripe_secret_key", None)),
     }
+
+
+def ship_countries(settings: Settings) -> list[str]:
+    """Where we deliver: the env list, or every country the picker names
+    when it says "*" (the default — delivery is priced by destination)."""
+    raw = [str(c).upper() for c in getattr(settings, "shop_ship_countries", ["*"])]
+    if "*" in raw:
+        return list(_COUNTRY_NAMES)
+    return raw
 
 
 def buy_row(sold_out: set[str], slug: str) -> str:
@@ -192,6 +214,10 @@ def render(html: str, settings: Settings, sold_out: set[str] | None = None) -> s
     sold_out = out_of_stock(settings) if sold_out is None else sold_out
     for slug, price in PRICES_AED.items():
         html = html.replace(f"<!--PRICE_AED:{slug}-->", str(price))
+        html = html.replace(
+            f"<!--PRICE_FIXED:{slug}-->",
+            f'data-inr="{PRICES[slug]["INR"]}" data-usd="{PRICES[slug]["USD"]}"',
+        )
     for slug in MODELS:
         html = html.replace(f"<!--BUY_ROW:{slug}-->", buy_row(sold_out, slug))
     block = (

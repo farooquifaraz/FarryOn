@@ -107,15 +107,40 @@ MODELS: dict[str, str] = {
     "gs5": "GS5 MAX",
 }
 
-# What each model costs, in whole dirhams — the ONE place the price lives.
-# The spec cards print it, the currency picker converts it, the cart adds it
-# up and the checkout charges it (modules/shop). Change it here, nowhere else.
-PRICES_AED: dict[str, int] = {
-    "l801": 300,
-    "l802": 350,
-    "gs4": 350,
-    "gs5": 450,
+# What each model costs — the ONE place the price lives. Three fixed price
+# lists, not one converted at today's rate: a buyer in the UAE pays dirhams,
+# one in India rupees, everyone else dollars (Faraz, 2026-09-20), and the
+# figure they see is the figure they are charged. The spec cards print it,
+# the cart adds it up, the checkout charges it (modules/shop). Change it
+# here, nowhere else.
+CURRENCIES = ("AED", "INR", "USD")
+PRICES: dict[str, dict[str, int]] = {
+    #        AED   INR    USD
+    "l801": {"AED": 300, "INR": 7999, "USD": 89},
+    "l802": {"AED": 350, "INR": 9499, "USD": 99},
+    "gs4": {"AED": 350, "INR": 9499, "USD": 99},
+    "gs5": {"AED": 450, "INR": 11999, "USD": 129},
 }
+# The dirham list on its own — what the spec cards are written in.
+PRICES_AED: dict[str, int] = {slug: p["AED"] for slug, p in PRICES.items()}
+
+# What delivery costs, by destination country, in each currency. "*" is
+# everywhere else. Free within the UAE; a courier to India or the rest of
+# the world is charged as a line of its own on the Stripe page and in the
+# order. An order can be paid in one currency and delivered to another
+# country (an Indian in Dubai sending a pair home pays rupees + India
+# delivery).
+DELIVERY: dict[str, dict[str, int]] = {
+    "AE": {"AED": 0, "INR": 0, "USD": 0},
+    "IN": {"AED": 75, "INR": 1500, "USD": 20},
+    "*": {"AED": 110, "INR": 2500, "USD": 30},
+}
+
+
+def delivery_charge(country: str, currency: str) -> int:
+    """Whole units of ``currency`` to deliver to ``country``."""
+    table = DELIVERY.get(country.upper()) or DELIVERY["*"]
+    return int(table.get(currency.upper(), 0))
 
 # Colour choices, for the models that come in more than one.
 COLOURS: dict[str, list[str]] = {
