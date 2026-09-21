@@ -404,18 +404,50 @@ async def list_orders(
     return [_order_out(o) for o in rows], int(total)
 
 
-async def set_status(db: AsyncSession, order_id: int, *, status: str, note: str | None) -> dict:
+async def set_status(
+    db: AsyncSession, order_id: int, *, status: str, note: str | None, by: str | None = None
+) -> dict:
+    """Move an order along and tell both sides — the customer gets the
+    status mail (shipped / delivered / cancelled), the operator the record.
+    The same status again sends nothing (a double click is not two mails)."""
     if status not in STATUSES:
         raise AppError("INVALID_STATUS", f"Status must be one of {', '.join(STATUSES)}.", status_code=400)
     order = await db.get(Order, order_id)
     if order is None:
         raise AppError("NOT_FOUND", "Order not found.", status_code=404)
+    changed = order.status != status
     order.status = status
     if note is not None:
         order.note = note
     order.updated_at = datetime.now(timezone.utc)
     await db.commit()
+    if changed:
+        try:
+            items = json.loads(order.items_json or "[]")
+            address = json.loads(order.address_json or "{}")
+        except ValueError:
+            items, address = [], {}
+        _status_mails(order, items, address, note, by)
     return _order_out(order)
+
+
+def _status_mails(order: Order, items: list[dict], address: dict, note: str | None, by: str | None) -> None:
+    from app.config import get_settings
+    from app.modules.auth.notifications import (
+        send_operator_mail,
+        send_order_confirmation,
+    )
+    from app.modules.shop import mail
+
+    delivery = _delivery_of(order) * 100
+    if order.email:
+        subject, text, html = mail.customer_status(order, items, address, delivery, note)
+        send_order_confirmation(to_email=order.email, subject=subject, text=text, html=html)
+    s = get_settings()
+    to = s.shop_notify_email or s.first_super_admin_email
+    if to:
+        subject, text, html = mail.operator_status(order, items, address, delivery, note, by)
+        send_operator_mail(to_email=to, subject=subject, text=text, html=html)
 
 
 async def order_summary(db: AsyncSession, session_id: str) -> dict | None:

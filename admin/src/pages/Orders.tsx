@@ -44,7 +44,7 @@ interface StockRow {
 
 const STATUSES = ["paid", "shipped", "delivered", "cancelled"] as const;
 const FILTERS = ["all", ...STATUSES] as const;
-const PILL: Record<string, string> = { paid: "warn", shipped: "good", delivered: "good", cancelled: "muted" };
+const PILL: Record<string, string> = { paid: "warn", shipped: "info", delivered: "good", cancelled: "crit" };
 const PAGE_SIZE = 25;
 
 function addressLine(a: Address): string {
@@ -113,15 +113,16 @@ export default function Orders() {
               <th>Customer</th>
               <th>Ship to</th>
               <th>Items</th>
+              <th className="num">Qty</th>
               <th className="num">Total</th>
               <th>Status</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={7} className="loading">Loading…</td></tr>
+              <tr><td colSpan={8} className="loading">Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={7} className="empty">No orders yet.</td></tr>
+              <tr><td colSpan={8} className="empty">No orders yet.</td></tr>
             ) : (
               rows.map((row) => (
                 <tr key={row.id}>
@@ -138,10 +139,11 @@ export default function Orders() {
                       <div key={k}>{i.qty} × {i.name}{i.colour ? ` (${i.colour})` : ""}</div>
                     ))}
                   </td>
+                  <td className="num">{row.items.reduce((n, i) => n + i.qty, 0)}</td>
                   <td className="num">{money(row.amount_cents, row.currency)}</td>
                   <td>
                     <Can permission="billing.manage">
-                      <select value={row.status} onChange={(e) => void setStatus(row, e.target.value)}>
+                      <select className={`status-select status-${row.status}`} value={row.status} onChange={(e) => void setStatus(row, e.target.value)} title="Changing the status emails the customer and the ops address">
                         {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                       </select>
                     </Can>

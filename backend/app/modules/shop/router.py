@@ -87,7 +87,9 @@ async def set_order_status_endpoint(
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    out = await service.set_status(db, order_id, status=body.status, note=body.note)
+    out = await service.set_status(
+        db, order_id, status=body.status, note=body.note, by=actor.display_name or actor.email
+    )
     await write_audit(
         db,
         actor_id=actor.id,

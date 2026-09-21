@@ -413,7 +413,7 @@ def test_the_webhook_routes_a_glasses_order_to_the_shop_not_to_billing() -> None
 # ---- admin -------------------------------------------------------------------
 
 
-def test_admins_list_orders_and_move_them_along() -> None:
+def test_admins_list_orders_and_move_them_along(monkeypatch) -> None:
     client = TestClient(create_app())
     admin_token = _setup_admin(client, "orders-admin@example.com")
     _register_user(client, "orders-plain@example.com")
@@ -429,8 +429,21 @@ def test_admins_list_orders_and_move_them_along() -> None:
     order = r.json()["data"][0]
     assert order["status"] == "paid" and order["items"][0]["name"] == "GS5 MAX"
 
+    sent: list[dict] = []
+    monkeypatch.setattr("app.modules.auth.notifications.send_order_confirmation", lambda **kw: sent.append({"who": "customer", **kw}))
+    monkeypatch.setattr("app.modules.auth.notifications.send_operator_mail", lambda **kw: sent.append({"who": "operator", **kw}))
     r = client.patch(f"/api/v1/admin/orders/{order['id']}", headers=_auth(admin_token), json={"status": "shipped", "note": "Aramex 123"})
     assert r.status_code == 200 and r.json()["data"]["status"] == "shipped" and r.json()["data"]["note"] == "Aramex 123"
+    # both sides are told, in the theme, with the note
+    assert [m["who"] for m in sent] == ["customer", "operator"]
+    assert sent[0]["to_email"] == "buyer@example.com" and "on the way" in sent[0]["subject"]
+    assert "Aramex 123" in sent[0]["text"] and "farry-icon.png" in sent[0]["html"]
+    assert "marked shipped" in sent[1]["subject"] and "orders-admin@example.com" in sent[1]["text"]
+    # the same status again is not two more mails
+    r = client.patch(f"/api/v1/admin/orders/{order['id']}", headers=_auth(admin_token), json={"status": "shipped"})
+    assert r.status_code == 200 and len(sent) == 2
+    r = client.patch(f"/api/v1/admin/orders/{order['id']}", headers=_auth(admin_token), json={"status": "delivered"})
+    assert len(sent) == 4 and "arrived" in sent[2]["subject"]
     r = client.get("/api/v1/admin/orders?status=paid", headers=_auth(admin_token))
     assert r.json()["meta"]["total"] == 0
     r = client.patch(f"/api/v1/admin/orders/{order['id']}", headers=_auth(admin_token), json={"status": "lost"})

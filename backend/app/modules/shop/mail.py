@@ -198,3 +198,105 @@ def operator_alert(order: Order, items: list[dict], address: dict, delivery_mino
         foot="Sent by the FarryOn shop the moment Stripe confirmed the payment.",
     )
     return subject, text, html
+
+
+# What each status change says. The customer's line is the message; the
+# operator's is the record.
+_STATUS_COPY = {
+    "shipped": (
+        "Your glasses are on the way 🚚",
+        "Good news — order #{id} has shipped and is on its way to you.",
+        "We will share tracking details on WhatsApp or by email if the courier provides them.",
+    ),
+    "delivered": (
+        "Your glasses have arrived ✓",
+        "Order #{id} has been delivered. We hope you love them.",
+        "Open the FarryOn app, pair your glasses, and start talking to Farry. Questions? Reply to this email.",
+    ),
+    "cancelled": (
+        "Order cancelled",
+        "Order #{id} has been cancelled.",
+        "If you paid and have not been refunded yet, reply to this email and we will sort it out straight away.",
+    ),
+    "paid": (
+        "Order confirmed ✓",
+        "Order #{id} is confirmed and being prepared.",
+        "We will message you as soon as your glasses ship.",
+    ),
+}
+
+
+def customer_status(order: Order, items: list[dict], address: dict, delivery_minor: int, note: str | None) -> tuple[str, str, str]:
+    """(subject, text, html) telling the buyer the order moved to its status."""
+    title, lead, foot = _STATUS_COPY.get(order.status, _STATUS_COPY["paid"])
+    lead = lead.format(id=order.id)
+    cur = order.currency
+    first = (order.name or "").split(" ")[0]
+    where = address_line(address)
+    note_line = f"Note from FarryOn: {note}" if note else ""
+    subject = f"FarryOn order #{order.id}: {title.rstrip(' 🚚✓')}"
+    text = "\n".join(
+        [
+            f"Hi {first}," if first else "Hi,",
+            "",
+            lead,
+            *([note_line, ""] if note_line else [""]),
+            *[f"  {_item_name(i)} — {money(_line_total(i), cur)}" for i in items],
+            f"  Delivery — {money(delivery_minor, cur) if delivery_minor else 'Free'}",
+            f"  Total — {money(order.amount_cents, cur)}",
+            "",
+            f"Delivering to: {where}",
+            "",
+            foot,
+            "",
+            "— The FarryOn team",
+        ]
+    )
+    facts = [("Delivering to", where), ("Order number", f"#{order.id}"), ("Status", order.status)]
+    if note:
+        facts.append(("Note", note))
+    body = _items_table(items, cur, delivery_minor, order.amount_cents) + _facts(facts)
+    html = _shell(
+        title=title,
+        lead=(f"Hi {escape(first)}, " if first else "") + escape(lead),
+        body=body,
+        cta_text="Visit FarryOn",
+        cta_link=_site() + "/#glasses",
+        foot=escape(foot),
+    )
+    return subject, text, html
+
+
+def operator_status(order: Order, items: list[dict], address: dict, delivery_minor: int, note: str | None, by: str | None) -> tuple[str, str, str]:
+    """(subject, text, html) — the record of who moved the order and to what."""
+    cur = order.currency
+    where = address_line(address)
+    who = by or "an admin"
+    subject = f"Order #{order.id} marked {order.status} — {money(order.amount_cents, cur)}"
+    text = "\n".join(
+        [
+            f"Order #{order.id} is now {order.status.upper()} (by {who}).",
+            *([f"Note: {note}"] if note else []),
+            "",
+            *[f"  {_item_name(i)} — {money(_line_total(i), cur)}" for i in items],
+            f"  Delivery — {money(delivery_minor, cur) if delivery_minor else 'Free'}",
+            "",
+            f"Customer: {order.name or '-'} · {order.email or '-'} · {order.phone or '-'}",
+            f"Ship to: {where}",
+            "",
+            f"{_site()}/admin/orders",
+        ]
+    )
+    facts = [("Status", order.status), ("Changed by", who), ("Customer", order.name or "-"), ("Email", order.email or "-"), ("Phone", order.phone or "-"), ("Ship to", where)]
+    if note:
+        facts.append(("Note", note))
+    body = _items_table(items, cur, delivery_minor, order.amount_cents) + _facts(facts)
+    html = _shell(
+        title=f"Order #{order.id} · {order.status}",
+        lead=f"Marked <b style='color:{_TEXT}'>{escape(order.status)}</b> by {escape(who)}. The customer has been emailed.",
+        body=body,
+        cta_text="Open in admin panel",
+        cta_link=_site() + "/admin/orders",
+        foot="Sent by the FarryOn shop when an order's status changes in the admin panel.",
+    )
+    return subject, text, html

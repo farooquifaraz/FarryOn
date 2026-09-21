@@ -236,3 +236,12 @@ tbody tr:hover { background: rgba(0, 212, 170, 0.03); }
 
 .empty { text-align: center; color: var(--td); padding: 40px 0; font-size: 13px; }
 .loading { text-align: center; color: var(--tm); padding: 40px 0; font-size: 13px; font-family: var(--fm); }
+
+/* Order status: the select is tinted like its pill so the state reads at a glance */
+select.status-paid { border-color: rgba(244, 196, 58, 0.45); color: #f4c43a; background: rgba(244, 196, 58, 0.08); }
+select.status-shipped { border-color: rgba(57, 169, 255, 0.45); color: #6dbdff; background: rgba(57, 169, 255, 0.08); }
+select.status-delivered { border-color: rgba(0, 212, 170, 0.5); color: #7fe3c8; background: rgba(0, 212, 170, 0.1); }
+select.status-cancelled { border-color: rgba(255, 92, 122, 0.45); color: #ff8ba3; background: rgba(255, 92, 122, 0.08); }
+select.status-select option { background: #0b1526; color: #e7ecf3; }
+.pill.info { background: rgba(57, 169, 255, 0.1); color: #6dbdff; border: 1px solid rgba(57, 169, 255, 0.22); }
+.pill.info::before { background: #6dbdff; }
