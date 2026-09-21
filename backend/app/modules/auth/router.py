@@ -61,8 +61,16 @@ async def register_endpoint(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict:
+    from app.core.region import country_from_timezone
+
     user = await service.register(
-        db, settings, email=body.email, password=body.password, display_name=body.display_name
+        db,
+        settings,
+        email=body.email,
+        password=body.password,
+        display_name=body.display_name,
+        # where the phone is (the app sends its IANA zone on every call)
+        country=country_from_timezone(request.headers.get("x-timezone")),
     )
     await write_audit(
         db,

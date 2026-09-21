@@ -329,3 +329,60 @@ def test_export_users_csv() -> None:
         assert r.headers["content-type"].startswith("text/csv")
         assert "root10@example.com" in r.text
         assert r.text.splitlines()[0] == "id,email,display_name,status,roles,created_at"
+
+
+# ---- 2026-09-21: app users vs staff, the "user" role at signup, country ----------
+
+
+def test_a_new_signup_is_a_plain_user_with_a_country_and_lands_in_the_app_list() -> None:
+    with _client() as client:
+        asyncio.run(_seed_user_with_role("root9@example.com", "super_admin"))
+        admin_token = _login(client, "root9@example.com")
+
+        r = client.post(
+            "/api/v1/auth/register",
+            json={"email": "phone-user@example.com", "password": PASSWORD, "display_name": "Phone User"},
+            headers={"X-Timezone": "Asia/Kolkata"},
+        )
+        assert r.status_code == 200, r.text
+
+        app_users = client.get("/api/v1/users?kind=app", headers=_auth(admin_token)).json()["data"]
+        row = next(u for u in app_users if u["email"] == "phone-user@example.com")
+        assert row["roles"] == ["user"], "every signup is a plain user, nobody assigns it"
+        assert row["is_staff"] is False
+        assert row["country"] == "IN", "where the phone was at signup, from its timezone"
+
+        staff = client.get("/api/v1/users?kind=staff", headers=_auth(admin_token)).json()["data"]
+        assert all(u["is_staff"] for u in staff)
+        assert "root9@example.com" in {u["email"] for u in staff}
+        assert "phone-user@example.com" not in {u["email"] for u in staff}
+
+        # a phone whose zone we do not map leaves the country empty, never wrong
+        r = client.post(
+            "/api/v1/auth/register",
+            json={"email": "nowhere@example.com", "password": PASSWORD},
+            headers={"X-Timezone": "Antarctica/Troll"},
+        )
+        assert r.status_code == 200
+        everyone = client.get("/api/v1/users?search=nowhere", headers=_auth(admin_token)).json()["data"]
+        assert everyone[0]["country"] is None and everyone[0]["roles"] == ["user"]
+
+
+def test_a_suspended_user_is_refused_on_the_socket_path_too() -> None:
+    """The WebSocket resolves its owner through the same rejection the API
+    uses (core/account.token_rejection): suspended → refused."""
+    from app.core.account import token_rejection
+
+    with _client() as client:
+        asyncio.run(_seed_user_with_role("root10@example.com", "super_admin"))
+        admin_token = _login(client, "root10@example.com")
+        client.post("/api/v1/auth/register", json={"email": "s@example.com", "password": PASSWORD})
+        uid = client.get("/api/v1/users?search=s@example.com", headers=_auth(admin_token)).json()["data"][0]["id"]
+        client.patch(f"/api/v1/users/{uid}", headers=_auth(admin_token), json={"status": "suspended"})
+
+        async def check() -> str | None:
+            async with db_base.get_sessionmaker()() as db:
+                user = await db.get(User, uid)
+                return token_rejection(user, issued_at=9_999_999_999)
+
+        assert asyncio.run(check()) == "USER_SUSPENDED"

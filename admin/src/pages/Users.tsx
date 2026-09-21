@@ -10,8 +10,18 @@ interface UserRow {
   status: string;
   email_verified: boolean;
   roles: string[];
+  is_staff: boolean;
+  country: string | null;
+  timezone: string | null;
   created_at: string;
 }
+
+const COUNTRY_NAMES: Record<string, string> = {
+  AE: "UAE", IN: "India", SA: "Saudi Arabia", QA: "Qatar", OM: "Oman", BH: "Bahrain", KW: "Kuwait",
+  PK: "Pakistan", BD: "Bangladesh", GB: "UK", US: "USA", CA: "Canada", AU: "Australia", DE: "Germany",
+  FR: "France", EG: "Egypt", SG: "Singapore", MY: "Malaysia", TR: "Türkiye",
+};
+const flag = (cc: string) => cc.toUpperCase().replace(/./g, (ch) => String.fromCodePoint(127397 + ch.charCodeAt(0)));
 interface Role {
   id: number;
   name: string;
@@ -29,12 +39,15 @@ const FILTERS = ["all", "active", "invited", "suspended", "deactivated"] as cons
 const PAGE_SIZE = 20;
 
 export default function Users() {
-  const { user: me, can, startImpersonation } = useAuth();
+  const { user: me, can } = useAuth();
   const [rows, setRows] = useState<UserRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof FILTERS)[number]>("all");
+  // App users (signed up in the app, role "user") and Staff (any admin role)
+  // are two lists; nobody has to read roles to tell them apart.
+  const [kind, setKind] = useState<"app" | "staff">("app");
   const [roles, setRoles] = useState<Role[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [rolesFor, setRolesFor] = useState<UserRow | null>(null);
@@ -48,6 +61,7 @@ export default function Users() {
       const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
       if (search) params.set("search", search);
       if (statusFilter !== "all") params.set("status", statusFilter);
+      params.set("kind", kind);
       const res = await api<Envelope<UserRow[]>>(`/api/v1/users?${params}`);
       setRows(res.data);
       setTotal(res.meta?.total ?? 0);
@@ -57,7 +71,7 @@ export default function Users() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, statusFilter]);
+  }, [page, search, statusFilter, kind]);
 
   useEffect(() => {
     void load();
@@ -86,21 +100,13 @@ export default function Users() {
     }
   }
 
-  async function impersonate(row: UserRow) {
-    setError(null);
-    try {
-      await startImpersonation(row.id);
-    } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Impersonation failed.");
-    }
-  }
 
   return (
     <>
       <div className="page-head">
         <div>
           <h2>Users</h2>
-          <p>{total} accounts</p>
+          <p>{total} {kind === "app" ? "app users" : "staff accounts"}</p>
         </div>
         <Can permission="users.create">
           <button className="btn-primary" onClick={() => setInviteOpen(true)}>
@@ -109,6 +115,10 @@ export default function Users() {
         </Can>
       </div>
 
+      <div className="toolbar" style={{ marginBottom: 10 }}>
+        <button className={`chip${kind === "app" ? " on" : ""}`} onClick={() => { setKind("app"); setPage(1); }}>App users</button>
+        <button className={`chip${kind === "staff" ? " on" : ""}`} onClick={() => { setKind("staff"); setPage(1); }}>Staff</button>
+      </div>
       <div className="toolbar">
         <input
           type="search"
@@ -145,7 +155,8 @@ export default function Users() {
           <thead>
             <tr>
               <th>User</th>
-              <th>Roles</th>
+              <th>Country</th>
+              <th>{kind === "staff" ? "Roles" : "Plan role"}</th>
               <th>Status</th>
               <th>Verified</th>
               <th>Joined</th>
@@ -154,9 +165,9 @@ export default function Users() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={6} className="loading">Loading…</td></tr>
+              <tr><td colSpan={7} className="loading">Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={6} className="empty">No users match.</td></tr>
+              <tr><td colSpan={7} className="empty">No users match.</td></tr>
             ) : (
               rows.map((row) => (
                 <tr key={row.id}>
@@ -164,6 +175,7 @@ export default function Users() {
                     <b>{row.display_name ?? "—"}</b>
                     <div style={{ color: "var(--td)", fontSize: 11 }}>{row.email}</div>
                   </td>
+                  <td title={row.timezone ?? ""}>{row.country ? `${flag(row.country)} ${COUNTRY_NAMES[row.country] ?? row.country}` : <span style={{ color: "var(--td)" }}>—</span>}</td>
                   <td>{row.roles.join(", ") || "—"}</td>
                   <td><span className={`pill ${STATUS_PILL[row.status] ?? "muted"}`}>{row.status}</span></td>
                   <td>{row.email_verified ? "✓" : "—"}</td>
@@ -178,9 +190,6 @@ export default function Users() {
                           ) : (
                             <button className="btn-outline btn-sm" onClick={() => act(row, "suspend")}>Suspend</button>
                           )}
-                        </Can>
-                        <Can permission="users.impersonate">
-                          <button className="btn-outline btn-sm" onClick={() => impersonate(row)}>Login as</button>
                         </Can>
                         <Can permission="billing.manage">
                           <button className="btn-outline btn-sm" onClick={() => setLinkFor(row)}>Payment link</button>

@@ -46,3 +46,17 @@ def region_from_headers(headers: Mapping[str, str]) -> str | None:
     if country in _KNOWN:
         return country
     return None
+
+
+def country_from_timezone(tz: str | None) -> str | None:
+    """ISO country for an IANA zone, or None. The billing regions above are
+    a two-country subset; this is the fuller map the shop keeps, used to
+    stamp where a new user was when they signed up."""
+    if not tz:
+        return None
+    tz = tz.strip()
+    if tz in _ZONES:
+        return _ZONES[tz]
+    from app.web.shop import _COUNTRY_ZONES
+
+    return _COUNTRY_ZONES.get(tz)

@@ -114,6 +114,9 @@ label { display: block; font-family: var(--fm); font-size: 10.5px; text-transfor
 }
 .brand { display: flex; align-items: center; gap: 9px; padding: 2px 8px 24px; font-family: var(--fd); font-weight: 700; font-size: 15px; }
 .brand .mark { width: 24px; height: 24px; border-radius: 7px; background: linear-gradient(135deg, #0f6e56, #00d4aa); box-shadow: 0 0 16px rgba(0, 212, 170, 0.35); }
+.brand .mark-img { border-radius: 8px; box-shadow: 0 0 16px rgba(0, 212, 170, 0.35); flex: none; }
+.login-box .brand .mark-img { border-radius: 11px; }
+.brand-pill { font-size: 10px; color: var(--tm); font-family: var(--fm); text-transform: uppercase; letter-spacing: .08em; }
 .brand em { font-style: normal; color: var(--pl); }
 .nav-link {
   display: flex; align-items: center; gap: 10px;

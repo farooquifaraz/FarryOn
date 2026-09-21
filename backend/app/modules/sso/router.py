@@ -31,10 +31,10 @@ from starlette.concurrency import run_in_threadpool
 from app.config import Settings, get_settings
 from app.core.deps import get_db
 from app.core.responses import AppError, ok
+from app.logging_conf import get_logger
 from app.modules.audit.service import write_audit
 from app.modules.auth.service import issue_token_pair_for_sso
 from app.modules.sso import service
-from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
@@ -133,11 +133,14 @@ async def google_mobile(
             status_code=503,
         ) from exc
 
+    from app.core.region import country_from_timezone
+
     user = await service.link_or_create_user(
         db,
         provider="google",
         provider_user_id=claims["sub"],
         email=claims.get("email", ""),
+        country=country_from_timezone(request.headers.get("x-timezone")),
         email_verified=bool(claims.get("email_verified", False)),
         display_name=claims.get("name"),
     )

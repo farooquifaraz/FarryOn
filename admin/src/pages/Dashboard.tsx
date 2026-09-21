@@ -11,6 +11,20 @@ interface RevenueSummary {
   active_subscribers: number;
   revenue_over_time: { month: string; amount_cents: number }[];
 }
+interface ShopSummary {
+  orders_total: number;
+  by_status: Record<string, number>;
+  by_currency: { currency: string; orders: number; amount_cents: number; delivery_cents: number; units: number }[];
+  over_time: { month: string; amounts: Record<string, number> }[];
+}
+
+/** "AED 1,050", "₹11,999", "$129.00" — one pile per currency, never summed across. */
+export function money(cents: number, currency: string): string {
+  const c = currency.toUpperCase();
+  if (c === "INR") return `₹${Math.round(cents / 100).toLocaleString("en-IN")}`;
+  if (c === "USD") return `$${(cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
+  return `${c} ${(cents / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
 interface AuditRow {
   id: number;
   actor_id: number | null;
@@ -26,6 +40,7 @@ export default function Dashboard() {
   const { can, user } = useAuth();
   const [userTotal, setUserTotal] = useState<number | null>(null);
   const [revenue, setRevenue] = useState<RevenueSummary | null>(null);
+  const [shop, setShop] = useState<ShopSummary | null>(null);
   const [recent, setRecent] = useState<AuditRow[]>([]);
 
   useEffect(() => {
@@ -33,6 +48,8 @@ export default function Dashboard() {
       api<Envelope<unknown[]>>("/api/v1/users?page_size=1").then((r) => setUserTotal(r.meta?.total ?? 0)).catch(() => {});
     if (can("billing.read"))
       api<Envelope<RevenueSummary>>("/api/v1/admin/revenue/summary").then((r) => setRevenue(r.data)).catch(() => {});
+    if (can("billing.read"))
+      api<Envelope<ShopSummary>>("/api/v1/admin/orders/summary").then((r) => setShop(r.data)).catch(() => {});
     if (can("audit.read"))
       api<Envelope<AuditRow[]>>("/api/v1/audit-logs?page_size=8").then((r) => setRecent(r.data)).catch(() => {});
   }, [can]);
@@ -58,7 +75,7 @@ export default function Dashboard() {
         {revenue && (
           <>
             <div className="stat">
-              <div className="label">Total revenue</div>
+              <div className="label">Subscription revenue</div>
               <div className="value num">{usd(revenue.total_revenue_cents)}</div>
             </div>
             <div className="stat">
@@ -71,12 +88,32 @@ export default function Dashboard() {
             </div>
           </>
         )}
+        {shop && (
+          <>
+            <div className="stat">
+              <div className="label">Glasses orders</div>
+              <div className="value num">{shop.orders_total}</div>
+              <div style={{ fontSize: 11, color: "var(--td)", marginTop: 6 }}>
+                {(["paid", "shipped", "delivered", "cancelled"] as const).map((k) => `${shop.by_status[k] ?? 0} ${k}`).join(" · ")}
+              </div>
+            </div>
+            {shop.by_currency.map((c) => (
+              <div className="stat" key={c.currency}>
+                <div className="label">Glasses revenue · {c.currency}</div>
+                <div className="value num">{money(c.amount_cents, c.currency)}</div>
+                <div style={{ fontSize: 11, color: "var(--td)", marginTop: 6 }}>
+                  {c.orders} orders · {c.units} pairs{c.delivery_cents ? ` · incl. ${money(c.delivery_cents, c.currency)} delivery` : ""}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
       </div>
 
       {revenue && revenue.revenue_over_time.length > 0 && (
         <div className="card chart-wrap" style={{ marginBottom: 22 }}>
-          <h4>Revenue over time</h4>
-          <div className="sub">By month</div>
+          <h4>Subscription revenue over time</h4>
+          <div className="sub">By month · USD</div>
           <div className="chart">
             {revenue.revenue_over_time.map((m) => (
               <div

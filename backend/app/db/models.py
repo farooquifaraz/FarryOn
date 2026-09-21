@@ -73,6 +73,9 @@ class User(Base):
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     locale: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # ISO country from the phone's timezone at signup (X-Timezone) — where
+    # the person was when they joined; no permission asked, no IP lookup.
+    country: Mapped[str | None] = mapped_column(String(2), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

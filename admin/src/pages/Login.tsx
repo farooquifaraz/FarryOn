@@ -73,7 +73,7 @@ export default function Login() {
     <div className="login-page">
       <form className="login-box" onSubmit={handleSubmit}>
         <div className="brand">
-          <div className="mark" />
+          <img className="mark-img" src="/farry-icon.png" alt="" width={40} height={40} />
           <span>
             Farry<em>On</em>
           </span>

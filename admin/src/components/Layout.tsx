@@ -7,7 +7,7 @@ const NAV = [
   { to: "/admin/usage", label: "Usage" },
   { to: "/admin/roles", label: "Roles" },
   { to: "/admin/billing", label: "Subscriptions & Revenue" },
-  { to: "/admin/orders", label: "Orders" },
+  { to: "/admin/orders", label: "Glasses orders" },
   { to: "/admin/audit", label: "Audit log" },
 ];
 
@@ -30,7 +30,7 @@ export default function Layout() {
       <div className="shell">
         <aside className="sidebar">
           <div className="brand">
-            <div className="mark" />
+            <img className="mark-img" src="/farry-icon.png" alt="" width={28} height={28} />
             <span>
               Farry<em>On</em> Admin
             </span>

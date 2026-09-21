@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiRequestError, type Envelope } from "../lib/api";
 import { Can } from "../lib/auth";
 import Pager from "../components/Pager";
+import { money } from "./Dashboard";
 
 interface OrderItem {
   slug: string;
@@ -95,6 +96,7 @@ export default function Orders() {
           <p>Glasses bought on the website. Stripe collected the address and phone.</p>
         </div>
       </div>
+      <RevenueStrip />
       <StockCard />
       <div className="toolbar">
         {FILTERS.map((f) => (
@@ -136,7 +138,7 @@ export default function Orders() {
                       <div key={k}>{i.qty} × {i.name}{i.colour ? ` (${i.colour})` : ""}</div>
                     ))}
                   </td>
-                  <td className="num">{row.currency === "USD" ? `$${(row.amount_cents / 100).toFixed(2)}` : row.currency === "INR" ? `₹${Math.round(row.amount_cents / 100).toLocaleString("en-IN")}` : `${row.currency} ${(row.amount_cents / 100).toFixed(0)}`}</td>
+                  <td className="num">{money(row.amount_cents, row.currency)}</td>
                   <td>
                     <Can permission="billing.manage">
                       <select value={row.status} onChange={(e) => void setStatus(row, e.target.value)}>
@@ -243,5 +245,65 @@ function StockCard() {
         </tbody>
       </table>
     </div>
+  );
+}
+
+
+interface ShopSummary {
+  orders_total: number;
+  by_status: Record<string, number>;
+  by_currency: { currency: string; orders: number; amount_cents: number; delivery_cents: number; units: number }[];
+  over_time: { month: string; amounts: Record<string, number> }[];
+}
+
+/** Glasses money at the top of the Orders page: one pile per currency,
+ *  orders by status, and the last months. */
+function RevenueStrip() {
+  const [s, setS] = useState<ShopSummary | null>(null);
+  useEffect(() => {
+    api<Envelope<ShopSummary>>("/api/v1/admin/orders/summary").then((r) => setS(r.data)).catch(() => {});
+  }, []);
+  if (!s) return null;
+  return (
+    <>
+      <div className="stats">
+        <div className="stat">
+          <div className="label">Orders</div>
+          <div className="value num">{s.orders_total}</div>
+          <div style={{ fontSize: 11, color: "var(--td)", marginTop: 6 }}>
+            {(["paid", "shipped", "delivered", "cancelled"] as const).map((k) => `${s.by_status[k] ?? 0} ${k}`).join(" · ")}
+          </div>
+        </div>
+        {s.by_currency.length === 0 ? (
+          <div className="stat"><div className="label">Revenue</div><div className="value num">—</div></div>
+        ) : (
+          s.by_currency.map((c) => (
+            <div className="stat" key={c.currency}>
+              <div className="label">Revenue · {c.currency}</div>
+              <div className="value num">{money(c.amount_cents, c.currency)}</div>
+              <div style={{ fontSize: 11, color: "var(--td)", marginTop: 6 }}>
+                {c.orders} orders · {c.units} pairs{c.delivery_cents ? ` · incl. ${money(c.delivery_cents, c.currency)} delivery` : ""}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+      {s.over_time.length > 0 && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="sub">By month</div>
+          <table>
+            <thead><tr><th>Month</th>{s.by_currency.map((c) => <th key={c.currency} className="num">{c.currency}</th>)}</tr></thead>
+            <tbody>
+              {s.over_time.map((m) => (
+                <tr key={m.month}>
+                  <td className="num">{m.month}</td>
+                  {s.by_currency.map((c) => <td key={c.currency} className="num">{m.amounts[c.currency] ? money(m.amounts[c.currency], c.currency) : "—"}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   );
 }

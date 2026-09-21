@@ -25,6 +25,9 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+STAFF_ROLES = ("super_admin", "admin", "manager")
+
+
 def _list_item(user: User, roles: list[str]) -> dict:
     return {
         "id": user.id,
@@ -33,6 +36,10 @@ def _list_item(user: User, roles: list[str]) -> dict:
         "status": user.status,
         "email_verified": user.email_verified_at is not None,
         "roles": roles,
+        # staff = anyone with an admin-module role; everyone else is an app user
+        "is_staff": any(r in STAFF_ROLES for r in roles),
+        "country": user.country,
+        "timezone": user.timezone,
         "created_at": user.created_at.isoformat(),
     }
 
@@ -52,15 +59,19 @@ async def list_users_endpoint(
     search: str | None = None,
     status: str | None = None,
     role: str | None = None,
+    kind: str | None = None,
     page: int = 1,
     page_size: int = service.PAGE_SIZE_DEFAULT,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    """``kind=app`` — people who signed up in the app (no admin role);
+    ``kind=staff`` — anyone with one. Omitted: everyone."""
     items, total = await service.list_users(
         db,
         search=search,
         status_filter=status,
         role_filter=role,
+        kind=kind,
         page=page,
         page_size=page_size,
     )

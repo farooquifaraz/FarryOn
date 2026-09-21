@@ -177,3 +177,9 @@ def send_order_confirmation(*, to_email: str, subject: str, text: str, html: str
     """The customer's order confirmation (modules/shop) — same daemon-thread
     sender as the auth mails, log-only without SMTP."""
     _send(to_email=to_email, subject=subject, text=text, html=html, kind="order")
+
+
+def send_operator_mail(*, to_email: str, subject: str, text: str, html: str) -> None:
+    """A themed mail to the operator (a new glasses order) — same sender,
+    log-only without SMTP."""
+    _send(to_email=to_email, subject=subject, text=text, html=html, kind="operator")

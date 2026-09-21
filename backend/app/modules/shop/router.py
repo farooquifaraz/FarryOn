@@ -131,3 +131,9 @@ async def set_stock_endpoint(
         user_agent=request.headers.get("user-agent"),
     )
     return ok(out)
+
+
+@admin_router.get("/orders/summary", dependencies=[Depends(require_permission("billing.read"))])
+async def orders_summary_endpoint(db: AsyncSession = Depends(get_db)) -> dict:
+    """Glasses revenue per currency, orders by status, months."""
+    return ok(await service.revenue_summary(db))

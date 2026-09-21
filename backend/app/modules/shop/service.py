@@ -17,6 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.responses import AppError
 from app.db.models import Order, ShopStock
 from app.logging_conf import get_logger
+from app.modules.shop.mail import (  # noqa: F401 - re-exported for callers
+    address_line,
+    money,
+)
 from app.modules.shop.schemas import CartItem, Customer
 from app.web.products import (
     COLOURS,
@@ -190,20 +194,6 @@ def _address_of(c: Customer) -> dict:
     }
 
 
-def money(minor: int, currency: str) -> str:
-    """"AED 450", "₹11,999", "$129.00" — the way each currency is read."""
-    c = (currency or "AED").upper()
-    if c == "INR":
-        return f"₹{round(minor / 100):,}"
-    if c == "USD":
-        return f"${minor / 100:,.2f}"
-    return f"{c} {minor / 100:,.0f}" if minor % 100 == 0 else f"{c} {minor / 100:,.2f}"
-
-
-def address_line(a: dict) -> str:
-    parts = [a.get("line1"), a.get("line2"), f"PO Box {a['po_box']}" if a.get("po_box") else None,
-             a.get("city"), a.get("state"), a.get("postal_code"), a.get("country")]
-    return ", ".join(str(p) for p in parts if p)
 
 
 async def create_checkout(
@@ -371,82 +361,30 @@ async def record_order(db: AsyncSession, session_obj: dict) -> dict:
 
 
 def _confirm(order: Order, items: list[dict], address: dict) -> None:
-    """The customer's confirmation: what they bought, what they paid, where
-    it is going, and that a shipping message follows. Log-only without SMTP."""
-    from html import escape
-
+    """The customer's confirmation, in the FarryOn look (modules/shop/mail).
+    Log-only without SMTP."""
     from app.modules.auth.notifications import send_order_confirmation
+    from app.modules.shop import mail
 
     if not order.email:
         return
-    total = money(order.amount_cents, order.currency)
-    rows = [
-        f"{i.get('qty')} × {i.get('name')}" + (f" ({i['colour']})" if i.get("colour") else "")
-        + f" — {money(int(i.get('price') or i.get('price_aed') or 0) * int(i.get('qty') or 0) * 100, order.currency)}"
-        for i in items
-    ]
-    rows.append(f"Delivery to {address.get('country') or '-'} — {money(_delivery_of(order) * 100, order.currency)}")
-    text = "\n".join(
-        [
-            f"Hi {order.name or ''}".rstrip() + ",",
-            "",
-            f"Thank you for your FarryOn order #{order.id}.",
-            "",
-            *["  " + r for r in rows],
-            "",
-            f"Paid: {total}",
-            f"Delivering to: {address_line(address)}",
-            "",
-            "We will message you on this email and your phone when the glasses ship.",
-            "Questions? Reply to this email or reach us on WhatsApp.",
-            "",
-            "— FarryOn",
-        ]
-    )
-    html = (
-        '<div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;padding:28px;'
-        'background:#0e242b;border-radius:12px;color:#e8f4f2">'
-        f'<h2 style="margin:0 0 12px;color:#7fe3c8">Order #{order.id} received</h2>'
-        f'<p style="color:#cfe6e0">Hi {escape(order.name or "")}, thank you for your FarryOn order.</p>'
-        '<ul style="color:#cfe6e0;line-height:1.7">' + "".join(f"<li>{escape(r)}</li>" for r in rows) + "</ul>"
-        f'<p style="color:#cfe6e0"><b>Paid: {escape(total)}</b><br>Delivering to: {escape(address_line(address))}</p>'
-        '<p style="color:#9fb8b3">We will message you on this email and your phone when the glasses ship. '
-        "Questions? Reply to this email or reach us on WhatsApp.</p></div>"
-    )
-    send_order_confirmation(to_email=order.email, subject=f"Your FarryOn order #{order.id}", text=text, html=html)
+    subject, text, html = mail.customer_confirmation(order, items, address, _delivery_of(order) * 100)
+    send_order_confirmation(to_email=order.email, subject=subject, text=text, html=html)
 
 
 def _notify(order: Order, items: list[dict], address: dict) -> None:
     """Mail the operator: a new order needs a parcel. Log-only without SMTP."""
     from app.config import get_settings
-    from app.modules.auth.notifications import send_outage_alert
+    from app.modules.auth.notifications import send_operator_mail
+    from app.modules.shop import mail
 
     s = get_settings()
     to = s.shop_notify_email or s.first_super_admin_email
     if not to:
         logger.info("shop.order_notify_skipped", reason="no address configured")
         return
-    lines = [
-        f"Order #{order.id} — {money(order.amount_cents, order.currency)}",
-        "",
-        "Items:",
-        *[
-            f"  {i.get('qty')} × {i.get('name')}" + (f" ({i['colour']})" if i.get("colour") else "")
-            + f" — {money(int(i.get('price') or i.get('price_aed') or 0) * int(i.get('qty') or 0) * 100, order.currency)}"
-            for i in items
-        ],
-        f"  Delivery: {money(_delivery_of(order) * 100, order.currency)}",
-        "",
-        f"Customer: {order.name or '-'} · {order.email or '-'} · {order.phone or '-'}",
-        "Ship to: "
-        + ", ".join(
-            str(address.get(k)) for k in ("line1", "line2", "city", "state", "postal_code", "country") if address.get(k)
-        ),
-        "",
-        f"Stripe session: {order.session_id}",
-        "Mark it shipped in the admin panel → Orders.",
-    ]
-    send_outage_alert(to_email=to, subject=f"FarryOn order #{order.id}", text="\n".join(lines))
+    subject, text, html = mail.operator_alert(order, items, address, _delivery_of(order) * 100)
+    send_operator_mail(to_email=to, subject=subject, text=text, html=html)
 
 
 async def list_orders(
@@ -541,4 +479,35 @@ async def order_summary(db: AsyncSession, session_id: str) -> dict | None:
         "items": _expand(meta.get("items")),
         "address": address,
         "address_line": address_line(address),
+    }
+
+
+async def revenue_summary(db: AsyncSession) -> dict:
+    """Glasses money for the dashboard: totals per currency (never summed
+    across currencies — AED, INR and USD are three piles), counts by
+    status, and the last twelve months per currency."""
+    rows = (await db.execute(select(Order))).scalars().all()
+    by_cur: dict[str, dict] = {}
+    by_status: dict[str, int] = {}
+    by_month: dict[str, dict[str, int]] = {}
+    for o in rows:
+        by_status[o.status] = by_status.get(o.status, 0) + 1
+        if o.status == "cancelled":
+            continue
+        c = by_cur.setdefault(o.currency, {"currency": o.currency, "orders": 0, "amount_cents": 0, "delivery_cents": 0, "units": 0})
+        c["orders"] += 1
+        c["amount_cents"] += o.amount_cents
+        c["delivery_cents"] += _delivery_of(o) * 100
+        try:
+            c["units"] += sum(int(i.get("qty") or 0) for i in json.loads(o.items_json or "[]"))
+        except ValueError:
+            pass
+        m = o.created_at.strftime("%Y-%m") if o.created_at else "?"
+        by_month.setdefault(m, {})
+        by_month[m][o.currency] = by_month[m].get(o.currency, 0) + o.amount_cents
+    return {
+        "orders_total": len(rows),
+        "by_status": by_status,
+        "by_currency": sorted(by_cur.values(), key=lambda x: x["currency"]),
+        "over_time": [{"month": m, "amounts": a} for m, a in sorted(by_month.items())][-12:],
     }

@@ -32,6 +32,7 @@ async def link_or_create_user(
     email: str,
     email_verified: bool,
     display_name: str | None,
+    country: str | None = None,
 ) -> User:
     if provider not in SUPPORTED_PROVIDERS:
         raise AppError("NOT_FOUND", f"Unknown SSO provider: {provider}", status_code=404)
@@ -119,6 +120,7 @@ async def link_or_create_user(
         display_name=display_name,
         status="active",
         email_verified_at=now,
+        country=country,
     )
     db.add(user)
     await db.flush()
@@ -128,5 +130,8 @@ async def link_or_create_user(
         )
     )
     await db.flush()
+    from app.modules.auth.service import give_default_role
+
+    await give_default_role(db, user)
     logger.info("sso.created_user", user_id=user.id, provider=provider)
     return user

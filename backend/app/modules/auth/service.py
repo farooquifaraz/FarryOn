@@ -44,10 +44,10 @@ from app.db.models import (
     RefreshToken,
     User,
 )
+from app.logging_conf import get_logger
 from app.modules.auth import notifications
 from app.modules.auth.schemas import TokenPairResponse, TwoFactorRequiredResponse
 from app.modules.twofa import service as twofa_service
-from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
@@ -135,7 +135,13 @@ async def issue_token_pair_for_sso(
 
 
 async def register(
-    db: AsyncSession, settings: Settings, *, email: str, password: str, display_name: str | None
+    db: AsyncSession,
+    settings: Settings,
+    *,
+    email: str,
+    password: str,
+    display_name: str | None,
+    country: str | None = None,
 ) -> User:
     email_norm = email.lower()
     # Ask for LIVE rows only, which is the actual question — is this address
@@ -177,13 +183,33 @@ async def register(
         password_hash=hash_password(password),
         display_name=display_name,
         status="active",
+        country=country,
     )
     db.add(user)
     await db.flush()
+    await give_default_role(db, user)
 
     await _issue_email_verification(db, settings, user)
-    logger.info("auth.register", user_id=user.id)
+    logger.info("auth.register", user_id=user.id, country=country)
     return user
+
+
+async def give_default_role(db: AsyncSession, user: User) -> None:
+    """Every new account is a plain "user" from the start (Faraz,
+    2026-09-21) — no admin has to assign it, and the admin panel can tell
+    an app user from staff by their roles. Missing role table (a bare test
+    DB) is not an error: the seed creates it on the next deploy."""
+    from app.db.models import Role, UserRole
+
+    role = (await db.execute(select(Role).where(Role.name == "user"))).scalar_one_or_none()
+    if role is None:
+        return
+    has = (
+        await db.execute(select(UserRole).where(UserRole.user_id == user.id, UserRole.role_id == role.id))
+    ).scalar_one_or_none()
+    if has is None:
+        db.add(UserRole(user_id=user.id, role_id=role.id))
+        await db.flush()
 
 
 async def _issue_email_verification(

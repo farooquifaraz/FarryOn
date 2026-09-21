@@ -26,11 +26,11 @@ from app.config import Settings
 from app.core.responses import AppError
 from app.core.security import hash_opaque_token, new_opaque_token
 from app.db.models import PasswordResetToken, RefreshToken, Role, User, UserRole
+from app.logging_conf import get_logger
 from app.modules.auth import notifications
 from app.modules.auth.service import PASSWORD_RESET_TTL
 from app.modules.rbac import service as rbac_service
 from app.modules.users.schemas import BulkActionResultItem
-from app.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
@@ -73,6 +73,7 @@ async def list_users(
     search: str | None,
     status_filter: str | None,
     role_filter: str | None,
+    kind: str | None = None,
     page: int,
     page_size: int,
 ) -> tuple[list[tuple[User, list[str]]], int]:
@@ -93,6 +94,16 @@ async def list_users(
     if status_filter:
         query = query.where(User.status == status_filter)
         count_query = count_query.where(User.status == status_filter)
+    if kind in ("app", "staff"):
+        # staff = holds any admin-module role (level > the plain user's 10)
+        staff_ids = (
+            select(UserRole.user_id)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(Role.name.in_(("super_admin", "admin", "manager")))
+        )
+        cond = User.id.in_(staff_ids) if kind == "staff" else User.id.not_in(staff_ids)
+        query = query.where(cond)
+        count_query = count_query.where(cond)
 
     if role_filter:
         query = query.join(UserRole, UserRole.user_id == User.id).join(
@@ -340,7 +351,8 @@ async def usage_report(
     """
     from datetime import datetime, timezone
 
-    from sqlalchemy import func, or_, select as sa_select
+    from sqlalchemy import func, or_
+    from sqlalchemy import select as sa_select
 
     from app.config import get_settings
     from app.db.models import DailyUsage

@@ -355,7 +355,7 @@ async def test_a_paid_session_becomes_one_order_and_mails_operator_and_customer(
     monkeypatch.setattr(s, "shop_notify_email", "ops@example.com")
     mails: list[dict] = []
     confirmations: list[dict] = []
-    monkeypatch.setattr("app.modules.auth.notifications.send_outage_alert", lambda **kw: mails.append(kw))
+    monkeypatch.setattr("app.modules.auth.notifications.send_operator_mail", lambda **kw: mails.append(kw))
     monkeypatch.setattr("app.modules.auth.notifications.send_order_confirmation", lambda **kw: confirmations.append(kw))
     first = await service.record_order(db_session, _session())
     assert first["duplicate"] is False and first["status"] == "paid"
@@ -371,7 +371,8 @@ async def test_a_paid_session_becomes_one_order_and_mails_operator_and_customer(
     assert confirmations and confirmations[-1]["to_email"] == "buyer@example.com"
     assert f"order #{first['id']}" in confirmations[-1]["subject"]
     assert "AED 1,050" in confirmations[-1]["text"] and "PO Box 12345" in confirmations[-1]["text"]
-    assert "Delivery to AE — AED 0" in confirmations[-1]["text"]
+    assert "Delivery — Free" in confirmations[-1]["text"]
+    assert "farry-icon.png" in confirmations[-1]["html"], "the customer mail is themed"
 
     again = await service.record_order(db_session, _session())
     assert again["duplicate"] is True and again["id"] == first["id"]
@@ -494,3 +495,59 @@ def test_the_page_carries_the_delivery_form_and_the_order_modal() -> None:
         assert f'name="{name}"' in page, name
     assert "data-order-modal" in page and "function orderShow" in page and "/api/v1/shop/orders/" in page
     assert "Continue to delivery" in page and "Pay securely" in page
+
+
+# ---- the themed mails and the revenue summary --------------------------------
+
+
+def test_both_order_mails_are_themed_and_carry_the_facts() -> None:
+    from app.db.models import Order
+    from app.modules.shop import mail
+
+    order = Order(
+        id=42, session_id="cs_x", email="buyer@example.com", name="Ayesha K", phone="+971 50 000 0000",
+        amount_cents=105000 + 7500, currency="AED", status="paid",
+    )
+    items = [{"name": "GS5 MAX", "colour": "Red", "qty": 1, "price": 450}, {"name": "L801 Business", "colour": None, "qty": 2, "price": 300}]
+    address = {"line1": "12 Marina Walk", "city": "Dubai", "state": "Dubai", "country": "AE", "po_box": "12345"}
+
+    subject, text, html = mail.customer_confirmation(order, items, address, 7500)
+    assert subject == "Your FarryOn order #42 is confirmed"
+    assert "Hi Ayesha," in text and "1 × GS5 MAX (Red) — AED 450" in text and "Delivery — AED 75" in text
+    assert "Total paid — AED 1,125" in text and "PO Box 12345" in text
+    assert "farry-icon.png" in html and "#00D4AA" in html and "Order confirmed" in html
+    assert "12 Marina Walk" in html and "AED 1,125" in html and "<script" not in html
+
+    subject, text, html = mail.operator_alert(order, items, address, 7500)
+    assert subject == "New order #42 — AED 1,125 — AE"
+    assert "buyer@example.com" in text and "+971 50 000 0000" in text and "/admin/orders" in text
+    assert "Open in admin panel" in html and "Stripe session" in html and "cs_x" in html
+
+    # what the customer typed is escaped in the HTML
+    order.name = "<b>x</b>"
+    _, _, html = mail.customer_confirmation(order, items, address, 0)
+    assert "<b>x</b>" not in html and "&lt;b&gt;x&lt;/b&gt;" in html
+
+
+def test_the_orders_summary_keeps_currencies_apart() -> None:
+    client = TestClient(create_app())
+    admin_token = _setup_admin(client, "summary-admin@example.com")
+
+    async def seed() -> None:
+        async with db_base.get_sessionmaker()() as db:
+            await service.record_order(db, _session("cs_sum_1"))
+            inr = _session("cs_sum_2")
+            inr["currency"] = "inr"
+            inr["amount_total"] = 1349900
+            inr["metadata"]["items"] = json.dumps([{"s": "gs5", "c": "Black", "q": 1, "p": 11999}])
+            await service.record_order(db, inr)
+
+    asyncio.run(seed())
+    r = client.get("/api/v1/admin/orders/summary", headers=_auth(admin_token))
+    assert r.status_code == 200, r.text
+    d = r.json()["data"]
+    assert d["orders_total"] == 2 and d["by_status"] == {"paid": 2}
+    by = {c["currency"]: c for c in d["by_currency"]}
+    assert by["AED"]["amount_cents"] == 105000 and by["AED"]["units"] == 3
+    assert by["INR"]["amount_cents"] == 1349900 and by["INR"]["delivery_cents"] == 150000 and by["INR"]["units"] == 1
+    assert len(d["over_time"]) == 1 and set(d["over_time"][0]["amounts"]) == {"AED", "INR"}
