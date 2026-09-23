@@ -1,9 +1,11 @@
 package com.farryon.farryon.glasses
 
 import android.app.Application
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothHeadset
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
@@ -93,8 +95,16 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
 
         /** AI-photo budget from the BLE command to the capture notify (0x02).
          *  Capture itself is ~2.2-2.4 s (firmware-fixed); busy glasses ignore
-         *  the command silently, which this watchdog turns into a report. */
-        private const val PHOTO_CAPTURE_TIMEOUT_MS = 8_000L
+         *  the command silently, which this watchdog turns into a report.
+         *
+         *  Was 8 s. With the call-mode mic up the glasses answer 0xff and
+         *  shoot late, and 8 s reported capture_timeout for photos that were
+         *  then taken (live 2026-09-22 15:10 and 2026-09-23 16:27: "the photo
+         *  was taken and Farry said it wasn't"). The backend no longer holds
+         *  the conversation for this — it says "on its way" at 12 s and keeps
+         *  the question open (backend/app/agent/late_photo.py) — so waiting
+         *  longer before declaring failure costs the user nothing. */
+        private const val PHOTO_CAPTURE_TIMEOUT_MS = 15_000L
 
         /** Rolling per-chunk budget while the JPEG thumbnail streams over BLE
          *  (~1013-byte chunks, ~10 kB/s measured). Re-armed on every chunk, so
@@ -286,6 +296,38 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     private fun cancelPhotoWatchdog() {
         photoWatchdog?.let(main::removeCallbacks)
         photoWatchdog = null
+    }
+
+    /** Whether the BLE link is currently asked to run at high priority. */
+    @Volatile private var fastLink = false
+
+    /**
+     * Ask Android for the short BLE connection interval while a photo is on
+     * its way, and give it back afterwards. The vendor SDK never asks
+     * (decompiled 2026-09-23: no requestConnectionPriority anywhere), and the
+     * thumbnail request/response goes chunk by chunk with no sleep between
+     * requests in this SDK — so the link's pace is the transfer's pace. The
+     * cost is radio power for a few seconds, which is why it is released as
+     * soon as the photo ends, whatever the outcome. Best effort: any failure
+     * here leaves the transfer exactly as it was.
+     */
+    @SuppressLint("MissingPermission")
+    private fun setFastLink(fast: Boolean) {
+        // Asking again is cheap and survives a reconnect (a new GATT starts
+        // balanced); releasing what was never asked is skipped.
+        if (!fast && !fastLink) return
+        try {
+            val mac = connectedMac ?: DeviceManager.getInstance().deviceAddress ?: return
+            val gatt = BleBaseControl.getInstance(app).getGatt(mac) ?: return
+            val ok = gatt.requestConnectionPriority(
+                if (fast) BluetoothGatt.CONNECTION_PRIORITY_HIGH
+                else BluetoothGatt.CONNECTION_PRIORITY_BALANCED
+            )
+            fastLink = fast && ok
+            Log.i(TAG, "photo link priority ${if (fast) "HIGH" else "BALANCED"} ok=$ok")
+        } catch (e: Throwable) {
+            Log.i(TAG, "photo link priority: $e")
+        }
     }
 
     // -- Video recording state (all new; nothing above is reused) -------------
@@ -2142,7 +2184,12 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         )
         // Posted: callers clear photoRequestId before or after this call. A
         // "busy" report for a duplicate leaves the first request in flight.
-        main.post { if (photoRequestId == null) resumeCallMicIfPaused() }
+        main.post {
+            if (photoRequestId == null && !thumbnailFetchActive) {
+                setFastLink(false)
+                resumeCallMicIfPaused()
+            }
+        }
     }
 
     override fun takeAiPhoto(requestId: String) {
@@ -2170,6 +2217,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         photoRequestId = requestId
         photoStartMs = SystemClock.elapsedRealtime()
         pauseCallMicForPhoto()
+        // Before the shot, not at the transfer: the interval change takes a
+        // few connection events to settle, and the capture's ~2 s covers it.
+        setFastLink(true)
         // Busy glasses (e.g. stuck in WiFi/transfer mode) silently ignore the
         // command — without this the Lab shows "capturing…" forever
         // (hit on-device 2026-07-06 23:38).
@@ -2735,6 +2785,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         cancelPhotoWatchdog()
         thumbnailFetchActive = true
         pauseCallMicForPhoto() // a touch-gesture photo never went through takeAiPhoto
+        setFastLink(true) // ditto; a no-op when takeAiPhoto already asked
         // Device-initiated captures (touch gesture) have no app-side request.
         val requestId = photoRequestId ?: DEVICE_INITIATED_REQUEST_ID
         val gen = ++thumbnailFetchGen
@@ -2773,7 +2824,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 emitCaptureFailed(requestId, "empty_image", "thumbnail fetch: 0 bytes")
             }
             photoRequestId = null
-            main.post { resumeCallMicIfPaused() }
+            main.post {
+                setFastLink(false)
+                resumeCallMicIfPaused()
+            }
         }
     }
 

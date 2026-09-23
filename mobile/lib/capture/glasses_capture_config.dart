@@ -7,10 +7,17 @@
 /// failure backstops, and each outer layer outlasts the inner one so the layer
 /// that actually knows the failure reason reports it first:
 ///
-///   native capture watchdog (8 s, command to notify)
+///   native capture watchdog (15 s, command to notify)
 ///   + rolling BLE transfer watchdog (3 s/chunk, stall detection)
 ///     < backend `GLASSES_FRAME_WAIT_SECONDS` (32 s)
 ///     < [captureTimeout] (Dart, 38 s)
+///     < backend `GLASSES_LATE_PHOTO_SECONDS` (40 s)
+///
+/// The backend's vision tools no longer sit out that ladder: after
+/// `GLASSES_PHOTO_PATIENCE_SECONDS` (12 s) the model says the photo is on its
+/// way, and the photo answers the question whenever it lands inside the late
+/// window (backend/app/agent/late_photo.py). A photo is therefore never
+/// wasted by arriving slowly — only by not arriving.
 ///
 /// The Dart backstop sits ABOVE the backend budget on purpose: a slow but real
 /// transfer must resolve as a delivered photo, never be pre-empted by a Dart

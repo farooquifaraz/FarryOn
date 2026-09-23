@@ -23,6 +23,10 @@ import 'package:flutter_test/flutter_test.dart';
 /// checked from the Dart side, and so raising one without the other fails here.
 const Duration kBackendGlassesFrameWait = Duration(seconds: 32);
 
+/// Mirrors `Settings.glasses_late_photo_seconds`: how long after the question
+/// a photo still answers it.
+const Duration kBackendLatePhotoWindow = Duration(seconds: 40);
+
 void main() {
   const config = GlassesCaptureConfig();
 
@@ -49,6 +53,15 @@ void main() {
       greaterThan(measured),
       reason: 'the backend gives up first — it must not give up before the '
           'glasses are done',
+    );
+  });
+
+  test('a photo the app still delivers lands inside the late window', () {
+    expect(
+      kBackendLatePhotoWindow,
+      greaterThan(config.captureTimeout),
+      reason: 'the app gives up first; a photo it does deliver must still '
+          'answer the question it was taken for',
     );
   });
 
