@@ -191,6 +191,9 @@ class FakeGlassesBridge implements GlassesBridgeApi {
   Future<Map<String, Object?>> micRoute() async => const {};
   @override
   Future<void> startWifiSync() async => syncCalls++;
+  int forcedSyncCalls = 0;
+  @override
+  Future<void> forceWifiSync() async => forcedSyncCalls++;
   @override
   Future<void> stopWifiSync() async {}
   @override
@@ -1329,6 +1332,21 @@ void main() {
     await tick();
     expect(glasses.syncCalls, 0);
     expect(ctl.state.lastError, contains("Can't sync while"));
+  });
+
+  test('Sync now asks the album, not the media count', () async {
+    // Device 2026-09-23: three button photos on the glasses, and the count
+    // said img=0 — a count-gated sync never looked.
+    final glasses = FakeGlassesBridge();
+    final ctl = newGlassesController(glasses);
+    await ctl.connect();
+    await tick();
+    glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+    await tick();
+    await ctl.syncGlassesNow();
+    await tick();
+    expect(glasses.forcedSyncCalls, 1);
+    expect(glasses.syncCalls, 0, reason: 'the gated path is for auto-sync only');
   });
 
   test('a synced photo is shown but never sent to the model', () async {

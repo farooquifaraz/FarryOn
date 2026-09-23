@@ -66,6 +66,8 @@ class _FakeBridge implements GlassesBridgeApi {
   @override
   Future<void> startWifiSync() async {}
   @override
+  Future<void> forceWifiSync() async {}
+  @override
   Future<void> stopWifiSync() async {}
   @override
   Future<void> refreshMediaCounts() async {}

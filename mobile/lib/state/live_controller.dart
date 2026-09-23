@@ -1352,7 +1352,9 @@ class LiveController {
       _autoSyncing = false;
     });
     try {
-      await bridge.startWifiSync();
+      // The user asked: let the glasses' album answer, not the media count,
+      // which has reported 0 over photos that were there (device 2026-09-23).
+      await bridge.forceWifiSync();
     } catch (e) {
       _log.warn('syncGlassesNow failed: $e');
       _autoSyncing = false;

@@ -497,7 +497,16 @@ class GlassesChannels private constructor(
                 }
                 "stopAudioTest" -> { sdk.stopAudioTest(); result.success(null) }
                 "micRoute" -> result.success(sdk.micRoute())
-                "startWifiSync" -> { sdk.startWifiSync(); result.success(null) }
+                "startWifiSync" -> {
+                    // force: the user tapped Sync now — the album answers,
+                    // not the media-count probe (see forceWifiSync).
+                    if (call.argument<Boolean>("force") == true) {
+                        sdk.forceWifiSync()
+                    } else {
+                        sdk.startWifiSync()
+                    }
+                    result.success(null)
+                }
                 "refreshMediaCounts" -> {
                     sdk.refreshMediaCounts(); result.success(null)
                 }

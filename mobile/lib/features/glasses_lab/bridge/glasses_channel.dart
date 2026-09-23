@@ -74,6 +74,11 @@ abstract class GlassesBridgeApi {
 
   Future<void> startWifiSync();
 
+  /// The user's own Sync now: transfer what the glasses' album holds without
+  /// asking the media count first — the count has said 0 over photos that
+  /// were there (device 2026-09-23). Progress arrives as `syncProgress`.
+  Future<void> forceWifiSync();
+
   Future<void> stopWifiSync();
 
   /// Ask what media is waiting on the glasses — answers as a `mediaCount`
@@ -271,6 +276,10 @@ class GlassesChannel implements GlassesBridgeApi {
 
   @override
   Future<void> startWifiSync() => _method.invokeMethod<void>('startWifiSync');
+
+  @override
+  Future<void> forceWifiSync() =>
+      _method.invokeMethod<void>('startWifiSync', {'force': true});
 
   @override
   Future<void> stopWifiSync() => _method.invokeMethod<void>('stopWifiSync');

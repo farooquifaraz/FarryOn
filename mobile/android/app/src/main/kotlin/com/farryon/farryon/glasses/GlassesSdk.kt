@@ -112,9 +112,9 @@ interface GlassesSdk {
      *  event). Cheap: one BLE command, no WiFi, no transfer. */
     fun refreshMediaCounts()
 
-    /** Debug/diagnostic: transfer whatever is on the glasses WITHOUT the
-     *  media-count gate, so the album itself answers rather than a probe that
-     *  may under-report. Reached only from the debuggable-build test hook. */
+    /** Transfer whatever is on the glasses WITHOUT the media-count gate, so
+     *  the album itself answers rather than a probe that may under-report.
+     *  The user's own Sync now (and the debuggable-build test hook). */
     fun forceWifiSync()
 
     /** Debug/diagnostic: the raw video start/stop toggle, bypassing all

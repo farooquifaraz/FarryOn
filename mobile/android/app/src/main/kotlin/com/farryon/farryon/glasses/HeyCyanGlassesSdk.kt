@@ -2856,8 +2856,21 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      * surfaces in the event console (onDeletePlate = ok, onDeletePlateError = code). */
     @Volatile private var deleteAckRegistered = false
 
-    override fun startWifiSync() {
-        Log.i(TAG, "startWifiSync")
+    override fun startWifiSync() = beginWifiSync(gated = true)
+
+    /**
+     * The user's own Sync now: transfer whatever the glasses' album holds,
+     * without asking the media count first. Device test 2026-09-23: three
+     * photos taken with the right-hand button (shutter sound and light) while
+     * the app was closed, and on connect the count said img=0 — so the gated
+     * sync never looked. A tap is a deliberate request; the album answers it,
+     * not a probe. The automatic sync stays gated: an unasked P2P session on
+     * every connect is what wedged a glasses pair on 2026-07-30.
+     */
+    override fun forceWifiSync() = beginWifiSync(gated = false)
+
+    private fun beginWifiSync(gated: Boolean) {
+        Log.i(TAG, "startWifiSync gated=$gated")
         // One transfer at a time. With the stall recovery a run can now last
         // ~2 minutes (60 s stall + reset + 60 s retry), which is longer than
         // the Dart side's in-flight guard — so a second caller really can
@@ -2913,6 +2926,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             GlassesControl.getInstance(app)?.importAlbum()
             armSyncWatchdog()
         }
+        if (!gated) {
+            proceed()
+            return
+        }
         LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x04)) { _, rsp ->
             if (rsp != null && rsp.dataType == 4) {
                 emitMediaCount(rsp.imageCount, rsp.videoCount, rsp.recordCount)
@@ -2966,12 +2983,6 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }, MEDIA_COUNT_PROBE_TIMEOUT_MS)
     }
 
-    /**
-     * Debug: run the WiFi transfer without the media-count gate, so the
-     * glasses' actual album decides what comes over. The normal path skips a
-     * zero count on purpose (a 0-file import still spins up P2P and then
-     * errors), but that same skip hides a count that under-reports.
-     */
     /**
      * Debug: send the raw start/stop toggle with NO app-side state, and log
      * the reply plus the media counts a few seconds later. This is the only
@@ -3032,19 +3043,6 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                     "workType=${rsp?.glassWorkType}"
             )
         }
-    }
-
-    override fun forceWifiSync() {
-        Log.i(TAG, "forceWifiSync (debug)")
-        if (videoRequestId != null || syncActive) {
-            Log.i(TAG, "forceWifiSync: busy — recording=$videoRequestId sync=$syncActive")
-            return
-        }
-        syncActive = true
-        syncRecoveryTried = false
-        armSyncDeadline()
-        armSyncWatchdog()
-        GlassesControl.getInstance(app)?.importAlbum()
     }
 
     /** Typed count for the Media sync card (also visible in the console). */
