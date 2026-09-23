@@ -20,6 +20,7 @@ Responsibilities (per ``PROTOCOL.md`` sections 3-6):
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import time
@@ -32,6 +33,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketState
 
+from app.agent.late_photo import LatePhoto
 from app.agent.orchestrator import Orchestrator
 from app.agent.tool_engine import ToolEngine
 from app.ai.base import AIGateway
@@ -200,6 +202,9 @@ class Session:
 
         self._send_lock = asyncio.Lock()
         self._closing = False
+        #: Last ``state`` sent to the client (listening / speaking / idle...).
+        #: A late-photo answer waits for the model to stop speaking first.
+        self._last_state: str | None = None
         #: Manual activity detection for this session (glasses mic): the
         #: client's speech_start/speech_end drive the model's turn window.
         #: Decided from hello, applied to the gateway before connect.
@@ -574,6 +579,16 @@ class Session:
                     location=location if isinstance(location, dict) else None,
                     frame_wait_seconds=frame_wait_seconds,
                 )
+                self._orchestrator.photo_patience = self._photo_patience_for_kind(
+                    device_kind
+                )
+                self._orchestrator.late_photo = LatePhoto(
+                    window_seconds=float(
+                        getattr(self._settings, "glasses_late_photo_seconds", 40.0)
+                    ),
+                    answer=self._answer_late_photo,
+                    fail=self._fail_late_photo,
+                )
 
             # Start these only after the gateway is connected.  The read pump
             # can now keep accepting microphone frames while the sender waits
@@ -871,6 +886,98 @@ class Session:
         if isinstance(device_kind, str) and "glasses" in device_kind:
             return self._settings.glasses_frame_wait_seconds
         return self._settings.frame_wait_seconds
+
+    def _photo_patience_for_kind(self, device_kind: str | None) -> float | None:
+        """Photo patience for a camera ``kind``: glasses only (see
+        ``Settings.glasses_photo_patience_seconds``). A phone frame is there
+        in a second or not at all, so it keeps the plain wait-then-fail."""
+        if isinstance(device_kind, str) and "glasses" in device_kind:
+            return float(
+                getattr(self._settings, "glasses_photo_patience_seconds", 12.0)
+            )
+        return None
+
+    # -- The glasses photo that came after its question -------------------
+
+    #: Longest a late answer waits for the model to finish speaking — its
+    #: "on its way" sentence, usually — before speaking over nothing.
+    _LATE_PHOTO_QUIET_WAIT_S = 10.0
+
+    async def _answer_late_photo(self, jpeg: bytes, question: str | None) -> None:
+        """The photo a vision tool gave up on has landed: put it in front of
+        the model, describe it, and have the model answer with it."""
+        if self._gateway is None or self._closing:
+            return
+        # In context as conversation content, so a follow-up ("what colour
+        # is it?") is about this photo.
+        await self._forward_frame(jpeg, reason="late_photo")
+        from app.services.vision import run_detection
+
+        description: str | None = None
+        try:
+            detection = await asyncio.wait_for(
+                run_detection(
+                    "auto",
+                    settings=self._settings,
+                    image_data=base64.b64encode(jpeg).decode("utf-8"),
+                    question=question
+                    or "What is this? Describe briefly and specifically what "
+                    "the image shows. If there is readable text, include it.",
+                ),
+                timeout=15.0,
+            )
+            description = (detection.get("result") or {}).get("answer")
+        except Exception as exc:  # noqa: BLE001 - the model still has the photo
+            logger.warning("late_photo.describe_failed", error=repr(exc))
+        if description:
+            note = (
+                "(System note: the photo from the glasses for the user's last "
+                "question has just arrived. It shows: "
+                f"«{description.strip()[:1500]}». Answer the user's question "
+                "from this now, briefly and in their language — you may say "
+                "it took a moment. Do not mention this note.)"
+            )
+        else:
+            note = (
+                "(System note: the photo from the glasses for the user's last "
+                "question has just arrived and is attached. Answer the user's "
+                "question from it now, briefly and in their language. Do not "
+                "mention this note.)"
+            )
+        await self._say_when_quiet(note)
+        logger.info(
+            "late_photo.answered",
+            session_id=self.session_id,
+            described=bool(description),
+        )
+
+    async def _fail_late_photo(self, reason: str | None) -> None:
+        """The photo a vision tool gave up on is not coming: say so, once."""
+        from app.tools.capture_feedback import capture_failure_message
+
+        note = (
+            "(System note: the glasses photo for the user's earlier question "
+            "never arrived. " + capture_failure_message(reason) + " Say this "
+            "briefly, in the user's language. Do not mention this note.)"
+        )
+        await self._say_when_quiet(note)
+        logger.info(
+            "late_photo.gave_up", session_id=self.session_id, reason=reason
+        )
+
+    async def _say_when_quiet(self, note: str) -> None:
+        """Send a note that makes the model speak, once it is not mid-sentence
+        (a note sent over its own speech would cut it off)."""
+        deadline = time.monotonic() + self._LATE_PHOTO_QUIET_WAIT_S
+        while (
+            self._last_state == "speaking"
+            and time.monotonic() < deadline
+            and not self._closing
+        ):
+            await asyncio.sleep(0.2)
+        if self._gateway is None or self._closing:
+            return
+        await self._gateway.send_text(note)
 
     # -- Read pump (client -> gateway) ---------------------------------------
 
@@ -1211,6 +1318,9 @@ class Session:
             if self._orchestrator is not None and isinstance(new_kind, str):
                 budget = self._frame_wait_for_kind(new_kind)
                 self._orchestrator.set_frame_wait_seconds(budget)
+                self._orchestrator.photo_patience = self._photo_patience_for_kind(
+                    new_kind
+                )
                 # Keep the gateway's frame-freshness window in step with the
                 # new camera (glasses connected mid-session → widen it).
                 if self._gateway is not None:
@@ -1341,7 +1451,7 @@ class Session:
         # "I can't see anything" over a delivered picture (device-proven
         # 2026-08-27). Streaming-gate frames stay realtime-only; doubling every
         # continuous frame into the transcript would balloon the context.
-        if reason in ("awaited", "typed_turn", "on_turn"):
+        if reason in ("awaited", "typed_turn", "on_turn", "late_photo"):
             # getattr: a gateway without the hook (a provider that predates
             # it, or a test double) keeps its old realtime-only behavior.
             attach = getattr(self._gateway, "attach_image", None)
@@ -1934,6 +2044,7 @@ class Session:
         was listening, thinking, and speaking — no client needed.
         """
         logger.info("state", session_id=self.session_id, value=value)
+        self._last_state = value
         await self._send_json({"type": "state", "value": value})
 
     async def _report_provider_failure(self, exc: BaseException) -> None:
@@ -2460,6 +2571,9 @@ class Session:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
+        if self._orchestrator is not None and self._orchestrator.late_photo:
+            with contextlib.suppress(Exception):
+                await self._orchestrator.late_photo.close()
 
         if self._gateway is not None:
             with contextlib.suppress(Exception):

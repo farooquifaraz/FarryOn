@@ -101,6 +101,14 @@ class ToolContext:
     #: 2026-07-11: identify_image rejected a perfectly delivered glasses photo
     #: because it re-checked the stale snapshot after the wait).
     latest_frame: Callable[[], tuple[bytes | None, float | None]] | None = None
+    #: Seconds a vision tool waits for a GLASSES photo before answering "it is
+    #: on its way" and handing the question to ``defer_photo``. ``None`` on a
+    #: phone camera (wait the session default, then fail as before).
+    photo_patience: float | None = None
+    #: Register the question whose photo is still coming, so it is answered
+    #: when the photo lands (``app.agent.late_photo.LatePhoto.defer``).
+    #: Signature: ``defer_photo(question) -> None``. ``None`` when unsupported.
+    defer_photo: Callable[[str | None], None] | None = None
     #: The user's caps-bearing plan name, resolved lazily by the quota check and
     #: cached here for the life of this context so several metered tool calls in
     #: one turn don't each re-query the subscription. ``None`` until first
@@ -128,6 +136,9 @@ class Tool(abc.ABC):
     description: str
     #: JSON-Schema object describing the arguments.
     parameters: dict[str, Any]
+    #: Per-tool ceiling overriding the engine's default timeout, for the few
+    #: tools whose honest worst case is longer (``None`` = engine default).
+    timeout_seconds: float | None = None
 
     def spec(self) -> dict[str, Any]:
         """Return the ``{name, description, parameters}`` schema dict."""

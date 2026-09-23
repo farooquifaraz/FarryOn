@@ -18,7 +18,11 @@ from app.logging_conf import get_logger
 from app.services.vision import run_detection
 from app.tools.base import Tool, ToolContext
 from app.tools.quota import check_quota
-from app.tools.capture_feedback import capture_failure_message
+from app.tools.capture_feedback import (
+    capture_failure_message,
+    defer_if_still_coming,
+    wait_for_photo,
+)
 
 logger = get_logger(__name__)
 
@@ -38,6 +42,11 @@ class IdentifyImageTool(Tool):
     """Identify the landmark or product currently in the camera view."""
 
     name = "identify_image"
+    #: The photo wait is capped at the patience (12 s) and the describe call
+    #: runs after it, so the engine's 20 s default cut off photos that had
+    #: already arrived (live 2026-09-22 12:09: photo at 16 s, tool killed at
+    #: 20 s mid-describe). A ceiling for a slow vision API, not a wait.
+    timeout_seconds = 30.0
     description = (
         "Capture the current camera view and look at it. Call this for 'what "
         "is this', 'what's in front of me', 'click a pic', 'scan/identify/"
@@ -96,17 +105,25 @@ class IdentifyImageTool(Tool):
         # default (Settings.frame_wait_seconds / glasses_frame_wait_seconds);
         # a device-reported capture failure wakes the wait early with the
         # precise reason.
-        if not _fresh() and ctx.wait_for_frame is not None:
-            await ctx.wait_for_frame()
+        #
+        # On the glasses the wait is capped at the photo patience instead: past
+        # it the user is told the photo is on its way and the question is
+        # answered when it lands (app/agent/late_photo.py), rather than
+        # holding the conversation in silence for the whole transfer.
+        question = (kwargs.get("question") or "").strip() or None
+        if not _fresh():
+            await wait_for_photo(ctx)
 
         if not _fresh():
             reason = ctx.capture_error() if ctx.capture_error is not None else None
+            deferred = defer_if_still_coming(ctx, reason, question)
+            if deferred is not None:
+                return deferred
             return {"ok": False, "error": capture_failure_message(reason)}
 
         kind = kwargs.get("kind") or "auto"
         if kind not in ("landmark", "product", "auto"):
             kind = "auto"
-        question = (kwargs.get("question") or "").strip() or None
 
         frame, _ = _current()
         assert frame is not None  # guaranteed by the _fresh() gate above

@@ -727,6 +727,24 @@ class Settings(BaseSettings):
         description="Max seconds a vision tool waits for a fresh camera frame "
         "when the active camera is smart glasses (photo-trigger capture).",
     )
+    # How long a vision tool holds the conversation for a glasses photo before
+    # the model says "it's on its way" and the question is answered when the
+    # photo lands (app/agent/late_photo.py). Measured on the live server
+    # 2026-09-22: 5.7 s on a good run, 16 s on a slow one — twenty seconds of
+    # silence is the part users cannot bear, not the photo being slow.
+    glasses_photo_patience_seconds: float = Field(
+        default=12.0,
+        description="Seconds a vision tool waits for a glasses photo before "
+        "the model says it is on its way.",
+    )
+    # How long after the question a late photo still answers it. Above the
+    # app's own capture backstop (38 s, glasses_capture_config.dart), so the
+    # app gives up first and a photo the app still delivers is never dropped.
+    glasses_late_photo_seconds: float = Field(
+        default=40.0,
+        description="Window after a deferred vision question in which a "
+        "glasses photo still answers it.",
+    )
     # After a one-shot photo arrives, capture_photo pauses this long before
     # returning its result — which is what triggers the model to generate its
     # "describe what you see" reply. The pause lets the model's realtime-video

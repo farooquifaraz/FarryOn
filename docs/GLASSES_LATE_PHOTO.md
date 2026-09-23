@@ -1,5 +1,35 @@
 # The photo that arrives after the question
 
+> **Status 2026-09-23: built.** Faraz reported it in plain words — "the photo
+> is taken, and Farry says the glasses didn't take it". The live log had both
+> causes: a native 8 s capture watchdog firing before a late shot (22 Sept
+> 15:10, 23 Sept 16:27), and the tool engine's 20 s default killing a tool
+> whose photo had landed at 16 s (22 Sept 12:09). What shipped:
+>
+> - Vision tools on the glasses wait `glasses_photo_patience_seconds` (12 s),
+>   then the model says in one sentence that the photo is on its way — no
+>   guess, it has not seen it.
+> - The question is kept open for `glasses_late_photo_seconds` (40 s, above the
+>   app's 38 s backstop). When the photo lands it is put in the model's context,
+>   described, and the model answers; if it never lands the model says so once.
+>   `app/agent/late_photo.py`, wired in `app/ws/session.py`.
+> - A `capture_timeout` from the app no longer ends the question (the photo can
+>   still come); every other failure code does.
+> - Native capture watchdog 8 s → 15 s; the BLE link asks for high connection
+>   priority for the length of a photo and gives it back after.
+> - `identify_image` / `capture_photo` carry a 30 s tool ceiling so a photo in
+>   hand is never cut off mid-describe.
+>
+> Rejected, with reasons: the Live API's own NON_BLOCKING functions (on this
+> native-audio model the model answers from a guess before the result —
+> googleapis/python-genai#1894, closed "not planned"); speculative capture
+> while the user is still talking, the way Meta does it (in call-mode the photo
+> pauses the headset mic, so it would cut the user's question off, and every
+> false trigger files a photo in the chat and gallery).
+>
+> The sections below are the analysis from 2026-08-21, kept as written except
+> where marked.
+
 ## What happens today
 
 A glasses photo can arrive long after the model gave up waiting for it. When it
@@ -37,6 +67,14 @@ is what dominates:
 
 Nineteen chunks at ~830 ms. The radio is not the bottleneck: each chunk's data
 lands in about 12 ms and then roughly 800 ms passes with nothing happening.
+
+> **Correction 2026-09-23:** not true of the SDK in use now
+> (`LIB_GLASSES_SDK-release-20260709_8.aar`). Decompiled: the thumbnail chunk
+> request (`LargeDataHandler.syncPictureThumbnails`) is queued with the
+> two-argument `BleDataBean`, whose sleep is 0. Each chunk is requested only
+> after the previous one arrives, so the pace is the link's — which is why the
+> link now asks for high connection priority during a photo. The paragraph
+> below describes `release_3`.
 
 That pause is inside the vendor SDK. `BleConsumer` calls
 `Thread.sleep(BleDataBean.getSleepTime())` before every queued BLE write, and

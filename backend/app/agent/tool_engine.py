@@ -155,9 +155,10 @@ class ToolEngine:
             )
 
         tool = self.tools[name]
+        timeout = getattr(tool, "timeout_seconds", None) or self.timeout_seconds
         try:
             result = await asyncio.wait_for(
-                tool.run(ctx, **cleaned), timeout=self.timeout_seconds
+                tool.run(ctx, **cleaned), timeout=timeout
             )
             duration_ms = int((time.monotonic() - start) * 1000)
             logger.info("tool.ok", tool=name, duration_ms=duration_ms)
@@ -170,7 +171,7 @@ class ToolEngine:
             return ToolResult(
                 name=name,
                 ok=False,
-                error=f"tool timed out after {self.timeout_seconds}s",
+                error=f"tool timed out after {timeout}s",
                 duration_ms=duration_ms,
             )
         except Exception as exc:  # noqa: BLE001 - capture any tool failure

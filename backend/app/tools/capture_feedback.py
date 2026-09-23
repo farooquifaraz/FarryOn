@@ -12,6 +12,11 @@ this table in sync with ``GlassesCaptureFailure`` on the Dart side.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.tools.base import ToolContext
+
 #: Wire reason code -> user-facing guidance the model should relay.
 CAPTURE_FAILURE_MESSAGES: dict[str, str] = {
     "not_connected": (
@@ -63,3 +68,43 @@ def capture_failure_message(reason: str | None) -> str:
     if reason is None:
         return DEFAULT_CAPTURE_FAILURE_MESSAGE
     return CAPTURE_FAILURE_MESSAGES.get(reason, DEFAULT_CAPTURE_FAILURE_MESSAGE)
+
+
+#: What the model says when the glasses photo has not arrived within the
+#: patience window but may still come. It must not guess: the answer comes in
+#: a separate note once the photo lands (app/agent/late_photo.py).
+PHOTO_ON_ITS_WAY = (
+    "The glasses are still sending the photo — their Bluetooth link is slow "
+    "right now. Tell the user in ONE short sentence, in their language, that "
+    "the photo is on its way and you will tell them as soon as it arrives. Do "
+    "NOT guess or describe anything yet; you have not seen it."
+)
+
+
+async def wait_for_photo(ctx: ToolContext) -> bool:
+    """Wait for the capture this tool call triggered: the session default,
+    or on the glasses only up to the photo patience."""
+    if ctx.wait_for_frame is None:
+        return False
+    if ctx.photo_patience is None:
+        return await ctx.wait_for_frame()
+    return await ctx.wait_for_frame(timeout=ctx.photo_patience)
+
+
+def defer_if_still_coming(
+    ctx: ToolContext, reason: str | None, question: str | None
+) -> dict[str, Any] | None:
+    """Hand an unanswered glasses question to the late-photo tracker.
+
+    Returns the tool result to give the model, or ``None`` when the question
+    cannot be deferred (phone camera, or a failure the photo cannot survive —
+    then the caller reports the failure as before).
+    """
+    from app.agent.late_photo import STILL_COMING
+
+    if ctx.defer_photo is None or ctx.photo_patience is None:
+        return None
+    if reason is not None and reason not in STILL_COMING:
+        return None
+    ctx.defer_photo(question)
+    return {"captured": False, "pending": True, "_instruction": PHOTO_ON_ITS_WAY}

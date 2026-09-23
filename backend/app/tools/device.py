@@ -17,7 +17,11 @@ from app.config import get_settings
 from app.logging_conf import get_logger
 from app.services.vision import run_detection
 from app.tools.base import Tool, ToolContext
-from app.tools.capture_feedback import capture_failure_message
+from app.tools.capture_feedback import (
+    capture_failure_message,
+    defer_if_still_coming,
+    wait_for_photo,
+)
 from app.tools.quota import check_quota
 
 logger = get_logger(__name__)
@@ -65,6 +69,11 @@ class CapturePhotoTool(Tool):
     """
 
     name = "capture_photo"
+    #: The photo wait is capped at the patience (12 s) and the describe call
+    #: runs after it, so the engine's 20 s default cut off photos that had
+    #: already arrived (live 2026-09-22 12:09: photo at 16 s, tool killed at
+    #: 20 s mid-describe). A ceiling for a slow vision API, not a wait.
+    timeout_seconds = 30.0
     description = (
         "Take a photo from the camera the user is looking through (their smart "
         "glasses) and look at it. Call this whenever the user asks about "
@@ -100,11 +109,14 @@ class CapturePhotoTool(Tool):
         # for the resulting frame so it's in context before the model speaks.
         # The timeout is the session's device-appropriate default; a
         # device-reported capture failure wakes the wait early with a reason.
-        got = False
-        if ctx.wait_for_frame is not None:
-            got = await ctx.wait_for_frame()
+        # On the glasses the wait stops at the photo patience; a photo still
+        # on its way is answered when it lands (app/agent/late_photo.py).
+        got = await wait_for_photo(ctx)
         if not got:
             reason = ctx.capture_error() if ctx.capture_error is not None else None
+            deferred = defer_if_still_coming(ctx, reason, None)
+            if deferred is not None:
+                return deferred
             return {"captured": False, "_instruction": capture_failure_message(reason)}
 
         # Describe the ACTUAL captured frame via the server-side vision path

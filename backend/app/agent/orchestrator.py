@@ -25,6 +25,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.agent.late_photo import LatePhoto
 from app.agent.tool_engine import ToolEngine, ToolResult
 from app.ai.base import AIGateway
 from app.ai.events import ToolCallEvent
@@ -139,6 +140,14 @@ class Orchestrator:
         #: (``capture_failed`` control message). Cleared when a frame arrives,
         #: so it always describes the CURRENT capture attempt, not a past one.
         self.last_capture_error: str | None = None
+        #: How long a vision tool waits for a glasses photo before telling the
+        #: user it is on its way (``Settings.glasses_photo_patience_seconds``).
+        #: ``None`` on a streaming phone camera, whose frame is there in a
+        #: second or not at all. Set by the session from the camera kind.
+        self.photo_patience: float | None = None
+        #: The question a vision tool stopped waiting for; answered when its
+        #: photo lands (see ``app.agent.late_photo``). Set by the session.
+        self.late_photo: LatePhoto | None = None
         #: In-flight device contact-resolution requests, keyed by requestId.
         #: ``request_contact_resolution`` creates a Future here and the session
         #: resolves it when the matching ``resolve_contact_result`` arrives.
@@ -292,9 +301,17 @@ class Orchestrator:
         incoming INPUT_VIDEO frame)."""
         # A real frame supersedes any earlier failure report.
         self.last_capture_error = None
-        for future in self._frame_waiters:
-            if not future.done():
-                future.set_result(True)
+        waiting = [f for f in self._frame_waiters if not f.done()]
+        for future in waiting:
+            future.set_result(True)
+        late = self.late_photo
+        if late is not None:
+            if waiting:
+                # A newer question is waiting for this very photo; the older
+                # one it replaced is answered by the same reply.
+                late.cancel()
+            elif self.last_frame is not None:
+                late.on_frame(self.last_frame)
 
     def notify_capture_failed(self, reason: str) -> None:
         """Record a device-reported capture failure and wake waiting tools.
@@ -306,9 +323,11 @@ class Orchestrator:
         timeout.
         """
         self.last_capture_error = reason
-        for future in self._frame_waiters:
-            if not future.done():
-                future.set_result(False)
+        waiting = [f for f in self._frame_waiters if not f.done()]
+        for future in waiting:
+            future.set_result(False)
+        if not waiting and self.late_photo is not None:
+            self.late_photo.on_failure(reason)
 
     def recall_resolved(self, name: str) -> str | None:
         """Contact id from a recent device resolution of ``name``, if any."""
@@ -463,6 +482,10 @@ class Orchestrator:
                 wait_for_frame=self.wait_for_frame,
                 capture_error=lambda: self.last_capture_error,
                 latest_frame=lambda: (self.last_frame, self.last_frame_at),
+                photo_patience=self.photo_patience,
+                defer_photo=(
+                    self.late_photo.defer if self.late_photo is not None else None
+                ),
             )
             result = await self._engine.dispatch(event.name, event.args, ctx)
             try:
