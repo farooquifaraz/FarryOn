@@ -430,6 +430,9 @@ def test_admins_list_orders_and_move_them_along(monkeypatch) -> None:
     assert order["status"] == "paid" and order["items"][0]["name"] == "GS5 MAX"
 
     sent: list[dict] = []
+    # The operator's address is config; set it here so the test does not lean
+    # on whatever the developer's .env holds (CI has none, and failed).
+    monkeypatch.setattr(get_settings(), "shop_notify_email", "ops@example.com")
     monkeypatch.setattr("app.modules.auth.notifications.send_order_confirmation", lambda **kw: sent.append({"who": "customer", **kw}))
     monkeypatch.setattr("app.modules.auth.notifications.send_operator_mail", lambda **kw: sent.append({"who": "operator", **kw}))
     r = client.patch(f"/api/v1/admin/orders/{order['id']}", headers=_auth(admin_token), json={"status": "shipped", "note": "Aramex 123"})
