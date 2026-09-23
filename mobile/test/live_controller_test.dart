@@ -133,6 +133,7 @@ class FakeGlassesBridge implements GlassesBridgeApi {
   final videoCalls = <String>[];
   int syncCalls = 0;
   int countCalls = 0;
+  int batteryCalls = 0;
 
   /// Just the start/stop calls. The recording LENGTH is pushed separately (at
   /// startup and again on connect, both deliberate), and those pushes would
@@ -162,7 +163,7 @@ class FakeGlassesBridge implements GlassesBridgeApi {
   @override
   Future<void> setRetentionDays(int days) async {}
   @override
-  Future<void> requestBattery() async {}
+  Future<void> requestBattery() async => batteryCalls++;
   @override
   Future<void> requestDeviceInfo() async {}
   @override
@@ -1241,6 +1242,60 @@ void main() {
 
     expect(glasses.syncCalls, 0,
         reason: 'manual means the app never takes the device by itself');
+  });
+
+  group('glasses battery', () {
+    setUp(() {
+      LiveController.glassesBatteryDelay = Duration.zero;
+      LiveController.glassesBatteryEvery = const Duration(milliseconds: 40);
+    });
+    tearDown(() {
+      LiveController.glassesBatteryDelay = const Duration(seconds: 2);
+      LiveController.glassesBatteryEvery = const Duration(minutes: 5);
+    });
+
+    test('glasses linked before the session are asked for their battery',
+        () async {
+      final glasses = FakeGlassesBridge()
+        ..info = const {'lastMac': 'AA:BB:CC', 'connectedMac': 'AA:BB:CC'};
+      final ctl = newGlassesController(glasses);
+      await ctl.connect();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(glasses.batteryCalls, greaterThanOrEqualTo(1));
+      await ctl.dispose();
+    });
+
+    test('a connect asks, the ask repeats, a drop stops it', () async {
+      final glasses = FakeGlassesBridge();
+      final ctl = newGlassesController(glasses);
+      await ctl.connect();
+      await tick();
+      expect(glasses.batteryCalls, 0, reason: 'nothing connected yet');
+
+      glasses.emit('connectionState', {'state': 'connected', 'mac': 'AA:BB:CC'});
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(glasses.batteryCalls, 1);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(glasses.batteryCalls, greaterThanOrEqualTo(2));
+
+      glasses.emit('connectionState', {'state': 'disconnected'});
+      await tick();
+      final atDrop = glasses.batteryCalls;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(glasses.batteryCalls, atDrop);
+      await ctl.dispose();
+    });
+
+    test('the answer reaches the chip', () async {
+      final glasses = FakeGlassesBridge();
+      final ctl = newGlassesController(glasses);
+      await ctl.connect();
+      await tick();
+      glasses.emit('battery', {'pct': 64, 'charging': false});
+      await tick();
+      expect(ctl.state.glassesBattery, 64);
+      await ctl.dispose();
+    });
   });
 
   test('the pending count reaches the UI', () async {

@@ -436,9 +436,52 @@ class LiveController {
     if (bridge == null) return;
     try {
       _wearSub ??= bridge.events().listen(_onGlassesEvent);
+      // Glasses the phone linked before we subscribed never send us their
+      // 'connected' event — nor the battery answer that followed it — so the
+      // chip sat without a percentage. Ask now.
+      final live = (await bridge.bridgeInfo())['connectedMac'] as String?;
+      if (live != null && live.isNotEmpty) _pollGlassesBattery();
     } catch (e) {
       _log.warn('wear-to-talk setup failed: $e');
     }
+  }
+
+  /// Wait after a connect before asking for the battery: the request the
+  /// native side sends at connect time is sometimes dropped by the glasses.
+  @visibleForTesting
+  static Duration glassesBatteryDelay = const Duration(seconds: 2);
+
+  /// How often a connected pair is asked again, so the % follows the drain.
+  @visibleForTesting
+  static Duration glassesBatteryEvery = const Duration(minutes: 5);
+
+  Timer? _batteryTimer;
+
+  /// Ask the glasses for their battery (after [delay]), then every
+  /// [glassesBatteryEvery] while they stay connected. The answer arrives as a
+  /// `battery` event. Restarting it on a repeat connect is harmless.
+  void _pollGlassesBattery({Duration delay = Duration.zero}) {
+    final bridge = _glassesBridge;
+    if (bridge == null) return;
+    Future<void> ask() async {
+      try {
+        await bridge.requestBattery();
+      } catch (e) {
+        _log.debug('battery request failed: $e');
+      }
+    }
+
+    _batteryTimer?.cancel();
+    _batteryTimer = Timer(delay, () {
+      unawaited(ask());
+      _batteryTimer =
+          Timer.periodic(glassesBatteryEvery, (_) => unawaited(ask()));
+    });
+  }
+
+  void _stopGlassesBatteryPoll() {
+    _batteryTimer?.cancel();
+    _batteryTimer = null;
   }
 
   /// Voice tool `connect_glasses`: connect the saved glasses (asked-and-
@@ -1067,6 +1110,11 @@ class LiveController {
           unawaited(
             connected ? _voiceAudioMode.exit() : _voiceAudioMode.enter(),
           );
+        }
+        if (connected) {
+          _pollGlassesBattery(delay: glassesBatteryDelay);
+        } else {
+          _stopGlassesBatteryPoll();
         }
         // Push the storage-retention policy to the freshly-connected glasses so
         // synced photos are pruned per the user's Settings choice.
@@ -3316,6 +3364,7 @@ class LiveController {
     _pendingMediaTimer?.cancel();
     _micWatchdog?.cancel();
     _focusRelease?.cancel();
+    _stopGlassesBatteryPoll();
     await _audioFocus.release();
     await _audioSub?.cancel();
     await _videoSub?.cancel();
