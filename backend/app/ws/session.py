@@ -1167,7 +1167,12 @@ class Session:
                 self._orchestrator is not None
                 and self._orchestrator.is_awaiting_frame()
             )
-            if awaited or self._should_forward_frame(now):
+            # A photo a deferred question is waiting for is forwarded by the
+            # late-photo answer itself; letting the gate send it too put the
+            # same image in the model's context twice (device 2026-09-23).
+            late_photo = getattr(self._orchestrator, "late_photo", None)
+            late = late_photo is not None and late_photo.pending
+            if awaited or (not late and self._should_forward_frame(now)):
                 await self._forward_frame(
                     payload,
                     ts_ms=ts,

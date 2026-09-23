@@ -419,3 +419,41 @@ async def test_the_patience_follows_the_camera() -> None:
     assert session._orchestrator.photo_patience == session._settings.glasses_photo_patience_seconds
     await session._dispatch_control({"type": "device_update", "videoKind": "phone"})
     assert session._orchestrator.photo_patience is None
+
+
+async def test_the_late_photo_reaches_the_model_once() -> None:
+    # Device 2026-09-23: the frame gate forwarded the late photo AND the late
+    # answer forwarded it again — the same image twice in the context.
+    from app.config import Settings
+    from app.ws.frames import FrameTag, encode_frame
+    from app.ws.session import Session
+
+    gateway = _Gateway()
+    session = Session(
+        object(),
+        gateway_factory=lambda *a: None,
+        engine=ToolEngine.from_tools([]),
+        settings=Settings(vision_frame_mode="on_turn", vision_frame_heartbeat_s=0.0),
+    )
+    session._gateway = gateway
+    session._orchestrator = _orchestrator()
+    answered: list[bytes] = []
+
+    async def answer(jpeg: bytes, question: str | None) -> None:
+        answered.append(jpeg)
+
+    async def fail(reason: str | None) -> None:
+        return None
+
+    session._orchestrator.late_photo = LatePhoto(
+        window_seconds=30.0, answer=answer, fail=fail
+    )
+    session._orchestrator.late_photo.defer(None)
+    await session._handle_binary(encode_frame(FrameTag.INPUT_VIDEO, b"jpeg", 0))
+    await _settle()
+    assert gateway.video == [], "the gate leaves it to the late answer"
+    assert answered == [b"jpeg"]
+    # With nothing deferred the gate behaves exactly as before.
+    await session._handle_binary(encode_frame(FrameTag.INPUT_VIDEO, b"next", 0))
+    assert gateway.video == [b"next"]
+    await session._orchestrator.late_photo.close()
