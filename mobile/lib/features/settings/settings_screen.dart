@@ -1084,13 +1084,15 @@ class _VideoRecordingPage extends ConsumerWidget {
             title: 'Sync now',
             subtitle: pending == null || pending.isEmpty
                 ? (glassesConnected
-                    ? 'Nothing waiting on the glasses'
+                    ? 'Glasses report nothing new — tap to check anyway'
                     : 'Connect the glasses first')
                 : '${pending.label} waiting',
             showDivider: false,
-            onTap: (pending != null && !pending.isEmpty && glassesConnected)
-                ? () => notifier.syncGlassesNow()
-                : null,
+            // Open whenever the glasses are connected: the glasses' own count
+            // has said 0 over three photos that were on them (device
+            // 2026-09-23), and a button that obeys the count can never
+            // reach them. Sync now asks the album itself.
+            onTap: glassesConnected ? () => notifier.syncGlassesNow() : null,
           ),
         ]),
         const SizedBox(height: 12),
