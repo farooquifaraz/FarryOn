@@ -520,3 +520,23 @@ async def test_read_email_by_query_defaults_to_a_month(db_session, monkeypatch) 
     result = await email_read.ReadEmailTool().run(ctx, account="primary", query="Faraz")
     assert result["ok"] is False and "no matching" in result["message"].lower()
     assert seen == {"query": "Faraz", "range_": "month", "full_body": True, "limit": 1}
+
+
+async def test_the_counts_line_keeps_listed_and_unread_apart(db_session, monkeypatch) -> None:
+    # Device E1.7: five listed, Farry said "5 unread"; the inbox had 142.
+    mails = [
+        {"from": "A <a@x.com>", "subject": str(i), "date": None, "snippet": "",
+         "unread": i < 2}
+        for i in range(5)
+    ]
+    monkeypatch.setattr(email_read, "_fetch_emails", lambda *a, **k: _page(mails, total=7))
+    ctx = ToolContext(session=db_session, email={"address": "me@gmail.com", "appPassword": "pw"})
+    result = await ReadEmailsTool().run(ctx, account="primary")
+    assert result["counts"] == (
+        "5 listed (2 of them unread), 7 matched in all; the whole inbox has 56 unread"
+    )
+
+
+async def test_the_counts_line_without_an_inbox_count() -> None:
+    line = email_read.counts_line([{"unread": True}], 1, None)
+    assert line == "1 listed (1 of them unread)"

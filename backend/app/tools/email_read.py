@@ -731,6 +731,20 @@ def remember_threads(ctx: ToolContext, items: list[dict[str, Any]], address: str
             cache.pop(next(iter(cache)))
 
 
+def counts_line(items: list[dict[str, Any]], total: int,
+                inbox_unread: int | None) -> str:
+    """The counts in words the model can say as they are. Device E1.7: five
+    mails were listed and Farry said "5 unread" while the inbox had 142 —
+    the listed number read as the unread one."""
+    unread = sum(1 for e in items if e.get("unread"))
+    line = f"{len(items)} listed ({unread} of them unread)"
+    if total > len(items):
+        line += f", {total} matched in all"
+    if inbox_unread is not None:
+        line += f"; the whole inbox has {inbox_unread} unread"
+    return line
+
+
 def public_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Strip private (``_``-prefixed) working keys before a result goes out."""
     return [{k: v for k, v in it.items() if not k.startswith("_")} for it in items]
@@ -871,6 +885,7 @@ class ReadEmailsTool(Tool):
                 "has_more": total > len(merged), "category": category,
                 "range": range_ or "today", "account": "all",
                 "inbox_unread": inbox_unread,
+                "counts": counts_line(merged, total, inbox_unread),
             }
             notes: list[str] = []
             if total > len(merged):
@@ -928,6 +943,7 @@ class ReadEmailsTool(Tool):
             result["inbox_total"] = inbox_total
         if inbox_unread is not None:
             result["inbox_unread"] = inbox_unread
+        result["counts"] = counts_line(items, total, inbox_unread)
         if total > len(items):
             result["_instruction"] = _more_instruction(len(items), total)
         result["emails"] = items
