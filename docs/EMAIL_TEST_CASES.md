@@ -283,3 +283,26 @@ for S4. Testing was stopped on the user's instruction before the remaining cases
 - Cross-cutting (not this branch): every model reply carried leaked affective-dialog tokens (`emotion_user ...<ctrl95>emotion_model ...<ctrl95>`) in the transcript; the model asks "which account?" on its own after both mailboxes were used in a session; Farry says "N unread" for the N listed mails; Gemini prepayment credits ran out mid-run (1011/429) until topped up.
 
 **Pass criteria PR ke liye:** not yet. Sections 1, 2, 3, 6, 8, 9 have unrun cases and E2.3 fails; section 7 has the E7.4 safety fail (mail goes to a wrong address). Section 10: 10.1 unrun, 10.4 pass, 10.5 pass with the E7.4 exception. E3.5 is known (works). Fix E7.4 + E2.3 + E7.1 + the E1.5 memory carry-over, then run the remaining cases (a webmail-sent injection mail, bad-password/network cases, voice cases) before opening the PR.
+
+## Fixes 2026-09-24 (branch `email-v2`, rebased onto main) — re-run on device
+
+The branch was brought onto main (87 commits later) as `email-v2`; the email
+rules were re-written into main's compressed system prompt (10.1k → 11.1k
+chars; tool detail stays in the tool descriptions). Then:
+
+| Fault | Fix | Re-run |
+|---|---|---|
+| **E7.4 safety** | `app/tools/email_drafts.py`: send_email / forward_email never send on the first call — they return the draft to read back (address as written, cc, subject, text). `confirmed=true` sends only a draft shown earlier, on a LATER user turn, whose words are not a refusal (no / wait / cancel / nahi / ruko / mat, with no yes). Prompt: never complete an address ("ali at gmail" → ask for the full one). | E7.4, E7.1-7.6, E6.2, E8.1-8.3, E10.5 |
+| **E7.1 / E7.2** | The confirmed call may omit body/subject/cc — the approved draft fills them; `body` no longer schema-required. Changed recipients/text = a new draft, asked again. | E7.1, E7.2 |
+| **E2.3** | inbox_summary guidance names both: "N of them unread" (range) and "the whole inbox has M unread — the answer to 'how many unread'". Prompt says the same. | E2.3 |
+| **E1.5** | A session that RESUMES the previous conversation (Gemini handle, 30 min) inherits the mailbox choice; a fresh session still asks. | E1.5 (force a reconnect after choosing), E1.4 fresh |
+| Both mailboxes | inbox_summary takes account 'all' / "both" / "dono"; per-mailbox counts, critical/important across both, a failing mailbox named with its own reason. | "dono accounts ka summary do" |
+| "N unread" wording | read_emails result carries `counts`: "5 listed (2 of them unread), 7 matched in all; the whole inbox has 142 unread". | E1.7 wording |
+
+Code review fixes on top: mark-all needs a named filter; previews put the
+guidance before the (capped) body; empty bodies are refused before a draft;
+a reply draft shows its real "Re:" subject.
+
+**Still to run on the phone before the PR:** everything marked ☐ above plus the
+re-runs in this table — including section 11 (voice) and E5.6 (injection mail
+sent from webmail).
