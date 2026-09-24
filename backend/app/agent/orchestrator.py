@@ -373,6 +373,10 @@ class Orchestrator:
         repeat guard. Called by the session owner on every user turn."""
         self.user_turn_seq += 1
         self.user_text = ""
+        # Counted here, for voice AND typed turns. It used to be bumped only
+        # on a typed turn, so with the resume guard armed a spoken "end the
+        # session" in the first 30 s after a resume would have been refused.
+        self.user_turns_heard += 1
         self._calls_since_speech.clear()
         self._tool_calls_since_speech.clear()
         self._turn_charges.clear()

@@ -483,11 +483,9 @@ class Session:
             # stale instruction the moment fresh audio arrives (suspected on
             # device 2026-08-27: end_session fired 20s into a resumed session
             # with no turn heard). Silent: turn_complete=False never speaks.
+            # (The end_session guard for the same case is set where the
+            # orchestrator is built — see _create_orchestrator.)
             if getattr(self, "_resumed_from_handle", False):
-                if self._orchestrator is not None:
-                    self._orchestrator.resume_guard_until = (
-                        time.monotonic() + _RESUME_GUARD_S
-                    )
                 note_fn = getattr(self._gateway, "send_silent_note", None)
                 if note_fn is not None:
                     await note_fn(
@@ -553,49 +551,7 @@ class Session:
             # `_handle_binary` — a None orchestrator alone would not have
             # stopped a frame reaching the gateway.
             if self._mode != "translate":
-                web_search = (self._hello or {}).get("webSearch")
-                email = (self._hello or {}).get("email")
-                emails = (self._hello or {}).get("emails")
-                location = (self._hello or {}).get("location")
-                # Vision tools wait longer for a frame on photo-trigger glasses
-                # than on a streaming phone camera (see Settings for the budgets).
-                device = (self._hello or {}).get("device")
-                device_kind = (
-                    device.get("kind") if isinstance(device, dict) else None
-                )
-                frame_wait_seconds = self._frame_wait_for_kind(device_kind)
-                # Size the gateway's frame-freshness window to the camera too, so a
-                # batching adapter (OpenAI) keeps a slow glasses still instead of
-                # dropping it. No-op for streaming adapters (Gemini).
-                self._gateway.set_camera_kind(device_kind)
-                self._orchestrator = Orchestrator(
-                    engine=self._engine,
-                    gateway=self._gateway,
-                    sessionmaker=get_sessionmaker(),
-                    notify_client=self._send_json,
-                    session_id=self.session_id,
-                    user_id=self._user_id,
-                    web_search=web_search
-                    if isinstance(web_search, dict)
-                    else None,
-                    email=email if isinstance(email, dict) else None,
-                    emails=[e for e in emails if isinstance(e, dict)]
-                    if isinstance(emails, list)
-                    else None,
-                    location=location if isinstance(location, dict) else None,
-                    frame_wait_seconds=frame_wait_seconds,
-                )
-                self._orchestrator.photo_patience = self._photo_patience_for_kind(
-                    device_kind
-                )
-                self._orchestrator.late_photo = LatePhoto(
-                    window_seconds=float(
-                        getattr(self._settings, "glasses_late_photo_seconds", 40.0)
-                    ),
-                    answer=self._answer_late_photo,
-                    fail=self._fail_late_photo,
-                )
-                self._carry_email_selection()
+                self._create_orchestrator()
 
             # Start these only after the gateway is connected.  The read pump
             # can now keep accepting microphone frames while the sender waits
@@ -893,6 +849,63 @@ class Session:
         if isinstance(device_kind, str) and "glasses" in device_kind:
             return self._settings.glasses_frame_wait_seconds
         return self._settings.frame_wait_seconds
+
+    def _create_orchestrator(self) -> None:
+        """Build the tool orchestrator from the ``hello`` handshake.
+
+        On a RESUMED conversation it also arms the end_session guard. That
+        used to be set earlier in ``run()``, before the orchestrator existed,
+        so on every new session it was a no-op and the c19df6a protection
+        (device 2026-09-13: two fresh sessions ended themselves 10 s in)
+        never applied.
+        """
+        web_search = (self._hello or {}).get("webSearch")
+        email = (self._hello or {}).get("email")
+        emails = (self._hello or {}).get("emails")
+        location = (self._hello or {}).get("location")
+        # Vision tools wait longer for a frame on photo-trigger glasses
+        # than on a streaming phone camera (see Settings for the budgets).
+        device = (self._hello or {}).get("device")
+        device_kind = (
+            device.get("kind") if isinstance(device, dict) else None
+        )
+        frame_wait_seconds = self._frame_wait_for_kind(device_kind)
+        # Size the gateway's frame-freshness window to the camera too, so a
+        # batching adapter (OpenAI) keeps a slow glasses still instead of
+        # dropping it. No-op for streaming adapters (Gemini).
+        self._gateway.set_camera_kind(device_kind)
+        self._orchestrator = Orchestrator(
+            engine=self._engine,
+            gateway=self._gateway,
+            sessionmaker=get_sessionmaker(),
+            notify_client=self._send_json,
+            session_id=self.session_id,
+            user_id=self._user_id,
+            web_search=web_search
+            if isinstance(web_search, dict)
+            else None,
+            email=email if isinstance(email, dict) else None,
+            emails=[e for e in emails if isinstance(e, dict)]
+            if isinstance(emails, list)
+            else None,
+            location=location if isinstance(location, dict) else None,
+            frame_wait_seconds=frame_wait_seconds,
+        )
+        self._orchestrator.photo_patience = self._photo_patience_for_kind(
+            device_kind
+        )
+        self._orchestrator.late_photo = LatePhoto(
+            window_seconds=float(
+                getattr(self._settings, "glasses_late_photo_seconds", 40.0)
+            ),
+            answer=self._answer_late_photo,
+            fail=self._fail_late_photo,
+        )
+        self._carry_email_selection()
+        if getattr(self, "_resumed_from_handle", False):
+            self._orchestrator.resume_guard_until = (
+                time.monotonic() + _RESUME_GUARD_S
+            )
 
     def _photo_patience_for_kind(self, device_kind: str | None) -> float | None:
         """Photo patience for a camera ``kind``: glasses only (see
@@ -1252,8 +1265,6 @@ class Session:
                     now = time.monotonic()
                     if self._t_user_first == 0.0:
                         self._t_user_first = now
-                        if self._orchestrator is not None:
-                            self._orchestrator.user_turns_heard += 1
                     self._t_user_last = now
                     if self._orchestrator is not None:
                         self._orchestrator.note_user_turn()
