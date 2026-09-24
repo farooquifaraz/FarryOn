@@ -160,6 +160,12 @@ def classify_provider_failure(exc: BaseException) -> tuple[str, str]:
 #: everything forgotten" report, 2026-08-27). In-memory on purpose: handles are
 #: short-lived provider state, not durable user data.
 _RESUME_HANDLES: dict[int, tuple[str, float]] = {}
+#: Per user: the live session's mailbox choice (the orchestrator's shared
+#: dict) and when it was last in use. A session that RESUMES the previous
+#: conversation inherits it — the model remembers "use my work mail", so the
+#: tools must too (device E1.5: a stuck-reconnect lost it and the user was
+#: asked again). A fresh session (no resume) still asks, per the spec.
+_EMAIL_SELECTIONS: dict[int, tuple[dict[str, Any], float]] = {}
 _RESUME_TTL_S = 30 * 60.0
 
 
@@ -589,6 +595,7 @@ class Session:
                     answer=self._answer_late_photo,
                     fail=self._fail_late_photo,
                 )
+                self._carry_email_selection()
 
             # Start these only after the gateway is connected.  The read pump
             # can now keep accepting microphone frames while the sender waits
@@ -896,6 +903,24 @@ class Session:
                 getattr(self._settings, "glasses_photo_patience_seconds", 12.0)
             )
         return None
+
+    def _carry_email_selection(self) -> None:
+        """Inherit the mailbox choice on a resumed conversation, and register
+        this session's choice for the next one (see ``_EMAIL_SELECTIONS``)."""
+        uid = self._authed_user_id
+        if uid is None or self._orchestrator is None:
+            return
+        mine = self._orchestrator.email_selection
+        entry = _EMAIL_SELECTIONS.get(uid)
+        if (
+            getattr(self, "_resumed_from_handle", False)
+            and entry is not None
+            and time.monotonic() - entry[1] < _RESUME_TTL_S
+            and entry[0].get("address")
+        ):
+            mine.update(entry[0])
+            logger.info("email.selection_carried", session_id=self.session_id)
+        _EMAIL_SELECTIONS[uid] = (mine, time.monotonic())
 
     # -- The glasses photo that came after its question -------------------
 
@@ -2579,6 +2604,11 @@ class Session:
         if self._orchestrator is not None and self._orchestrator.late_photo:
             with contextlib.suppress(Exception):
                 await self._orchestrator.late_photo.close()
+        if self._orchestrator is not None and self._authed_user_id is not None:
+            # The clock for "resumed within the TTL" starts when this one ends.
+            entry = _EMAIL_SELECTIONS.get(self._authed_user_id)
+            if entry is not None and entry[0] is self._orchestrator.email_selection:
+                _EMAIL_SELECTIONS[self._authed_user_id] = (entry[0], time.monotonic())
 
         if self._gateway is not None:
             with contextlib.suppress(Exception):

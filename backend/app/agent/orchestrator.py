@@ -360,6 +360,11 @@ class Orchestrator:
     #: reply in between is a loop whatever the arguments say.
     _MAX_SAME_TOOL_PER_TURN = 5
 
+    @property
+    def email_selection(self) -> dict[str, Any]:
+        """The mailbox choice of this session (the dict the tools share)."""
+        return self._email_selection
+
     def note_user_turn(self) -> None:
         """The user asked something (new or again): a clean slate for the
         repeat guard. Called by the session owner on every user turn."""
