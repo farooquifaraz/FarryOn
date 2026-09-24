@@ -87,3 +87,12 @@ async def test_a_stale_choice_is_not_carried(monkeypatch) -> None:
     again = _session(7, resumed=True)
     again._carry_email_selection()
     assert again._orchestrator.email_selection == {}
+
+
+async def test_old_entries_are_dropped() -> None:
+    first = _session(7, resumed=False)
+    first._carry_email_selection()
+    mine, at = session_mod._EMAIL_SELECTIONS[7]
+    session_mod._EMAIL_SELECTIONS[7] = (mine, at - session_mod._RESUME_TTL_S - 1)
+    _session(8, resumed=False)._carry_email_selection()
+    assert 7 not in session_mod._EMAIL_SELECTIONS
