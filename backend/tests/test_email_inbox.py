@@ -294,3 +294,64 @@ async def test_the_summary_names_the_whole_inbox_unread(db_session, monkeypatch)
     assert "42 of them unread" in result["_instruction"]
     assert "whole inbox has 1402 unread" in result["_instruction"]
     assert result["inbox_unread"] == 1402
+
+
+# ---- every mailbox ----------------------------------------------------------------
+
+TWO = [
+    {"label": "Personal", "address": "me@gmail.com", "appPassword": "pw", "primary": True},
+    {"label": "Work", "address": "me@work.com", "appPassword": "pw", "host": "imap.work.com"},
+]
+
+
+async def test_both_mailboxes_are_summarised_together(db_session, monkeypatch) -> None:
+    # Device: "summary of both" had no path, so the model asked "which one?".
+    def fake_fetch(host, address, password, *a, **k):
+        if "work" in address:
+            return _page([_mail("9", "Invoice", importance="critical", reasons=["overdue"])],
+                         total=3, unread_total=2, inbox_unread=20)
+        return _page([_mail("1", "Hi")], total=5, unread_total=1, inbox_unread=100)
+
+    monkeypatch.setattr(email_read, "_fetch_emails", fake_fetch)
+    ctx = ToolContext(session=db_session, emails=TWO, email_threads={})
+    result = await InboxSummaryTool().run(ctx, account="both")
+    assert result["ok"] is True and result["account"] == "all"
+    assert result["total"] == 8 and result["unread"] == 3
+    assert result["inbox_unread"] == 120
+    assert [m["account"] for m in result["mailboxes"]] == ["Personal", "Work"]
+    assert result["mailboxes"][1]["critical"][0]["subject"] == "Invoice"
+    assert "which mailbox" in result["_instruction"]
+
+
+async def test_one_unreachable_mailbox_is_named_not_hidden(db_session, monkeypatch) -> None:
+    def fake_fetch(host, address, password, *a, **k):
+        if "work" in address:
+            raise OSError("network down")
+        return _page([_mail("1", "Hi")], total=1)
+
+    monkeypatch.setattr(email_read, "_fetch_emails", fake_fetch)
+    ctx = ToolContext(session=db_session, emails=TWO, email_threads={})
+    result = await InboxSummaryTool().run(ctx, account="all")
+    assert result["ok"] is True and result["unreachable_accounts"] == ["Work"]
+    assert "could not be reached" in result["_instruction"]
+
+
+async def test_every_mailbox_failing_is_an_outage_not_an_empty_inbox(
+    db_session, monkeypatch,
+) -> None:
+    def down(*a, **k):
+        raise OSError("down")
+
+    monkeypatch.setattr(email_read, "_fetch_emails", down)
+    ctx = ToolContext(session=db_session, emails=TWO, email_threads={})
+    result = await InboxSummaryTool().run(ctx, account="dono")
+    assert result["ok"] is False and "do NOT say the inbox is empty" in result["message"]
+
+
+async def test_the_words_for_every_mailbox() -> None:
+    from app.tools.email_accounts import wants_all
+
+    for said in ("all", "both", "Both accounts", "dono", "दोनों", "sab"):
+        assert wants_all(said), said
+    for said in ("", "primary", "work", "me@gmail.com", "ball"):
+        assert not wants_all(said), said

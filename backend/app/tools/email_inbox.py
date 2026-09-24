@@ -27,7 +27,7 @@ from typing import Any
 from app.logging_conf import get_logger
 from app.tools import email_read
 from app.tools.base import Tool, ToolContext
-from app.tools.email_accounts import resolve_account
+from app.tools.email_accounts import resolve_account, usable_accounts, wants_all
 from app.tools.email_triage import rank
 
 logger = get_logger(__name__)
@@ -110,20 +110,89 @@ class InboxSummaryTool(Tool):
             "account": {
                 "type": "string",
                 "description": "Which mailbox, as the user said it: 'primary', "
-                "'secondary', a label or an address. Omit on the first email "
-                "request of a session and the tool tells you what to ask.",
+                "'secondary', a label, an address, or 'all' for every mailbox. "
+                "Omit on the first email request of a session and the tool "
+                "tells you what to ask.",
             },
         },
     }
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
-        account, ask = resolve_account(ctx, (kwargs.get("account") or "").strip() or None)
-        if ask:
-            return ask
-        host, address, password, label = email_read._imap_creds(account)
+        account_arg = (kwargs.get("account") or "").strip()
         range_ = kwargs.get("range") or "today"
         category = kwargs.get("category") or None
         query = (kwargs.get("query") or "").strip() or None
+        accts = usable_accounts(ctx)
+        if wants_all(account_arg) and len(accts) > 1:
+            return await self._summarise_all(ctx, accts, range_, category, query)
+        account, ask = resolve_account(ctx, account_arg or None)
+        if ask:
+            return ask
+        return await self._summarise(ctx, account, range_, category, query)
+
+    async def _summarise_all(
+        self, ctx: ToolContext, accts: list[dict[str, Any]], range_: str,
+        category: str | None, query: str | None,
+    ) -> dict[str, Any]:
+        """Every mailbox, each summarised on its own, in one result. Device:
+        with no "all" the model re-asked "which account?" when the user had
+        said both."""
+        results = await asyncio.gather(*(
+            self._summarise(ctx, a, range_, category, query) for a in accts
+        ))
+        reached = [r for r in results if r.get("ok")]
+        failed = [
+            email_read._imap_creds(a)[3]
+            for a, r in zip(accts, results) if not r.get("ok")
+        ]
+        if not reached:
+            return {
+                "ok": False,
+                "message": (
+                    f"Couldn't reach any mailbox right now ({', '.join(failed)}). "
+                    "Tell the user checking email failed — do NOT say the "
+                    "inbox is empty."
+                ),
+            }
+        parts = [
+            "Every mailbox, one summary each. Say each mailbox's count by its "
+            "name, then the critical and important emails across both (say "
+            "which mailbox), then the rest in one line. At most three short "
+            "spoken points."
+        ]
+        inbox_unread = [r["inbox_unread"] for r in reached if "inbox_unread" in r]
+        if inbox_unread:
+            parts.append(
+                f"Unread across the whole inboxes: {sum(inbox_unread)} — the "
+                "answer to 'how many unread' when no day is named."
+            )
+        if failed:
+            parts.append(
+                f"The {', '.join(failed)} mailbox could not be reached — say so."
+            )
+        mailboxes = [
+            {k: v for k, v in r.items() if k not in ("ok", "_instruction")}
+            for r in reached
+        ]
+        result: dict[str, Any] = {
+            "ok": True,
+            "account": "all",
+            "total": sum(r.get("total", 0) for r in reached),
+            "unread": sum(r.get("unread", 0) for r in reached),
+            "_instruction": " ".join(parts),
+        }
+        if inbox_unread:
+            result["inbox_unread"] = sum(inbox_unread)
+        if failed:
+            result["unreachable_accounts"] = failed
+        result["mailboxes"] = mailboxes
+        return result
+
+    async def _summarise(
+        self, ctx: ToolContext, account: dict[str, Any], range_: str,
+        category: str | None, query: str | None,
+    ) -> dict[str, Any]:
+        host, address, password, label = email_read._imap_creds(account)
 
         async def fetch(rng: str) -> email_read.MailPage:
             return await email_read._fetch_with_retry(

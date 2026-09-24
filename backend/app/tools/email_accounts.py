@@ -99,6 +99,18 @@ def _public(accts: list[dict[str, Any]]) -> list[dict[str, str]]:
     ]
 
 
+#: Words that mean "every mailbox" — what the user says, passed as-is.
+_ALL_WORDS = frozenset(
+    ("all", "both", "every", "dono", "donon", "sab", "sabhi", "दोनों", "सब", "सभी")
+)
+
+
+def wants_all(account: str | None) -> bool:
+    """Whether ``account`` asks for every mailbox ("all", "both", "dono")."""
+    text = (account or "").lower().replace("'", " ").replace('"', " ")
+    return bool(set(text.split()) & _ALL_WORDS)
+
+
 def _match(want: str, accts: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Which account ``want`` names, or None if it names nothing clearly."""
     want = want.strip().lower()

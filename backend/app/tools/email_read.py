@@ -38,6 +38,7 @@ from app.tools.email_accounts import (
     NO_ACCOUNT_MESSAGE,
     resolve_account,
     usable_accounts,
+    wants_all,
 )
 from app.tools.email_triage import score_importance
 
@@ -823,7 +824,7 @@ class ReadEmailsTool(Tool):
         query = (kwargs.get("query") or None)
 
         # "all" → read from every mailbox and merge newest-first.
-        if account_arg.lower() == "all":
+        if wants_all(account_arg):
             accts = usable_accounts(ctx)
             if not accts:
                 _none, result = resolve_account(ctx, None)
