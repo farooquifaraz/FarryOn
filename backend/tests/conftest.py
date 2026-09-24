@@ -70,6 +70,14 @@ for _key in (
     "GOOGLE_CLIENT_SECRET",
     "MICROSOFT_CLIENT_ID",
     "MICROSOFT_CLIENT_SECRET",
+    # Mail — a developer .env carries the live SMTP login (to try order mails
+    # locally), and every full run then mailed real order/status/verification
+    # messages to real inboxes (2026-09-24). Empty host = log-only sender.
+    # Tests that exercise sending set their own host and patch smtplib.
+    "AUTH_SMTP_HOST",
+    "AUTH_SMTP_USER",
+    "AUTH_SMTP_PASSWORD",
+    "SHOP_NOTIFY_EMAIL",
 ):
     os.environ[_key] = ""
 
