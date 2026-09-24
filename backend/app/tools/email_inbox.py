@@ -179,11 +179,19 @@ class InboxSummaryTool(Tool):
 
         effective_range = widened or range_
         count_phrase = _count_word(fetched if has_more else total, has_more)
+        inbox_unread = getattr(page, "inbox_unread", None)
         parts = [
             f"Say the count as '{count_phrase} emails' for {effective_range}"
             + (f" (the total is {total})" if has_more else "")
-            + f", {unread_total} unread."
+            + f", {unread_total} of them unread."
         ]
+        if inbox_unread is not None:
+            # Device E2.3: asked "how many unread?", the model repeated the
+            # range's unread (42) instead of the inbox's (1402).
+            parts.append(
+                f"The whole inbox has {inbox_unread} unread — that is the "
+                "answer to 'how many unread' when no day is named."
+            )
         if widened:
             parts.append("Nothing arrived today, so this covers the week — say so.")
         if critical or important:
@@ -214,7 +222,6 @@ class InboxSummaryTool(Tool):
         if widened:
             result["widened_from"] = "today"
         inbox_total = getattr(page, "inbox_total", None)
-        inbox_unread = getattr(page, "inbox_unread", None)
         if inbox_total is not None:
             result["inbox_total"] = inbox_total
         if inbox_unread is not None:

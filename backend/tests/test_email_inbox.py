@@ -278,3 +278,19 @@ async def test_the_orchestrator_shares_one_thread_cache_across_calls() -> None:
     src = inspect.getsource(orchestrator)
     assert "self._email_threads: dict[str, Any] = {}" in src
     assert "email_threads=self._email_threads" in src
+
+
+async def test_the_summary_names_the_whole_inbox_unread(db_session, monkeypatch) -> None:
+    # Device E2.3: "how many unread?" got today's 42, not the inbox's 1402 —
+    # the guidance named only the range's unread.
+    monkeypatch.setattr(
+        email_read, "_fetch_emails",
+        lambda *a, **k: _page(
+            [_mail("1", "Hi", unread=True)], total=1, unread_total=42,
+            inbox_total=5000, inbox_unread=1402,
+        ),
+    )
+    result = await InboxSummaryTool().run(_ctx(db_session), account="primary")
+    assert "42 of them unread" in result["_instruction"]
+    assert "whole inbox has 1402 unread" in result["_instruction"]
+    assert result["inbox_unread"] == 1402
