@@ -350,6 +350,12 @@ class Settings(BaseSettings):
     # authenticated mailbox as the From address anyway).
     auth_email_from: str = Field(default="")
     auth_email_from_name: str = Field(default="FarryOn")
+    # Put in front of every mail subject. Empty = decide by the site address:
+    # the live site (https, public host) sends plain subjects, anything else
+    # (localhost, a LAN IP, plain http) sends "[LOCAL TEST] …" — a developer
+    # box with the live SMTP copied in was mailing Faraz real-looking order
+    # and status mails (2026-09-24). Set it to label a staging server.
+    email_subject_tag: str = Field(default="")
     # Password login requires a verified email (default ON). The test suite
     # turns it off in conftest; production keeps it.
     require_verified_email: bool = Field(default=True)

@@ -37,9 +37,35 @@ def _base_url() -> str:
     return get_settings().sso_redirect_base_url.rstrip("/")
 
 
+LOCAL_TAG = "[LOCAL TEST]"
+
+
+def subject_tag(s) -> str:
+    """What goes in front of a subject: ``email_subject_tag`` if set, nothing
+    on the live site, and ``[LOCAL TEST]`` from anywhere else — so a mail a
+    developer's machine or the test suite sends can never pass for a real
+    order or account mail."""
+    if s.email_subject_tag.strip():
+        return s.email_subject_tag.strip()
+    from urllib.parse import urlparse
+
+    base = s.sso_redirect_base_url or ""
+    host = (urlparse(base).hostname or "").lower()
+    local = (
+        not base.startswith("https://")
+        or host in ("localhost", "127.0.0.1", "0.0.0.0", "")
+        or host.startswith(("192.168.", "10.", "172."))
+        or host.endswith(".local")
+    )
+    return LOCAL_TAG if local else ""
+
+
 def _send(*, to_email: str, subject: str, text: str, html: str, kind: str) -> None:
     """Queue one mail on a daemon thread; log-only when SMTP is unconfigured."""
     s = get_settings()
+    tag = subject_tag(s)
+    if tag:
+        subject = f"{tag} {subject}"
     if not s.auth_smtp_host:
         # Dev/test fallback — the link stays discoverable in the log.
         logger.info("auth.email.log_only", kind=kind, to=to_email)
