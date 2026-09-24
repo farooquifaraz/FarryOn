@@ -121,6 +121,10 @@ class Orchestrator:
         #: Threading headers of the emails read this session (see
         #: ``ToolContext.email_threads``). One dict, shared by reference.
         self._email_threads: dict[str, Any] = {}
+        #: Mail drafts awaiting the user's answer (see ``app.tools.email_drafts``).
+        self._email_drafts: dict[str, Any] = {}
+        #: Every user turn, voice or typed; drafts compare against it.
+        self.user_turn_seq: int = 0
         #: Mutable — updated in place when the client sends a ``location_update``.
         self.location = location
         #: Mutable — set to the latest INPUT_VIDEO JPEG by the session so the
@@ -359,6 +363,7 @@ class Orchestrator:
     def note_user_turn(self) -> None:
         """The user asked something (new or again): a clean slate for the
         repeat guard. Called by the session owner on every user turn."""
+        self.user_turn_seq += 1
         self._calls_since_speech.clear()
         self._tool_calls_since_speech.clear()
         self._turn_charges.clear()
@@ -475,6 +480,8 @@ class Orchestrator:
                 emails=self._emails,
                 email_selection=self._email_selection,
                 email_threads=self._email_threads,
+                email_drafts=self._email_drafts,
+                user_turn=lambda: self.user_turn_seq,
                 location=self.location,
                 last_frame=self.last_frame,
                 last_frame_at=self.last_frame_at,

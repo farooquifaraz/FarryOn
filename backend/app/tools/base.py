@@ -128,6 +128,14 @@ class ToolContext:
     #: a Message-ID. Shared (same dict) across every ToolContext of a session,
     #: like ``email_selection``; ``None`` outside a live session.
     email_threads: dict[str, Any] | None = None
+    #: Outgoing mail drafts shown to the user and awaiting their answer, keyed
+    #: by kind ("send" / "forward"). Shared (same dict) across the session;
+    #: ``app.tools.email_drafts`` refuses to send what was never shown.
+    email_drafts: dict[str, Any] | None = None
+    #: The session's user-turn counter right now (bumped on every user turn).
+    #: A draft may only be sent on a LATER turn than the one that showed it.
+    #: Signature: ``user_turn() -> int``.
+    user_turn: Callable[[], int] | None = None
 
 
 class Tool(abc.ABC):

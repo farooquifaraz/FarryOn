@@ -4,9 +4,9 @@ over SMTP.
 Uses the same address + app password the user configured for reading. SMTP
 runs in a worker thread so the realtime event loop is never blocked.
 
-SAFETY: sending is an outward action. The model is instructed (system prompt)
-to read the draft back and get an explicit spoken confirmation BEFORE calling
-either tool — never auto-send.
+SAFETY: sending is an outward action, and the server enforces the
+confirmation (``app.tools.email_drafts``): a first call only returns the draft
+to read back; ``confirmed=true`` sends it, and only on a later user turn.
 
 Replies thread properly: ``send_email(reply_to_uid=…)`` looks up the original
 message's ``Message-ID`` / ``References`` (from the session cache the read
@@ -33,7 +33,7 @@ from email.utils import (
 from typing import Any
 
 from app.logging_conf import get_logger
-from app.tools import email_read
+from app.tools import email_drafts, email_read
 from app.tools.base import Tool, ToolContext
 from app.tools.email_accounts import resolve_account
 from app.tools.idempotency import already_sent, mark_sent  # UX Spec §3.4
@@ -237,9 +237,11 @@ class SendEmailTool(Tool):
 
     name = "send_email"
     description = (
-        "Send an email from the user's account. IMPORTANT: only call this "
-        "AFTER reading the recipient, subject and body back to the user and "
-        "getting their explicit confirmation — never send without a clear yes. "
+        "Send an email from the user's account. Two steps, enforced: call it "
+        "WITHOUT confirmed to get the draft back (nothing is sent) and read "
+        "recipient, subject and body to the user; after their explicit yes "
+        "call it again with the same fields and confirmed=true. Never invent "
+        "or complete an address the user did not give in full. "
         "To REPLY to an email the user heard, pass its `reply_to_uid` (the "
         "uid from read_emails / read_email) so the reply lands in the same "
         "conversation; the tool sets the Re: subject and threading headers. "
@@ -257,7 +259,16 @@ class SendEmailTool(Tool):
                 "description": "Recipient email address (several: comma-separated).",
             },
             "subject": {"type": "string"},
-            "body": {"type": "string"},
+            "body": {
+                "type": "string",
+                "description": "The full text of the email. On the confirmed "
+                "call send the same text you read back.",
+            },
+            "confirmed": {
+                "type": "boolean",
+                "description": "true ONLY after the user said yes to the "
+                "draft this tool returned. Without it nothing is sent.",
+            },
             "cc": {
                 "type": "string",
                 "description": "CC address(es), comma-separated. Only when the "
@@ -287,7 +298,7 @@ class SendEmailTool(Tool):
                 "the tool tells you what to ask (never assume one).",
             },
         },
-        "required": ["to", "body"],
+        "required": ["to"],
     }
 
     async def run(self, ctx: ToolContext, **kwargs: Any) -> dict[str, Any]:
@@ -317,13 +328,42 @@ class SendEmailTool(Tool):
         bcc_list, bad = _validate_addresses("BCC", _split_addresses(kwargs.get("bcc")))
         if bad:
             return bad
-        to = ", ".join(to_list)
-
         subject = (kwargs.get("subject") or "").strip()[:500]
         body = (kwargs.get("body") or "")[:_MAX_BODY]
-
         reply_to_uid = str(kwargs.get("reply_to_uid") or "").strip() or None
         in_reply_to = (kwargs.get("in_reply_to") or "").strip() or None
+
+        # Draft first, send on the user's later yes (email_drafts). The
+        # approved draft fills whatever the confirmed call left out.
+        checked = email_drafts.gate(
+            ctx, "send",
+            {
+                "to": to_list, "cc": cc_list, "bcc": bcc_list,
+                "subject": subject, "body": body,
+                "reply_to_uid": reply_to_uid, "in_reply_to": in_reply_to,
+            },
+            confirmed=email_drafts.is_confirmed(kwargs.get("confirmed")),
+            account=address,
+        )
+        if checked.response is not None:
+            return checked.response
+        fields = checked.fields
+        to_list = fields["to"]
+        cc_list = fields.get("cc") or []
+        bcc_list = fields.get("bcc") or []
+        subject = fields.get("subject") or ""
+        body = fields.get("body") or ""
+        reply_to_uid = fields.get("reply_to_uid")
+        in_reply_to = fields.get("in_reply_to")
+        if not body.strip():
+            return {
+                "ok": False,
+                "sent": False,
+                "message": "The email has no text. Ask the user what it "
+                "should say, read it back, then send.",
+            }
+        to = ", ".join(to_list)
+
         thread: dict[str, Any] | None = None
         headers: dict[str, str] = {}
         if reply_to_uid or in_reply_to:
@@ -361,6 +401,7 @@ class SendEmailTool(Tool):
             result["threaded"] = False
         if already_sent(fingerprint):
             logger.info("send_email.deduped", to=to)
+            email_drafts.sent(ctx, "send")
             return {**result, "deduped": True}
 
         try:
@@ -371,6 +412,7 @@ class SendEmailTool(Tool):
         except Exception as exc:  # noqa: BLE001
             return _smtp_failure(exc, to)
         mark_sent(fingerprint)  # UX Spec §3.4: block an identical resend
+        email_drafts.sent(ctx, "send")
         logger.info("send_email.sent", to=to, account=label, threaded=bool(headers))
         return result
 
@@ -463,8 +505,9 @@ class ForwardEmailTool(Tool):
         "Forward an existing email (with its attachments) to someone. Pick "
         "the email by its uid (from read_emails / read_email / inbox_summary) "
         "or by a sender / subject keyword; `note` is the user's own message "
-        "on top. IMPORTANT: only call this AFTER reading back who it goes to "
-        "and which email it is, and getting the user's explicit yes."
+        "on top. Two steps, enforced: call it WITHOUT confirmed to get the "
+        "draft (nothing is sent), read back who it goes to and which email; "
+        "after the user's explicit yes call it again with confirmed=true."
     )
     parameters: dict[str, Any] = {
         "type": "object",
@@ -495,6 +538,11 @@ class ForwardEmailTool(Tool):
             },
             "cc": {"type": "string", "description": "CC address(es), comma-separated."},
             "bcc": {"type": "string", "description": "BCC address(es), comma-separated."},
+            "confirmed": {
+                "type": "boolean",
+                "description": "true ONLY after the user said yes to the "
+                "draft this tool returned. Without it nothing is sent.",
+            },
             "account": {
                 "type": "string",
                 "description": "Which mailbox, as the user said it: 'primary', "
@@ -525,6 +573,10 @@ class ForwardEmailTool(Tool):
             return bad
         uid = str(kwargs.get("uid") or "").strip() or None
         query = (kwargs.get("query") or "").strip() or None
+        confirmed = email_drafts.is_confirmed(kwargs.get("confirmed"))
+        if confirmed and not uid and not query:
+            # The yes may come without the email reference: use the draft's.
+            uid = (email_drafts.pending(ctx, "forward") or {}).get("uid")
         if not uid and not query:
             return {
                 "ok": False,
@@ -543,6 +595,28 @@ class ForwardEmailTool(Tool):
             return {"ok": False, "message": f"Couldn't read that email from {label}."}
         if not found:
             return {"ok": False, "message": "No matching email found to forward."}
+
+        # Draft first (which email, to whom), send on the user's later yes.
+        original = emaillib.message_from_bytes(found["raw"])
+        checked = email_drafts.gate(
+            ctx, "forward",
+            {
+                "to": to_list, "cc": cc_list, "bcc": bcc_list,
+                "uid": str(found["uid"]), "note": note,
+                "email": (
+                    f"{email_read._decode(original.get('From'))} — "
+                    f"{email_read._decode(original.get('Subject')) or '(no subject)'}"
+                ),
+            },
+            confirmed=confirmed,
+            account=address,
+        )
+        if checked.response is not None:
+            return checked.response
+        to_list = checked.fields["to"]
+        cc_list = checked.fields.get("cc") or []
+        bcc_list = checked.fields.get("bcc") or []
+        note = checked.fields.get("note") or ""
 
         msg, info = _build_forward(
             found["raw"], sender=address, to=to_list, cc=cc_list, bcc=bcc_list,
@@ -573,12 +647,14 @@ class ForwardEmailTool(Tool):
             )
         if already_sent(fingerprint):
             logger.info("forward_email.deduped", to=to)
+            email_drafts.sent(ctx, "forward")
             return {**result, "deduped": True}
         try:
             await asyncio.to_thread(_deliver, host, port, address, password, msg)
         except Exception as exc:  # noqa: BLE001
             return _smtp_failure(exc, to)
         mark_sent(fingerprint)
+        email_drafts.sent(ctx, "forward")
         logger.info(
             "forward_email.sent", to=to, account=label,
             attachments=len(info["attachments"]),
