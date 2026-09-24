@@ -136,6 +136,10 @@ class ToolContext:
     #: A draft may only be sent on a LATER turn than the one that showed it.
     #: Signature: ``user_turn() -> int``.
     user_turn: Callable[[], int] | None = None
+    #: What the user has said in the current turn so far. The draft gate
+    #: refuses to send on a turn that says no / wait / cancel.
+    #: Signature: ``user_text() -> str``.
+    user_text: Callable[[], str] | None = None
 
 
 class Tool(abc.ABC):

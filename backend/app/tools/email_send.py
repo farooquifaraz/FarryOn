@@ -332,6 +332,27 @@ class SendEmailTool(Tool):
         body = (kwargs.get("body") or "")[:_MAX_BODY]
         reply_to_uid = str(kwargs.get("reply_to_uid") or "").strip() or None
         in_reply_to = (kwargs.get("in_reply_to") or "").strip() or None
+        confirmed = email_drafts.is_confirmed(kwargs.get("confirmed"))
+        if not confirmed and not body.strip():
+            # Never show the user a draft with nothing in it to approve.
+            return {
+                "ok": False,
+                "sent": False,
+                "message": "The email has no text yet. Ask the user what it "
+                "should say, then call this again with the body.",
+            }
+        if confirmed and not (reply_to_uid or in_reply_to):
+            pending = email_drafts.pending(ctx, "send") or {}
+            reply_to_uid = pending.get("reply_to_uid")
+            in_reply_to = pending.get("in_reply_to")
+
+        # The reply's real subject ("Re: …") is part of what the user hears.
+        thread: dict[str, Any] | None = None
+        if reply_to_uid or in_reply_to:
+            thread = await _thread_headers(
+                ctx, account, address, reply_to_uid, in_reply_to,
+            )
+            subject = _reply_subject(subject, thread)
 
         # Draft first, send on the user's later yes (email_drafts). The
         # approved draft fills whatever the confirmed call left out.
@@ -342,7 +363,7 @@ class SendEmailTool(Tool):
                 "subject": subject, "body": body,
                 "reply_to_uid": reply_to_uid, "in_reply_to": in_reply_to,
             },
-            confirmed=email_drafts.is_confirmed(kwargs.get("confirmed")),
+            confirmed=confirmed,
             account=address,
         )
         if checked.response is not None:
@@ -364,14 +385,13 @@ class SendEmailTool(Tool):
             }
         to = ", ".join(to_list)
 
-        thread: dict[str, Any] | None = None
         headers: dict[str, str] = {}
-        if reply_to_uid or in_reply_to:
+        if (reply_to_uid or in_reply_to) and thread is None:
             thread = await _thread_headers(
                 ctx, account, address, reply_to_uid, in_reply_to,
             )
-            if thread:
-                headers = _reply_headers(thread)
+        if thread:
+            headers = _reply_headers(thread)
             subject = _reply_subject(subject, thread)
         subject = subject or "(no subject)"
 

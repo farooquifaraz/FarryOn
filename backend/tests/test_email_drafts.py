@@ -226,3 +226,104 @@ async def test_the_live_session_always_has_the_gate_on() -> None:
     first = ctx.user_turn()
     orch.note_user_turn()
     assert ctx.user_turn() == first + 1
+
+
+# -- review 2026-09-24 -------------------------------------------------------
+
+
+def _ctx_saying(db, turns: _Turns, said: list[str]) -> ToolContext:
+    return ToolContext(
+        session=db, email=_ACCOUNT, email_drafts={}, user_turn=turns,
+        user_text=lambda: said[0], email_threads={},
+    )
+
+
+@pytest.mark.parametrize("answer", ["nahi ruko", "no wait", "cancel it", "मत भेजो", "don't"])
+async def test_a_refusal_on_the_next_turn_does_not_send(db_session, monkeypatch, answer) -> None:
+    # The gate once proved only that SOMEONE spoke after the draft (echo, a
+    # TV); the words of that turn now count.
+    sent = _sends(monkeypatch)
+    turns, said = _Turns(), ["send ali the note"]
+    ctx = _ctx_saying(db_session, turns, said)
+    await SendEmailTool().run(ctx, to="ali@example.com", body="x", account="primary")
+    turns.n += 1
+    said[0] = answer
+    out = await SendEmailTool().run(ctx, to="ali@example.com", account="primary", confirmed=True)
+    assert sent == [] and "did not agree" in out["_instruction"]
+
+
+@pytest.mark.parametrize("answer", ["haan bhejo", "yes", "yes, no problem", "ok send it", "हाँ"])
+async def test_a_yes_sends(db_session, monkeypatch, answer) -> None:
+    sent = _sends(monkeypatch)
+    turns, said = _Turns(), ["send ali the note"]
+    ctx = _ctx_saying(db_session, turns, said)
+    await SendEmailTool().run(ctx, to="ali@example.com", body="x", account="primary")
+    turns.n += 1
+    said[0] = answer
+    out = await SendEmailTool().run(ctx, to="ali@example.com", account="primary", confirmed=True)
+    assert out["sent"] is True and len(sent) == 1
+
+
+async def test_an_empty_body_is_never_shown_as_a_draft(db_session, monkeypatch) -> None:
+    sent = _sends(monkeypatch)
+    ctx = _ctx(db_session, _Turns())
+    out = await SendEmailTool().run(ctx, to="ali@example.com", account="primary")
+    assert out["ok"] is False and "no text" in out["message"]
+    assert ctx.email_drafts == {} and sent == []
+
+
+async def test_the_preview_keeps_its_guidance_when_the_body_is_long(db_session, monkeypatch) -> None:
+    _sends(monkeypatch)
+    ctx = _ctx(db_session, _Turns())
+    out = await SendEmailTool().run(
+        ctx, to="ali@example.com", body="word " * 3000, account="primary",
+    )
+    keys = list(out)
+    assert keys.index("_instruction") < keys.index("draft")
+    assert len(out["draft"]["body"]) < 2700 and "more characters" in out["draft"]["body"]
+    assert "suggest a short one" in out["_instruction"], "no subject yet"
+    # What is SENT is still the whole text.
+    assert len(ctx.email_drafts["send"]["fields"]["body"]) == len("word " * 3000)
+
+
+async def test_a_subject_added_on_the_yes_is_not_a_new_draft(db_session, monkeypatch) -> None:
+    sent = _sends(monkeypatch)
+    turns = _Turns()
+    ctx = _ctx(db_session, turns)
+    await SendEmailTool().run(ctx, to="ali@example.com", body="x", account="primary")
+    turns.n += 1
+    out = await SendEmailTool().run(
+        ctx, to="ali@example.com", subject="Hello", account="primary", confirmed=True,
+    )
+    assert out["sent"] is True and sent[0]["subject"] == "Hello"
+
+
+async def test_an_added_cc_on_the_yes_is_asked_again(db_session, monkeypatch) -> None:
+    sent = _sends(monkeypatch)
+    turns = _Turns()
+    ctx = _ctx(db_session, turns)
+    await SendEmailTool().run(ctx, to="ali@example.com", body="x", account="primary")
+    turns.n += 1
+    out = await SendEmailTool().run(
+        ctx, to="ali@example.com", cc="eve@example.com", account="primary", confirmed=True,
+    )
+    assert sent == [] and out["status"] == "confirm_needed"
+
+
+async def test_a_reply_draft_shows_its_real_subject(db_session, monkeypatch) -> None:
+    from app.tools import email_read
+
+    sent = _sends(monkeypatch)
+    turns = _Turns()
+    ctx = _ctx_saying(db_session, turns, ["reply to him"])
+    ctx.email_threads[email_read.thread_key("me@gmail.com", "42")] = {
+        "message_id": "<42@x>", "references": "", "subject": "Invoice 7",
+    }
+    out = await SendEmailTool().run(
+        ctx, to="ali@example.com", body="Paid", reply_to_uid="42", account="primary",
+    )
+    assert out["draft"]["subject"] == "Re: Invoice 7"
+    turns.n += 1
+    ctx.user_text = lambda: "yes"
+    ok = await SendEmailTool().run(ctx, to="ali@example.com", account="primary", confirmed=True)
+    assert ok["threaded"] is True and sent[0]["subject"] == "Re: Invoice 7"

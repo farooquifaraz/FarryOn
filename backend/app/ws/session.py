@@ -920,7 +920,11 @@ class Session:
         ):
             mine.update(entry[0])
             logger.info("email.selection_carried", session_id=self.session_id)
-        _EMAIL_SELECTIONS[uid] = (mine, time.monotonic())
+        now = time.monotonic()
+        for other, (_sel, at) in list(_EMAIL_SELECTIONS.items()):
+            if now - at > _RESUME_TTL_S:
+                del _EMAIL_SELECTIONS[other]
+        _EMAIL_SELECTIONS[uid] = (mine, now)
 
     # -- The glasses photo that came after its question -------------------
 
@@ -1253,6 +1257,7 @@ class Session:
                     self._t_user_last = now
                     if self._orchestrator is not None:
                         self._orchestrator.note_user_turn()
+                        self._orchestrator.note_user_text(text)
                 await self._send_state("thinking")
                 # A typed turn has no audio VAD, so give the model the current
                 # camera view for "what is this?"-style questions even when
@@ -1971,6 +1976,8 @@ class Session:
                         turn=self._turn_index,
                     )
                 self._t_user_last = now
+                if self._orchestrator is not None:
+                    self._orchestrator.note_user_text(event.text or "")
             if (
                 event.role != "user"
                 and event.final

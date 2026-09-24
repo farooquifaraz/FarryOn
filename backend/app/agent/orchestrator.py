@@ -125,6 +125,9 @@ class Orchestrator:
         self._email_drafts: dict[str, Any] = {}
         #: Every user turn, voice or typed; drafts compare against it.
         self.user_turn_seq: int = 0
+        #: What the user has said so far in the current turn (the live
+        #: transcript grows word by word). A draft's "yes" is read from it.
+        self.user_text: str = ""
         #: Mutable — updated in place when the client sends a ``location_update``.
         self.location = location
         #: Mutable — set to the latest INPUT_VIDEO JPEG by the session so the
@@ -369,9 +372,14 @@ class Orchestrator:
         """The user asked something (new or again): a clean slate for the
         repeat guard. Called by the session owner on every user turn."""
         self.user_turn_seq += 1
+        self.user_text = ""
         self._calls_since_speech.clear()
         self._tool_calls_since_speech.clear()
         self._turn_charges.clear()
+
+    def note_user_text(self, text: str) -> None:
+        """The current user turn's words so far (voice partials or typed)."""
+        self.user_text = text or ""
 
     def note_assistant_spoke(self) -> None:
         """The model answered in words: whatever it calls next is a new
@@ -487,6 +495,7 @@ class Orchestrator:
                 email_threads=self._email_threads,
                 email_drafts=self._email_drafts,
                 user_turn=lambda: self.user_turn_seq,
+                user_text=lambda: self.user_text,
                 location=self.location,
                 last_frame=self.last_frame,
                 last_frame_at=self.last_frame_at,
