@@ -141,18 +141,19 @@ class InboxSummaryTool(Tool):
             self._summarise(ctx, a, range_, category, query) for a in accts
         ))
         reached = [r for r in results if r.get("ok")]
-        failed = [
-            email_read._imap_creds(a)[3]
+        failures = [
+            (email_read._imap_creds(a)[3], r.get("message") or "")
             for a, r in zip(accts, results) if not r.get("ok")
         ]
+        failed = [label for label, _m in failures]
         if not reached:
             return {
                 "ok": False,
                 "message": (
-                    f"Couldn't reach any mailbox right now ({', '.join(failed)}). "
-                    "Tell the user checking email failed — do NOT say the "
-                    "inbox is empty."
-                ),
+                    "Checking email failed for every mailbox — do NOT say the "
+                    "inbox is empty. "
+                    + " ".join(f"{label}: {m}" for label, m in failures)
+                ).strip(),
             }
         parts = [
             "Every mailbox, one summary each. Say each mailbox's count by its "
@@ -166,12 +167,18 @@ class InboxSummaryTool(Tool):
                 f"Unread across the whole inboxes: {sum(inbox_unread)} — the "
                 "answer to 'how many unread' when no day is named."
             )
-        if failed:
-            parts.append(
-                f"The {', '.join(failed)} mailbox could not be reached — say so."
-            )
+        for label, message in failures:
+            # The mailbox's own reason (a wrong password says so), not a
+            # generic "unreachable".
+            parts.append(f"The {label} mailbox could not be read: {message}")
+        # Two full summaries overflow the model's result cap (6000 chars,
+        # clipped from the end) and the second mailbox would lose its
+        # critical mails: keep the counts and the critical / important ones.
         mailboxes = [
-            {k: v for k, v in r.items() if k not in ("ok", "_instruction")}
+            {
+                k: v for k, v in r.items()
+                if k not in ("ok", "_instruction", "others", "top_senders")
+            }
             for r in reached
         ]
         result: dict[str, Any] = {
@@ -362,10 +369,13 @@ class MarkEmailReadTool(Tool):
         uid = str(kwargs.get("uid") or "").strip() or None
         query = (kwargs.get("query") or "").strip() or None
         category = kwargs.get("category") or None
-        range_ = kwargs.get("range") or ("month" if query else "week")
+        named_range = kwargs.get("range") or None
+        range_ = named_range or ("month" if query else "week")
         seen = not bool(kwargs.get("unread"))
         all_matching = bool(kwargs.get("all"))
-        if not uid and not query and not (all_matching and (category or range_)):
+        # all=true needs a filter the caller NAMED: the default window alone
+        # would mark every mail of the week (review 2026-09-24).
+        if not uid and not query and not (all_matching and (category or named_range)):
             return {
                 "ok": False,
                 "message": "Which email? Give me the sender or subject.",

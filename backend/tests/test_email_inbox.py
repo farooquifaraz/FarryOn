@@ -333,7 +333,7 @@ async def test_one_unreachable_mailbox_is_named_not_hidden(db_session, monkeypat
     ctx = ToolContext(session=db_session, emails=TWO, email_threads={})
     result = await InboxSummaryTool().run(ctx, account="all")
     assert result["ok"] is True and result["unreachable_accounts"] == ["Work"]
-    assert "could not be reached" in result["_instruction"]
+    assert "Work mailbox could not be read" in result["_instruction"]
 
 
 async def test_every_mailbox_failing_is_an_outage_not_an_empty_inbox(
@@ -355,3 +355,39 @@ async def test_the_words_for_every_mailbox() -> None:
         assert wants_all(said), said
     for said in ("", "primary", "work", "me@gmail.com", "ball"):
         assert not wants_all(said), said
+
+
+async def test_mark_all_needs_a_named_filter(db_session, monkeypatch) -> None:
+    # Review 2026-09-24: all=true alone passed the guard through the default
+    # window and would mark every mail of the week read.
+    called: list = []
+    monkeypatch.setattr(email_read, "set_seen", lambda *a, **k: called.append(k) or {"count": 1})
+    result = await MarkEmailReadTool().run(_ctx(db_session), all=True, account="primary")
+    assert result["ok"] is False and called == []
+    ok = await MarkEmailReadTool().run(
+        _ctx(db_session), all=True, category="promotions", account="primary",
+    )
+    assert ok["ok"] is True and called[0]["category"] == "promotions"
+
+
+async def test_both_mailboxes_fit_the_model_result(db_session, monkeypatch) -> None:
+    many = [_mail(str(i), f"Mail {i}") for i in range(12)]
+    monkeypatch.setattr(email_read, "_fetch_emails", lambda *a, **k: _page(many, total=40))
+    ctx = ToolContext(session=db_session, emails=TWO, email_threads={})
+    result = await InboxSummaryTool().run(ctx, account="all")
+    for box in result["mailboxes"]:
+        assert "others" not in box and "top_senders" not in box
+        assert "others_not_listed" in box
+
+
+async def test_a_wrong_password_in_one_mailbox_says_so(db_session, monkeypatch) -> None:
+    def fake_fetch(host, address, password, *a, **k):
+        if "work" in address:
+            raise imaplib.IMAP4.error("AUTHENTICATIONFAILED")
+        return _page([_mail("1", "Hi")], total=1)
+
+    monkeypatch.setattr(email_read, "_fetch_emails", fake_fetch)
+    ctx = ToolContext(session=db_session, emails=TWO, email_threads={})
+    result = await InboxSummaryTool().run(ctx, account="all")
+    assert "Work mailbox could not be read" in result["_instruction"]
+    assert "password" in result["_instruction"].lower()
