@@ -39,6 +39,7 @@ class MicGate {
     this.speakerBarMin = 0,
     this.fastOpenRatio = 0,
     this.fastOpenMin = 0,
+    this.speakerBarFloor = 0,
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
 
@@ -97,6 +98,11 @@ class MicGate {
         // above anything the TV reached (p98 6,800).
         fastOpenRatio: 1.6,
         fastOpenMin: 8000.0,
+        // A second pair (L801-03BC, 2026-09-25) has a much quieter mic:
+        // speech peaked at 4,000-6,100 with the bar at 6,000 and not one
+        // word reached Farry. Repeated speech-like misses let the bar come
+        // down to 3,000 — in a quiet room only (see [speakerBarFloor]).
+        speakerBarFloor: 3000.0,
         clock: clock,
       );
 
@@ -123,6 +129,15 @@ class MicGate {
   /// heard; a TV that never reaches [speakerBarMin] still is not.
   final bool speakerBar;
   final double speakerBarMin;
+
+  /// How far [speakerBarMin] may relax (0 = never) once the gate has
+  /// missed speech-like audio twice within [_relaxWindow]: at least
+  /// [_relaxHalfMs] over half the bar and peaking at or above this level.
+  /// A mic quieter than the one the 4,000 was measured on (L802) otherwise
+  /// never opens, so the wearer is never learned either. The room still
+  /// rules: the bar never drops under the measured floor × multiplier, so a
+  /// TV that lifts the floor keeps the bar above itself.
+  final double speakerBarFloor;
 
   final int sampleRate;
 
@@ -289,6 +304,19 @@ class MicGate {
   final List<double> _speechLevels = <double>[];
   static const int _speechLevelsMax = 300;
 
+  /// Speech-like misses lately (see [speakerBarFloor]).
+  final Queue<DateTime> _speechMisses = Queue<DateTime>();
+  static const Duration _relaxWindow = Duration(seconds: 30);
+  static const int _relaxHalfMs = 300;
+  bool _relaxed = false;
+
+  /// Whether repeated misses have let the bar relax to [speakerBarFloor].
+  bool get relaxed => _relaxed;
+
+  /// The room's quiet fifth as measured (0 before it is known). The
+  /// clamped [noiseFloor] reads 2,400 in any quiet room; this is the level.
+  double get measuredFloor => _rawFloor;
+
   int get _bytesPerSecond => sampleRate * 2;
 
   /// The bar a chunk must clear right now to count as speech. Exposed so the
@@ -309,8 +337,13 @@ class MicGate {
   double _openBar() {
     final room = math.max(absoluteFloor, _noiseFloor * noiseMultiplier);
     double bar = room;
-    if (speakerBar && _speakerLevel > 0) {
-      final own = math.max(speakerBarMin, _speakerLevel * 0.9);
+    // Once the room is measured the same rule applies before the wearer is
+    // learned: waiting for a first opening at the legacy 6,000 meant a
+    // quieter mic never opened, so nothing was ever learned (2026-09-25).
+    if (speakerBar && (_speakerLevel > 0 || _rawFloor > 0)) {
+      final min = _relaxed ? speakerBarFloor : speakerBarMin;
+      final own =
+          _speakerLevel > 0 ? math.max(min, _speakerLevel * 0.9) : min;
       final measured = _rawFloor * noiseMultiplier;
       bar = math.min(math.max(own, measured), maxNoiseFloor * noiseMultiplier);
     }
@@ -479,6 +512,7 @@ class MicGate {
     if (now.difference(lastLoud) < _missGap) return;
     final halfMs = _missHalfBytes * 1000 ~/ _bytesPerSecond;
     if (halfMs >= _missMinMs) {
+      _noteSpeechMiss(now, halfMs);
       onMiss?.call(
         _missPeak,
         threshold,
@@ -487,6 +521,20 @@ class MicGate {
       );
     }
     _clearMiss();
+  }
+
+  void _noteSpeechMiss(DateTime now, int halfMs) {
+    if (!speakerBar || speakerBarFloor <= 0 || _relaxed) return;
+    if (halfMs < _relaxHalfMs || _missPeak < speakerBarFloor) return;
+    _speechMisses.addLast(now);
+    while (_speechMisses.isNotEmpty &&
+        now.difference(_speechMisses.first) > _relaxWindow) {
+      _speechMisses.removeFirst();
+    }
+    if (_speechMisses.length >= 2) {
+      _relaxed = true;
+      _speechMisses.clear();
+    }
   }
 
   void _clearMiss() {

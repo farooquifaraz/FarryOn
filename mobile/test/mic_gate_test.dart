@@ -374,6 +374,98 @@ void main() {
       expect(gate.isOpen, isTrue);
     });
 
+    // -- a quieter mic (L801-03BC, 2026-09-25) --------------------------
+    // Speech peaked at 4,000-6,100 against the legacy 6,000 bar and not a
+    // word reached Farry: the gate never opened, so it never learned him.
+
+    /// A clock the gate and the helpers share (the gate reads it on every
+    /// chunk, so the helpers must move THIS, not a copy).
+    List<DateTime> clockAt() => [DateTime(2026, 1, 1)];
+
+    /// [seconds] of a room at [amp] RMS (40 ms chunks).
+    void room(MicGate gate, List<DateTime> c, double seconds, int amp) {
+      for (var i = 0; i < seconds * 25; i++) {
+        gate.process(loud(640, amp));
+        c[0] = c[0].add(const Duration(milliseconds: 40));
+      }
+    }
+
+    /// One utterance: [ms] at [amp], then 600 ms of the room at [roomAmp].
+    void say(MicGate gate, List<DateTime> c, int ms, int amp, int roomAmp) {
+      for (var i = 0; i < ms ~/ 40; i++) {
+        gate.process(loud(640, amp));
+        c[0] = c[0].add(const Duration(milliseconds: 40));
+      }
+      for (var i = 0; i < 15; i++) {
+        gate.process(loud(640, roomAmp));
+        c[0] = c[0].add(const Duration(milliseconds: 40));
+      }
+    }
+
+    test('in a measured quiet room the bar starts at 4,000, not 6,000', () {
+      final c = clockAt();
+      final gate = MicGate.glasses(clock: () => c[0]);
+      room(gate, c, 3, 600);
+      expect(gate.measuredFloor, closeTo(600, 5));
+      expect(gate.threshold, closeTo(4000, 1));
+      var opens = 0;
+      gate.onOpen = (_, __) => opens++;
+      say(gate, c, 400, 4600, 600);
+      expect(opens, 1, reason: 'a 4,600 sentence opens before anything is learned');
+    });
+
+    test('a TV that lifts the room keeps the bar above itself', () {
+      final c = clockAt();
+      final gate = MicGate.glasses(clock: () => c[0]);
+      room(gate, c, 4, 2800); // a TV's quiet fifth, as measured on L802
+      expect(gate.threshold, closeTo(7000, 1));
+    });
+
+    test('two speech-like misses let a quiet mic be heard', () {
+      final c = clockAt();
+      final gate = MicGate.glasses(clock: () => c[0]);
+      var opens = 0;
+      final misses = <double>[];
+      gate.onOpen = (_, __) => opens++;
+      gate.onMiss = (peak, bar, _, __) => misses.add(bar);
+      room(gate, c, 3, 500);
+      // His voice on this mic: ~3,600, under the 4,000 minimum.
+      say(gate, c, 400, 3600, 500);
+      say(gate, c, 400, 3600, 500);
+      expect(opens, 0);
+      expect(misses, [closeTo(4000, 1), closeTo(4000, 1)]);
+      expect(gate.relaxed, isTrue);
+      expect(gate.threshold, closeTo(3000, 1));
+      say(gate, c, 400, 3600, 500);
+      expect(opens, 1, reason: 'the third sentence gets through');
+    });
+
+    test('short blips and a noisy room never relax the bar', () {
+      final c = clockAt();
+      final quietRoom = MicGate.glasses(clock: () => c[0]);
+      room(quietRoom, c, 3, 500);
+      // 200 ms bursts (a door, a cough): reported, but not speech-like.
+      for (var i = 0; i < 4; i++) {
+        say(quietRoom, c, 200, 3600, 500);
+      }
+      expect(quietRoom.relaxed, isFalse);
+      expect(quietRoom.threshold, closeTo(4000, 1));
+
+      final tvRoom = MicGate.glasses(clock: () => c[0]);
+      room(tvRoom, c, 4, 1600); // a quieter mic's TV room: floor 1,600
+      say(tvRoom, c, 400, 3600, 1600);
+      say(tvRoom, c, 400, 3600, 1600);
+      expect(tvRoom.relaxed, isTrue);
+      expect(tvRoom.threshold, closeTo(4000, 1),
+          reason: 'relaxed, but the room (1,600 x 2.5) still sets the bar');
+    });
+
+    test('the phone profile is untouched', () {
+      final gate = MicGate();
+      expect(gate.speakerBarFloor, 0);
+      expect(gate.threshold, gate.absoluteFloor * gate.noiseMultiplier);
+    });
+
     test('a long sentence does not teach the glasses gate that speech is the room', () {
       var t = DateTime(2026, 1, 1);
       final gate = MicGate.glasses(clock: () => t);

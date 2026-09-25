@@ -255,7 +255,9 @@ class LiveController {
         // the glasses; peaks 8-10k but only 120 ms of them).
         _log.info('mic gate MISS: peak ${peak.round()} vs bar ${bar.round()} '
             '(over bar ${loudMs}ms, over half ${halfMs}ms, '
-            'mean ${gate.recentMeanRms.round()})');
+            'mean ${gate.recentMeanRms.round()}, '
+            'room ${gate.measuredFloor.round()}'
+            '${gate.relaxed ? ', relaxed' : ''})');
         unawaited(_reportMiss(gate, kind, peak, bar, loudMs, halfMs));
       };
     return gate;
@@ -274,7 +276,10 @@ class LiveController {
       bar: bar.round(),
       loudMs: loudMs,
       halfMs: halfMs,
-      floor: gate.noiseFloor.round(),
+      // The room as measured, not the clamped floor (which reads 2,400 in
+      // any quiet room and so says nothing about a quieter mic).
+      floor: (gate.measuredFloor > 0 ? gate.measuredFloor : gate.noiseFloor)
+          .round(),
       mic: kind.name,
       meanRms: gate.recentMeanRms.round(),
       route: diag['route'] as String?,
