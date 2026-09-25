@@ -460,6 +460,41 @@ void main() {
           reason: 'relaxed, but the room (1,600 x 2.5) still sets the bar');
     });
 
+    test('a self-gating mic (near-zero between words) hears quiet speech', () {
+      // L801-03BC 2026-09-25: room p20 3-4 RMS, quiet speech ~1,000-2,000,
+      // loud speech median ~3,900 — "only loud speech is heard".
+      final c = clockAt();
+      final gate = MicGate.glasses(clock: () => c[0]);
+      room(gate, c, 3, 4); // near-digital silence, as measured
+      expect(gate.silentMic, isTrue);
+      expect(gate.threshold, closeTo(1500, 1));
+      var opens = 0;
+      gate.onOpen = (_, __) => opens++;
+      say(gate, c, 400, 1800, 4);
+      room(gate, c, 1, 4); // past the 900 ms hangover
+      expect(opens, 1, reason: 'quiet speech opens');
+      // Loud sentences must not teach the bar back up out of reach.
+      for (var i = 0; i < 3; i++) {
+        say(gate, c, 1200, 3900, 4);
+        room(gate, c, 1, 4);
+      }
+      expect(gate.threshold, closeTo(1500, 1));
+      say(gate, c, 400, 1800, 4);
+      room(gate, c, 1, 4);
+      expect(opens, 5);
+      // A blip shorter than the onset still does not open it.
+      say(gate, c, 120, 2500, 4);
+      expect(opens, 5);
+    });
+
+    test('a mic that hears the room never takes the silent-mic bar', () {
+      final c = clockAt();
+      final gate = MicGate.glasses(clock: () => c[0]);
+      room(gate, c, 3, 600); // an ordinary quiet room on the L802
+      expect(gate.silentMic, isFalse);
+      expect(gate.threshold, closeTo(4000, 1));
+    });
+
     test('the phone profile is untouched', () {
       final gate = MicGate();
       expect(gate.speakerBarFloor, 0);

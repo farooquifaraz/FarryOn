@@ -40,6 +40,8 @@ class MicGate {
     this.fastOpenRatio = 0,
     this.fastOpenMin = 0,
     this.speakerBarFloor = 0,
+    this.silentMicBar = 0,
+    this.silentMicFloor = 0,
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
 
@@ -103,6 +105,14 @@ class MicGate {
         // word reached Farry. Repeated speech-like misses let the bar come
         // down to 3,000 — in a quiet room only (see [speakerBarFloor]).
         speakerBarFloor: 3000.0,
+        // The same pair sends digital silence between words (room p20 of
+        // 3-4 RMS: the glasses gate their own mic), and his quiet speech sat
+        // around 1,000-2,000 — under even the relaxed bar and under half of
+        // it, so it never counted as a miss either ("tez awaaz me bolu tab
+        // hi hearing hoti hai", 2026-09-25). A mic that silent carries no
+        // room to guard against, so the bar may come down to 1,500.
+        silentMicBar: 1500.0,
+        silentMicFloor: 100.0,
         clock: clock,
       );
 
@@ -138,6 +148,25 @@ class MicGate {
   /// rules: the bar never drops under the measured floor × multiplier, so a
   /// TV that lifts the floor keeps the bar above itself.
   final double speakerBarFloor;
+
+  /// The minimum bar (0 = off) when the room measures under
+  /// [silentMicFloor]: a mic that sends near-zero between words is gating
+  /// itself, so there is no room noise to keep above — only the wearer's
+  /// quiet voice to let through. A mic that hears the room (L802: a quiet
+  /// room still measures in the hundreds to thousands) never enters it.
+  final double silentMicBar;
+  final double silentMicFloor;
+
+  /// Whether the room measures as a self-gating (near-silent) mic.
+  ///
+  /// Exactly 0 does not count: that is no signal at all (a muted or empty
+  /// stream), not a mic with its own gate — the pair that needed this
+  /// measured 3-4.
+  bool get silentMic =>
+      silentMicBar > 0 && _rawFloor > 0 && _rawFloor < silentMicFloor;
+
+  /// Whether [_rawFloor] has been measured (it may legitimately be 0).
+  bool _floorMeasured = false;
 
   final int sampleRate;
 
@@ -340,7 +369,13 @@ class MicGate {
     // Once the room is measured the same rule applies before the wearer is
     // learned: waiting for a first opening at the legacy 6,000 meant a
     // quieter mic never opened, so nothing was ever learned (2026-09-25).
-    if (speakerBar && (_speakerLevel > 0 || _rawFloor > 0)) {
+    if (speakerBar && silentMic) {
+      // A self-gating mic: nothing but sound the glasses let through ever
+      // reaches us, so follow neither the legacy floor nor the wearer's
+      // LOUD voice (0.9 x his median put the bar back at 3,500 and his
+      // quiet speech under it again).
+      bar = math.max(silentMicBar, _rawFloor * noiseMultiplier);
+    } else if (speakerBar && (_speakerLevel > 0 || _floorMeasured)) {
       final min = _relaxed ? speakerBarFloor : speakerBarMin;
       final own =
           _speakerLevel > 0 ? math.max(min, _speakerLevel * 0.9) : min;
@@ -407,6 +442,7 @@ class MicGate {
         final p20 =
             sorted[(sorted.length * 0.2).floor().clamp(0, sorted.length - 1)];
         _rawFloor = p20;
+        _floorMeasured = true;
         _noiseFloor = p20.clamp(absoluteFloor, maxNoiseFloor);
       }
     } else if (!_open) {
@@ -558,6 +594,7 @@ class MicGate {
     _lastSpeechAt = null;
     _noiseFloor = absoluteFloor;
     _rawFloor = 0;
+    _floorMeasured = false;
     // The wearer is the same person after a reset; what was learned about
     // their voice stays (only the ROOM is re-learned).
     // An utterance that was cut off (the speaker started) still ends: the
@@ -572,6 +609,7 @@ class MicGate {
   void resetFloor() {
     _noiseFloor = absoluteFloor;
     _rawFloor = 0;
+    _floorMeasured = false;
     _levels.clear();
   }
 
