@@ -1100,9 +1100,18 @@ class LiveController {
     switch (event.type) {
       case 'connectionState':
         final connected = event.data['state'] == 'connected';
+        final name = event.data['name'] as String?;
+        // A battery belongs to the pair that reported it: after a drop, or
+        // on another pair, the old % must go (device 2026-09-25: the chip
+        // said "L801-03BC 99%" — the GS5's last reading).
+        final otherPair = connected &&
+            name != null &&
+            _state.glassesName != null &&
+            name != _state.glassesName;
         _emit(_state.copyWith(
           glassesConnected: connected,
-          glassesName: event.data['name'] as String?,
+          glassesName: name,
+          clearGlassesBattery: !connected || otherPair,
         ));
         // The connect attempt has resolved (either way) — release the in-flight
         // guard so a later reconnect (new session, or after a drop) can proceed.

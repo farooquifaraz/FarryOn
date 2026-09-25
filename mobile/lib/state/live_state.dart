@@ -268,6 +268,7 @@ class LiveSessionState {
     bool? glassesWorn,
     GlassesRecording? recording,
     bool clearRecording = false,
+    bool clearGlassesBattery = false,
     GlassesSync? syncStatus,
     bool clearSync = false,
     GlassesMedia? pendingMedia,
@@ -295,7 +296,9 @@ class LiveSessionState {
         audioKind: audioKind ?? this.audioKind,
         videoKind: videoKind ?? this.videoKind,
         glassesConnected: glassesConnected ?? this.glassesConnected,
-        glassesBattery: glassesBattery ?? this.glassesBattery,
+        glassesBattery: clearGlassesBattery
+            ? null
+            : (glassesBattery ?? this.glassesBattery),
         glassesAudioReady: glassesAudioReady ?? this.glassesAudioReady,
         glassesAudioPaired: glassesAudioPaired ?? this.glassesAudioPaired,
         glassesName: glassesName ?? this.glassesName,

@@ -1289,6 +1289,36 @@ void main() {
       await ctl.dispose();
     });
 
+    test("another pair never shows the last pair's battery", () async {
+      // Device 2026-09-25: after the GS5 (99%) the chip said "L801-03BC 99%"
+      // although that pair never reported a battery.
+      final glasses = FakeGlassesBridge();
+      final ctl = newGlassesController(glasses);
+      await ctl.connect();
+      await tick();
+      glasses.emit('connectionState',
+          {'state': 'connected', 'mac': 'AA', 'name': 'SNT GS5 MAX_9475'});
+      glasses.emit('battery', {'pct': 99, 'charging': false});
+      await tick();
+      expect(ctl.state.glassesBattery, 99);
+
+      glasses.emit('connectionState', {'state': 'disconnected'});
+      await tick();
+      expect(ctl.state.glassesBattery, isNull, reason: 'no pair, no battery');
+
+      glasses.emit('battery', {'pct': 98, 'charging': false});
+      glasses.emit('connectionState',
+          {'state': 'connected', 'mac': 'BB', 'name': 'L801-03BC'});
+      await tick();
+      expect(ctl.state.glassesBattery, isNull,
+          reason: 'a reading that came before the switch is not this pair');
+
+      glasses.emit('battery', {'pct': 57, 'charging': false});
+      await tick();
+      expect(ctl.state.glassesBattery, 57);
+      await ctl.dispose();
+    });
+
     test('the answer reaches the chip', () async {
       final glasses = FakeGlassesBridge();
       final ctl = newGlassesController(glasses);
