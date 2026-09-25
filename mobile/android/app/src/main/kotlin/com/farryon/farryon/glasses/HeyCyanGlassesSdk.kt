@@ -420,8 +420,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         null
     }
 
-    private fun isGlassesName(name: String?): Boolean =
-        !name.isNullOrEmpty() && name.replace(" ", "").uppercase().startsWith("L80")
+    private fun isGlassesName(name: String?): Boolean = looksLikeGlasses(name)
 
     /**
      * Follow the phone's Bluetooth: when a paired L80x comes up on A2DP/HFP
@@ -546,7 +545,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             adapter.bondedDevices.orEmpty().mapNotNull { device ->
                 val name = try { device.name } catch (e: SecurityException) { null }
                 if (name.isNullOrEmpty()) return@mapNotNull null
-                if (!name.replace(" ", "").uppercase().startsWith("L80")) {
+                if (!isGlassesName(name)) {
                     return@mapNotNull null
                 }
                 mapOf<String, Any?>(
@@ -984,8 +983,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 // 2026-07-10: a second unit advertises as "L 801_DD8A" (with a
                 // space), which "L80" prefix missed — normalize out whitespace
                 // and uppercase before matching so all L80x variants pass.
-                val norm = name.replace(" ", "").uppercase()
-                if (!norm.startsWith("L80")) {
+                if (!isGlassesName(name)) {
                     if (filteredLogged.add(device.address)) {
                         Log.i(TAG, "scan filtered out: $name ${device.address} $rssi dBm")
                     }
@@ -3581,4 +3579,18 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         }
         listener = null
     }
+}
+
+/**
+ * Whether a Bluetooth name belongs to one of the glasses the app drives:
+ * the L80x family (L801 / L802, also advertised as "L 801_DD8A") and the
+ * GS4 / GS5 models (advertised as e.g. "SNT GS5 MAX_9475" — Faraz,
+ * 2026-09-25: "GS5 and GS4 ka naam bhi add karo"). Spaces are ignored and
+ * case too. Everything else (TVs, speakers, cars) stays out of the connect
+ * list and is never followed.
+ */
+internal fun looksLikeGlasses(name: String?): Boolean {
+    if (name.isNullOrEmpty()) return false
+    val norm = name.replace(" ", "").uppercase()
+    return norm.startsWith("L80") || "GS4" in norm || "GS5" in norm
 }
