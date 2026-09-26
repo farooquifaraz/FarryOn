@@ -68,20 +68,30 @@ def _hello(app_version: str, features: list[str] | None = None) -> dict:
 
 
 def _first_message(hello: dict) -> dict:
+    return _messages(hello, 1)[0]
+
+
+def _messages(hello: dict, n: int) -> list[dict]:
     client = TestClient(create_app())
     with client.websocket_connect("/ws/live") as ws:
         ws.send_json(hello)
-        return ws.receive_json()
+        return [ws.receive_json() for _ in range(n)]
 
 
 def test_an_old_build_is_refused_with_a_code_it_already_shows(monkeypatch) -> None:
     monkeypatch.setattr(get_settings(), "min_app_build", 2540)
     monkeypatch.setattr(get_settings(), "app_download_url", "https://farryon.izylrn.com/download")
-    msg = _first_message(_hello("1.0.0+4531"))
-    assert msg["type"] == "error" and msg["fatal"] is True
-    assert msg["code"] == "provider_unavailable", "an old build knows this one"
-    assert "new version of FarryOn is required" in msg["message"]
-    assert "https://farryon.izylrn.com/download" in msg["message"]
+    words, stop = _messages(_hello("1.0.0+4531"), 2)
+    # First the words, as a non-fatal error: an old build shows its text as a
+    # banner (its fatal-outage screen has fixed words of its own — device
+    # 2026-09-27, Vivo 4438 read "Service temporarily unavailable").
+    assert words["type"] == "error" and words["fatal"] is False
+    assert words["code"] == "update_required"
+    assert "new version of FarryOn is required" in words["message"]
+    assert "https://farryon.izylrn.com/download" in words["message"]
+    # Then the stop: the fatal code an old build ends on without a reconnect loop.
+    assert stop["type"] == "error" and stop["fatal"] is True
+    assert stop["code"] == "provider_unavailable"
 
 
 def test_a_build_that_knows_the_code_gets_update_required(monkeypatch) -> None:

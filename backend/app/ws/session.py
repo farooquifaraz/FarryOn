@@ -2234,11 +2234,17 @@ class Session:
             min_build=min_build,
             aware=aware,
         )
-        await self._send_error(
-            "update_required" if aware else "provider_unavailable",
-            message,
-            fatal=True,
-        )
+        if aware:
+            await self._send_error("update_required", message, fatal=True)
+            return True
+        # An older build shows an unknown NON-fatal error's text as a banner,
+        # and a fatal provider_unavailable as a stable "try again" screen with
+        # no reconnect loop — but that screen's words are fixed ("Service
+        # temporarily unavailable"), not ours (device 2026-09-27, Vivo 4438).
+        # So the words go first, as a banner, and the fatal code then stops
+        # the session without a loop.
+        await self._send_error("update_required", message, fatal=False)
+        await self._send_error("provider_unavailable", message, fatal=True)
         return True
 
     async def _send_error(
