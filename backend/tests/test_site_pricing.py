@@ -212,23 +212,28 @@ def test_paid_cards_have_no_button_and_the_page_says_where_to_buy(settings) -> N
 
 
 def test_no_page_promises_a_trial_by_days(settings) -> None:
-    """Device 2026-09-26: the CTA banner and the About page said "14-day free
-    trial" while the free tier is 30 talk-minutes, once, with no end date.
-    Both now quote the catalog's minutes, in English and Hindi."""
+    """2026-09-26: the CTA banner and the About page said "14-day free
+    trial" while the free tier is talk-minutes with no end date. Faraz: drop
+    it; the banner keeps only the shipping promise, now 7 to 10 business
+    days (English and Hindi)."""
     from pathlib import Path
 
     import app.web.router as web_router
     from app.web import contact, i18n
 
-    minutes = pricing.trial_minutes(settings)
     for path in (web_router._INDEX, web_router._ABOUT):
         page = pricing.render(
             contact.render(Path(path).read_text(encoding="utf-8"), settings),
             settings,
         )
-        assert "<!--TRIAL_MINUTES-->" not in page
         assert not re.search(r"\b\d+[- ]day free trial", page, re.I)
-        assert f"{minutes} minutes of talk time free" in page
         hindi = i18n.localize(page, "hi", path_en="/about", site="https://x")
-        assert "14 दिन का फ्री ट्रायल" not in hindi
-        assert f"{minutes} मिनट का टॉक टाइम मुफ़्त" in hindi
+        assert "दिन का फ्री ट्रायल" not in hindi
+    home = pricing.render(
+        contact.render(Path(web_router._INDEX).read_text(encoding="utf-8"), settings),
+        settings,
+    )
+    assert "Ships to UAE and GCC in 7 to 10 business days." in home
+    assert "5 business days" not in home
+    hindi = i18n.localize(home, "hi", path_en="/", site="https://x")
+    assert "UAE और GCC में 7 से 10 कार्यदिवसों में डिलीवरी।" in hindi
