@@ -24,6 +24,7 @@ model that forgets to ask still cannot read the wrong inbox.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.tools.base import ToolContext
@@ -139,6 +140,51 @@ def _match(want: str, accts: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
+#: Labels that are ordinary words in any email request ("check my email"),
+#: so hearing them is not the user naming a mailbox.
+_GENERIC_LABELS = {"email", "mail", "e-mail", "inbox", "gmail", "account"}
+
+
+def _said_account(
+    ctx: ToolContext, accts: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """The mailbox the user's OWN words in this turn name, if any.
+
+    Device 2026-09-26: Farry asked "which account?" in its own words, the
+    user said "primary", and the tool — never having asked itself — threw
+    the answer away and asked again ("Primary account Primary account").
+    A mailbox the user named out loud is an answer, whoever asked. Only
+    clear names count: primary / secondary, the full address, or a label
+    that is not an everyday word ("check my email" names nothing).
+    """
+    said = (ctx.user_text() if ctx.user_text is not None else "") or ""
+    text = said.lower().replace("'", " ").replace('"', " ")
+    if not text.strip():
+        return None
+    tokens = set(re.findall(r"[a-z0-9@._-]+", text))
+    if tokens & set(_PRIMARY_WORDS):
+        return accts[0]
+    if tokens & set(_SECONDARY_WORDS) and len(accts) > 1:
+        return accts[1]
+    for a in accts:
+        addr = _address(a).lower()
+        if addr and addr in text:
+            return a
+    for a in accts:
+        lab = _label(a).lower()
+        if lab and lab not in _GENERIC_LABELS and lab in tokens:
+            return a
+    return None
+
+
+def _user_named(
+    ctx: ToolContext, account: str, accts: list[dict[str, Any]]
+) -> bool:
+    """Whether the account the model passed is the one the user just said."""
+    said = _said_account(ctx, accts)
+    return said is not None and said is _match(account, accts)
+
+
 def memory_set(memory: dict[str, Any] | None, address: str) -> None:
     if memory is not None:
         memory["address"] = address
@@ -228,8 +274,15 @@ def resolve_account(
         # read_email went straight to the mailbox with the address the user
         # had confirmed an hour earlier in another session. The spec wants
         # the question every time; the answer to it is the one named account
-        # that is honoured.
-        if memory is not None and not memory.get("asked") and not memory.get("address"):
+        # that is honoured — and so is an account the user named out loud in
+        # this very turn, even when the model asked the question itself
+        # (device 2026-09-26: "primary" had to be said twice).
+        if (
+            memory is not None
+            and not memory.get("asked")
+            and not memory.get("address")
+            and not _user_named(ctx, account, accts)
+        ):
             account = None
         else:
             chosen = _match(account, accts)

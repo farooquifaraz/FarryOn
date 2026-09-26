@@ -228,3 +228,50 @@ async def test_a_named_account_counts_only_after_the_session_has_asked(db_sessio
     assert acct is None and ask["status"] == "needs_selection"
     acct, ask = resolve_account(_ctx(db_session, TWO, memory), "secondary")
     assert ask is None and acct["address"] == "XYZ@test.com"
+
+
+# ---- the user's own words answer the question, whoever asked it ------------
+
+def _said(db_session, emails, words):
+    return ToolContext(
+        session=db_session, emails=emails, email_selection={},
+        user_text=lambda: words,
+    )
+
+
+@pytest.mark.parametrize(
+    "words, account, expected",
+    [
+        ("primary", "primary", "ABC@test.com"),
+        ("Primary account", "primary", "ABC@test.com"),
+        ("use the secondary one", "secondary", "XYZ@test.com"),
+        ("xyz@test.com wala", "XYZ@test.com", "XYZ@test.com"),
+        ("work mailbox check karo", "Work", "XYZ@test.com"),
+    ],
+)
+async def test_an_account_the_user_just_named_is_used_at_once(
+    db_session, words, account, expected
+) -> None:
+    # Device 2026-09-26: Farry asked "which account?" in its own words, the
+    # user said "primary", and the tool asked again — "Primary account
+    # Primary account" in every session.
+    acct, ask = resolve_account(_said(db_session, TWO, words), account)
+    assert ask is None
+    assert acct["address"] == expected
+
+
+@pytest.mark.parametrize(
+    "words, account",
+    [
+        ("check my email", "ABC@test.com"),   # the model filled it in
+        ("check my email", "Personal"),       # nobody named a mailbox
+        ("use primary", "secondary"),         # not what the user said
+        ("", "primary"),                      # no words at all
+    ],
+)
+async def test_an_account_the_user_did_not_name_is_still_asked(
+    db_session, words, account
+) -> None:
+    acct, ask = resolve_account(_said(db_session, TWO, words), account)
+    assert acct is None
+    assert ask["status"] == "needs_selection"
