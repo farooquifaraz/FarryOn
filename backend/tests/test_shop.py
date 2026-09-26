@@ -127,7 +127,7 @@ def test_the_cards_price_and_buy_from_the_one_catalog(monkeypatch) -> None:
     page = shop.render(Path(web_router._INDEX).read_text(encoding="utf-8"), settings)
     assert "<!--PRICE_AED:" not in page and "<!--BUY_ROW:" not in page and "<!--SHOP_CATALOG-->" not in page
     for slug, price in products.PRICES_AED.items():
-        assert f'data-aed="{price}">AED {price}' in page, slug
+        assert f'data-aed="{price}" data-inr=' in page and f">AED {price}</span>" in page, slug
         assert f'data-buy="{slug}"' in page and f"cartBuy('{slug}')" in page
     assert page.count("Buy now") == len(products.PRICES_AED)
     # GS5 offers its colours; the others do not

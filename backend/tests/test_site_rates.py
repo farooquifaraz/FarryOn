@@ -99,5 +99,10 @@ async def test_the_landing_page_carries_the_rates_and_the_picker(monkeypatch) ->
     page = rates.render(page, await rates.current())
     assert 'id="fx-rates"' in page
     assert page.count('class="fx-pick"') == 2, "one picker for the plans, one for the glasses"
-    assert page.count('class="fx" data-aed=') == 8, "four spec cards + four one-time rows"
+    # The four spec cards are the only glasses prices on the page: the
+    # pricing section's hard-coded strip ("Add smart glasses", AED 300…450)
+    # disagreed with the cards once a price was edited in the admin panel,
+    # and was removed (Faraz, 2026-09-26).
+    assert page.count('class="fx" data-aed=') == 4, "the four spec cards"
+    assert "Add smart glasses" not in page
     assert "function fxApply" in page and "fxDetect" in page

@@ -153,7 +153,11 @@ def test_the_admin_edits_a_price_and_the_landing_page_follows() -> None:
 
     r = client.put("/api/v1/admin/prices/gs5", headers=_auth(admin), json={"currency": "AED", "amount": 475})
     assert r.status_code == 200 and r.json()["data"]["prices"]["AED"] == 475
-    assert '"price_aed": 475' in client.get("/").text
+    page = client.get("/").text
+    assert '"price_aed": 475' in page
+    # every GS5 price on the page moved — none still says the old figure
+    # (device 2026-09-26: a hard-coded strip in the pricing section did)
+    assert 'data-aed="475"' in page and 'data-aed="450"' not in page
 
     r = client.put("/api/v1/admin/prices/gs5", headers=_auth(admin), json={"currency": "AED", "amount": 0})
     assert r.status_code == 400 and r.json()["error"]["code"] == "PRICE_RANGE"
