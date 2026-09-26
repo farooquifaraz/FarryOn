@@ -268,7 +268,14 @@ async def product_catalog(slug: str) -> FileResponse:
 @router.get("/download/info", include_in_schema=False)
 async def download_info() -> JSONResponse:
     """Live build metadata for the page (version + per-ABI availability/size)."""
-    out: dict[str, object] = {"version": APP_VERSION}
+    settings = get_settings()
+    out: dict[str, object] = {
+        "version": APP_VERSION,
+        # The oldest build still served (core/app_version) — the app shows a
+        # screen it can't dismiss below it, and "Update available" below
+        # build.build.
+        "minBuild": int(getattr(settings, "min_app_build", 0) or 0),
+    }
     # build-info.json is written by the build-apk workflow beside the APKs:
     # build number, per-ABI versionCode, commit, time. The page shows it so
     # a phone's Settings → Version can be checked against the site.

@@ -353,6 +353,11 @@ class Session:
                 reason = "handshake_failed"
                 return
 
+            # Too old to serve: refused before any provider is connected.
+            if await self._refuse_if_outdated():
+                reason = "update_required"
+                return
+
             # A spent budget is answered BEFORE any provider is connected: a
             # user past their trial used to get a full Gemini session (paid
             # for by the operator) that died on its first audio frame, and
@@ -2194,6 +2199,47 @@ class Session:
                 )
             except Exception as mail_exc:  # noqa: BLE001 - alerting is best effort
                 logger.warning("provider.outage_alert_failed", error=repr(mail_exc))
+
+    async def _refuse_if_outdated(self) -> bool:
+        """Refuse an app older than ``Settings.min_app_build``.
+
+        The app is sideloaded, so this is the only way to make an old copy
+        update: it is told where the new build is and the session ends. A
+        build that lists ``update_required`` in ``client.features`` gets that
+        code (its full-screen Download prompt); an older one gets
+        ``provider_unavailable``, the one fatal code it already shows as a
+        notice with a manual Retry and no reconnect loop. Returns True when
+        it refused.
+        """
+        from app.core.app_version import base_build, is_outdated
+
+        min_build = int(getattr(self._settings, "min_app_build", 0) or 0)
+        client = (self._hello or {}).get("client") or {}
+        version = client.get("appVersion")
+        abi = client.get("abi")
+        if not is_outdated(version, abi, client.get("platform"), min_build):
+            return False
+        url = str(getattr(self._settings, "app_download_url", "") or "").strip()
+        message = (
+            "A new version of FarryOn is required. Download it from "
+            f"{url or 'the FarryOn website'}, install it, then open the app again."
+        )
+        features = client.get("features") or []
+        aware = isinstance(features, list) and "update_required" in features
+        logger.info(
+            "app.update_required",
+            session_id=self.session_id,
+            app_version=str(version)[:32],
+            build=base_build(version, abi),
+            min_build=min_build,
+            aware=aware,
+        )
+        await self._send_error(
+            "update_required" if aware else "provider_unavailable",
+            message,
+            fatal=True,
+        )
+        return True
 
     async def _send_error(
         self, code: str, message: str, *, fatal: bool = False

@@ -510,6 +510,16 @@ class Settings(BaseSettings):
     manual_vad_deaf_seconds: float = Field(default=8.0)
     manual_vad_deaf_reconnect_after: int = Field(default=2)
 
+    # The oldest app build still served (the BASE build — the "build" the
+    # website shows beside the download, e.g. 2531; see core/app_version).
+    # An older Android app is refused at hello with a message that says
+    # where the new one is, and a build that knows the "update_required"
+    # code shows a screen with a Download button instead. The app itself
+    # also reads this from /download/info at start. 0 = no minimum.
+    min_app_build: int = Field(default=0)
+    # Where the refusal message and the app's Download button send people.
+    app_download_url: str = Field(default="https://farryon.izylrn.com/download")
+
     #: Run the model's activity detection MANUALLY for a glasses microphone:
     #: the app's own energy gate says when speech starts and stops
     #: (``speech_start`` / ``speech_end``) and the session maps that to the
