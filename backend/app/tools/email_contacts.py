@@ -190,6 +190,29 @@ def _folders(imap: imaplib.IMAP4_SSL, is_gmail: bool) -> list[tuple[str, str]]:
     return out
 
 
+def _pick_uids(per_word: list[set[bytes]]) -> list[bytes]:
+    """Which messages to read, from one search per name word.
+
+    Messages that carry EVERY word that found anything come first: a
+    surname is often the user's own ("Lubna Farooqui" in Faraz Farooqui's
+    mailbox, device 2026-09-26), and the newest 40 hits for "farooqui" were
+    all his own mail, pushing hers out. A misspelled word finds nothing and
+    simply drops out of the intersection. With no common message, each word
+    keeps its own newest few, so one busy word can't crowd out the other.
+    """
+    hits = [s for s in per_word if s]
+    if not hits:
+        return []
+    common = set.intersection(*hits)
+    if common:
+        return sorted(common, key=int)[-_MAX_MESSAGES:]
+    share = max(1, _MAX_MESSAGES // len(hits))
+    picked: set[bytes] = set()
+    for s in hits:
+        picked.update(sorted(s, key=int)[-share:])
+    return sorted(picked, key=int)
+
+
 def _search_mailbox(host: str, address: str, password: str, name: str
                     ) -> list[dict[str, Any]]:
     """People in one mailbox whose name/address matches ``name``."""
@@ -204,18 +227,18 @@ def _search_mailbox(host: str, address: str, password: str, name: str
                 typ, _ = imap.select(_imap_quote(folder), readonly=True)
                 if typ != "OK":
                     continue
-                found: set[bytes] = set()
+                per_word: list[set[bytes]] = []
                 for word in words:
                     typ, data = imap.uid("SEARCH", header, _imap_quote(word))
                     if typ == "OK" and data and data[0]:
-                        found.update(data[0].split())
+                        per_word.append(set(data[0].split()))
             except imaplib.IMAP4.error as exc:
                 logger.info("email_contacts.search_failed", folder=folder,
                             error=str(exc))
                 continue
-            if not found:
+            uids = _pick_uids(per_word)
+            if not uids:
                 continue
-            uids = sorted(found, key=int)[-_MAX_MESSAGES:]
             rows = _fetch_batch(
                 imap, uids,
                 "(UID BODY.PEEK[HEADER.FIELDS (FROM TO CC DATE)])",

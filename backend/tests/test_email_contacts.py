@@ -268,3 +268,28 @@ async def test_the_phone_is_asked_again_for_the_first_name(db_session) -> None:
     assert asked == ["Lubna Faruqi", "lubna"]
     assert out["status"] == "found"
     assert out["person"]["email"] == "lubna.f@live.com"
+
+
+async def test_a_surname_the_user_shares_does_not_crowd_the_person_out(
+    db_session, monkeypatch
+) -> None:
+    # Device 2026-09-26: "Lubna Farooqui" in Faraz Farooqui's mailbox — the
+    # newest hits for "farooqui" were all other Farooquis, and hers (older)
+    # were never read.
+    others = [
+        _mail(f'"Faraz Farooqui" <faraz{i}@work.com>', "me@gmail.com")
+        for i in range(45)
+    ]
+    gmail = _FakeImap(
+        {"INBOX": {"FROM": [
+            _mail('"Lubna Farooqui" <lubna.f@live.com>', "me@gmail.com"),
+            *others,
+        ]}},
+        {},
+    )
+    _serve(monkeypatch, {"me@gmail.com": gmail})
+    out = await FindEmailContactTool().run(
+        _ctx(db_session, accounts=(_GMAIL,)), name="Lubna Farooqui"
+    )
+    assert out["status"] == "found"
+    assert out["person"]["email"] == "lubna.f@live.com"
