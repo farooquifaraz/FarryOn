@@ -351,6 +351,25 @@ void main() {
         reason: 'no reconnect loop into the same failure');
   });
 
+  test('a build the server no longer serves shows the update screen, no reconnect',
+      () async {
+    await controller.connect();
+    await tick();
+    fake.pushJson({
+      'type': 'error',
+      'code': 'update_required',
+      'message': 'A new version of FarryOn is required.',
+      'fatal': true,
+    });
+    await tick();
+    fake.drop();
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+
+    expect(controller.state.updateRequired, isTrue);
+    expect(controller.state.connection, ConnectionStatus.disconnected,
+        reason: 'a reconnect would only be refused again');
+  });
+
   test('a spent talk budget ends the session with Upgrade on offer, no reconnect',
       () async {
     // Refused at connect (before `ready`): the server sends the fatal error

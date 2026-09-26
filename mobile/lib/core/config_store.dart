@@ -35,6 +35,7 @@ class ConfigStore {
   /// again on every launch. Each feature still asks for what it needs when it
   /// needs it, which is the path that has always existed.
   static const String _permissionIntroKey = 'onboarding.permissionIntro';
+  static const String _updateOfferKey = 'update.offerDismissed';
 
   /// account id -> app password, hydrated from the keystore during [init] so
   /// the synchronous [load] can attach secrets without an await.
@@ -210,6 +211,13 @@ class ConfigStore {
   /// Remember that it has been shown, whatever the user chose.
   static Future<void> markPermissionIntroSeen() async =>
       _prefs?.setBool(_permissionIntroKey, true);
+
+  /// The newest build whose "Update available" offer the user put off with
+  /// "Later" (0 = none) — that build is not offered again.
+  static int updateOfferDismissed() => _prefs?.getInt(_updateOfferKey) ?? 0;
+
+  static Future<void> markUpdateOfferDismissed(int build) async =>
+      _prefs?.setInt(_updateOfferKey, build);
 
   static Future<void> save(AppConfig c) async {
     final p = _prefs;

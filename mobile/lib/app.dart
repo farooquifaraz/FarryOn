@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/app_update.dart';
 import 'core/config_store.dart';
 import 'core/theme.dart';
 import 'features/auth/splash_screen.dart';
 import 'features/live/live_screen.dart';
 import 'features/onboarding/permission_intro_screen.dart';
+import 'features/update/update_screens.dart';
 import 'state/auth.dart';
+import 'state/providers.dart';
 
 /// Root widget: "Midnight Aurora" theming and the auth-gated home route.
 class FarryOnApp extends ConsumerStatefulWidget {
@@ -18,6 +21,16 @@ class FarryOnApp extends ConsumerStatefulWidget {
 
 class _FarryOnAppState extends ConsumerState<FarryOnApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
+
+  @override
+  void initState() {
+    super.initState();
+    // Is there a newer build on the website, or is this one too old? Asked
+    // once per start, after the first frame so a dialog has somewhere to go.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      runStartupUpdateCheck(ref, () => _navigatorKey.currentContext);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -74,6 +87,18 @@ class _AuthGateState extends ConsumerState<AuthGate> {
 
   @override
   Widget build(BuildContext context) {
+    // Too old to use — found at start (/download/info) or refused by the
+    // server at hello. Nothing else is reachable until the new build is in.
+    final update = ref.watch(appUpdateProvider);
+    final refused = ref.watch(liveProvider.select((s) => s.updateRequired));
+    if ((update?.required ?? false) || refused) {
+      return UpdateRequiredScreen(
+        downloadUrl: update?.downloadUrl ??
+            ref.read(configProvider).httpBase.replace(
+                path:
+                    '/download/${AppUpdate.abi() == 'arm32' ? 'arm32' : 'arm64'}'),
+      );
+    }
     final auth = ref.watch(authProvider);
     if (auth.isRestoring) return const _RestoreSplash();
     if (!auth.isSignedIn) return const SplashScreen();

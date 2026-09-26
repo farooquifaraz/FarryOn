@@ -129,6 +129,7 @@ class LiveSessionState {
     this.permissionsGranted = false,
     this.capReached = false,
     this.serviceDown = false,
+    this.updateRequired = false,
   });
 
   /// Socket-level status.
@@ -243,6 +244,10 @@ class LiveSessionState {
   /// failure. Cleared when a new session starts.
   final bool serviceDown;
 
+  /// The server refused this build as too old (`update_required`): the app
+  /// shows its full-screen Download prompt instead of the live screen.
+  final bool updateRequired;
+
   bool get isConnected => connection == ConnectionStatus.connected;
 
   LiveSessionState copyWith({
@@ -280,6 +285,7 @@ class LiveSessionState {
     bool? permissionsGranted,
     bool? capReached,
     bool? serviceDown,
+    bool? updateRequired,
   }) =>
       LiveSessionState(
         connection: connection ?? this.connection,
@@ -314,6 +320,7 @@ class LiveSessionState {
         permissionsGranted: permissionsGranted ?? this.permissionsGranted,
         capReached: capReached ?? this.capReached,
         serviceDown: serviceDown ?? this.serviceDown,
+        updateRequired: updateRequired ?? this.updateRequired,
       );
 }
 

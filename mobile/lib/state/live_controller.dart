@@ -1838,6 +1838,20 @@ class LiveController {
             _client.endedByServer();
             unawaited(disconnect());
           }
+        } else if (msg.code == 'update_required') {
+          // This build is older than the server still serves. The server
+          // closes the socket next; that close must not look like a drop
+          // (a reconnect would only be refused again). The app swaps the
+          // live screen for its Download prompt (app.dart).
+          _client.endedByServer();
+          _emit(_state.copyWith(
+            updateRequired: true,
+            transcripts: [
+              ..._state.transcripts,
+              TranscriptEntry(role: 'notice', text: msg.message, isFinal: true),
+            ],
+          ));
+          unawaited(disconnect());
         } else if (msg.fatal &&
             (msg.code == 'provider_credits' ||
                 msg.code == 'provider_unavailable')) {

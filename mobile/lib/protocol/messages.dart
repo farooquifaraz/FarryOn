@@ -11,6 +11,7 @@
 ///   * (for server messages) a `fromJson` factory.
 library;
 
+import '../core/app_update.dart';
 import 'protocol.dart';
 
 // ---------------------------------------------------------------------------
@@ -110,7 +111,17 @@ class HelloMessage extends ClientMessage {
   Map<String, dynamic> toJson() => {
         'type': type,
         'protocolVersion': protocolVersion,
-        'client': {'platform': platform, 'appVersion': appVersion},
+        'client': {
+          'platform': platform,
+          'appVersion': appVersion,
+          // Which APK this is (arm64 / arm32 / x86_64): the server reads the
+          // base build off the versionCode with it (core/app_update.dart).
+          if (AppUpdate.abi().isNotEmpty) 'abi': AppUpdate.abi(),
+          // Codes this build understands. "update_required" gets the
+          // full-screen Download prompt; a build without it is refused with
+          // provider_unavailable instead, which it already shows.
+          'features': const ['update_required'],
+        },
         'device': device.toJson(),
         'session': {'resumeId': resumeId},
         if (provider != null) 'provider': provider,

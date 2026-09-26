@@ -21,7 +21,12 @@ void main() {
 
       expect(json['type'], 'hello');
       expect(json['protocolVersion'], kProtocolVersion);
-      expect(json['client'], {'platform': 'android', 'appVersion': '1.0.0'});
+      expect(json['client'], {
+        'platform': 'android',
+        'appVersion': '1.0.0',
+        // The test host is not Android, so no ABI is sent.
+        'features': ['update_required'],
+      });
       expect(json['device'], {
         'kind': 'phone',
         'id': 'phone-default',
