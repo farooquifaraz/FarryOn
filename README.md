@@ -35,6 +35,7 @@ modular, testable codebase.
 | `docs/`       | Architecture, data-flow, prompts, deployment plan, diagrams     |
 | `docs/MEDIA.md` | How product photos/video reach the site's glasses galleries.  |
 | `docs/SITE_CONTACT.md` | Website WhatsApp buttons, social icons, dead-link policy. |
+| `docs/WHATSAPP_INBOX_ARCHITECTURE.md` | Design spec: read incoming WhatsApp messages, reply hands-free (Android). |
 | `docker-compose.yml` | Local stack (backend + Postgres + Prometheus + Grafana) |
 
 ## Quick start
