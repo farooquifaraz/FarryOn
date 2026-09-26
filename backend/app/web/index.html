@@ -24,13 +24,6 @@ html{scroll-behavior:smooth}
 body{
   background:var(--bg);color:var(--t);font-family:var(--fb);
   overflow-x:hidden;line-height:1.6;
-  animation:bgShift 20s ease-in-out infinite alternate;
-}
-@keyframes bgShift{
-  0%{background:#030912}
-  33%{background:#030A14}
-  66%{background:#050815}
-  100%{background:#030912}
 }
 
 /* CSS Grid pattern layer */
@@ -44,18 +37,6 @@ body::before{
   background-position:0 0,0 0,15px 15px;
 }
 
-/* ═══════════════════════════════════════════
-   NEURAL NETWORK CANVAS — OVERLAY
-   mix-blend-mode:screen = particles glow
-   on dark bg, text stays readable
-═══════════════════════════════════════════ */
-#bg-canvas{
-  position:fixed;inset:0;
-  z-index:998;          /* above everything */
-  pointer-events:none;
-  mix-blend-mode:screen; /* KEY: dark=invisible, color=glow */
-  opacity:.8;
-}
 
 /* ═══════════════════════════════════════════
    GRADIENT TEXT UTILITIES
@@ -112,9 +93,8 @@ nav::after{content:'';position:absolute;bottom:-1px;left:10%;right:10%;height:1p
   padding:120px 5% 80px;position:relative;overflow:hidden;
   background:linear-gradient(180deg,rgba(3,9,18,0) 0%,rgba(3,9,18,.3) 100%)}
 .hero .orb{width:600px;height:600px}
-.hero .orb1{top:-10%;right:-5%;animation:floatOrb 12s ease-in-out infinite}
-.hero .orb2{bottom:-20%;left:-10%;animation:floatOrb 16s ease-in-out infinite reverse}
-@keyframes floatOrb{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(30px,-30px) scale(1.05)}}
+.hero .orb1{top:-10%;right:-5%}
+.hero .orb2{bottom:-20%;left:-10%}
 .hero-inner{max-width:1200px;margin:0 auto;width:100%;display:grid;
   grid-template-columns:1fr 1fr;gap:80px;align-items:center;position:relative;z-index:2}
 .hero-tag{display:inline-flex;align-items:center;gap:8px;
@@ -207,7 +187,7 @@ section{padding:100px 5%;position:relative;overflow:hidden}
 ═══════════════════════════════════════════ */
 .features{background:linear-gradient(180deg,var(--bg) 0%,var(--bg2) 100%)}
 .features .orb{width:500px;height:500px}
-.features .orb1{bottom:-20%;right:-10%;animation:floatOrb 14s ease-in-out infinite}
+.features .orb1{bottom:-20%;right:-10%}
 .features-header{text-align:center;margin-bottom:72px}
 .features-header .sec-sub{margin:0 auto}
 /* Grid with gradient border via box-shadow trick */
@@ -243,7 +223,7 @@ section{padding:100px 5%;position:relative;overflow:hidden}
 ═══════════════════════════════════════════ */
 .spotlight{background:linear-gradient(135deg,var(--bg2) 0%,var(--bg) 100%)}
 .spotlight .orb{width:550px;height:550px}
-.spotlight .orb1{top:-20%;left:-15%;animation:floatOrb 18s ease-in-out infinite}
+.spotlight .orb1{top:-20%;left:-15%}
 .spot-inner{display:grid;grid-template-columns:1fr 1fr;gap:72px;align-items:center;
   max-width:1200px;margin:0 auto;position:relative;z-index:2}
 .spot-label{font-size:.68rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
@@ -293,7 +273,7 @@ section{padding:100px 5%;position:relative;overflow:hidden}
 ═══════════════════════════════════════════ */
 .hiw{background:linear-gradient(180deg,var(--bg) 0%,var(--bg2) 100%)}
 .hiw .orb{width:500px;height:500px}
-.hiw .orb1{top:50%;right:-15%;transform:translateY(-50%);animation:floatOrb 15s ease-in-out infinite}
+.hiw .orb1{top:50%;right:-15%;transform:translateY(-50%)}
 .hiw-header{text-align:center;margin-bottom:72px}
 .hiw-header .sec-sub{margin:0 auto}
 .hiw-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:0;
@@ -320,7 +300,7 @@ section{padding:100px 5%;position:relative;overflow:hidden}
 ═══════════════════════════════════════════ */
 .specs{background:linear-gradient(135deg,var(--bg2) 0%,var(--bg) 100%)}
 .specs .orb{width:500px;height:500px}
-.specs .orb1{bottom:-15%;left:-10%;animation:floatOrb 17s ease-in-out infinite reverse}
+.specs .orb1{bottom:-15%;left:-10%}
 .specs-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:56px}
 /* Gradient border cards */
 .spec-card{border-radius:20px;position:relative;transition:.3s}
@@ -357,7 +337,7 @@ section{padding:100px 5%;position:relative;overflow:hidden}
 ═══════════════════════════════════════════ */
 .pricing{background:linear-gradient(180deg,var(--bg2) 0%,var(--bg) 100%)}
 .pricing .orb{width:600px;height:600px}
-.pricing .orb1{bottom:-25%;left:50%;transform:translateX(-50%);animation:floatOrb 20s ease-in-out infinite}
+.pricing .orb1{bottom:-25%;left:50%;transform:translateX(-50%)}
 .pricing-header{text-align:center;margin-bottom:56px}
 .pricing-header .sec-sub{margin:0 auto 32px}
 .toggle{display:flex;align-items:center;justify-content:center;gap:14px;font-size:.87rem}
@@ -535,7 +515,7 @@ section{padding:100px 5%;position:relative;overflow:hidden}
 ═══════════════════════════════════════════ */
 .faq{background:linear-gradient(180deg,var(--bg) 0%,var(--bg2) 100%)}
 .faq .orb{width:500px;height:500px}
-.faq .orb1{top:0%;right:-15%;animation:floatOrb 16s ease-in-out infinite}
+.faq .orb1{top:0%;right:-15%}
 .faq-inner{max-width:700px;margin:0 auto;position:relative;z-index:2}
 .faq-header{text-align:center;margin-bottom:56px}
 .faq-item{border-bottom:1px solid rgba(0,212,170,.07)}
@@ -632,8 +612,6 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
 </head>
 <body>
 
-<!-- NEURAL NETWORK CANVAS — OVERLAY with mix-blend-mode:screen -->
-<canvas id="bg-canvas"></canvas>
 
 <!-- NAV -->
 <nav>
@@ -1087,81 +1065,6 @@ footer::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
 
 <!--PRICING_RATES-->
 <script>
-/* ═══════════════════════════════════════════════════════════════
-   NEURAL NETWORK — fixed overlay, mix-blend-mode:screen
-   Dark canvas bg = invisible | Colored particles = visible glow
-═══════════════════════════════════════════════════════════════ */
-(function(){
-  const C = document.getElementById('bg-canvas');
-  const ctx = C.getContext('2d');
-  let W, H, pts = [];
-  const N = 90, DIST = 130;
-
-  function resize(){ W = C.width = window.innerWidth; H = C.height = window.innerHeight; }
-
-  function Pt(){
-    const types = ['teal','purple','blue'];
-    this.type = types[Math.floor(Math.random()*types.length)];
-    if(Math.random()>.7) this.type='teal'; // more teal
-    this.x = Math.random()*W; this.y = Math.random()*H;
-    this.vx = (Math.random()-.5)*.3; this.vy = (Math.random()-.5)*.3;
-    this.r = Math.random()*1.5+.5;
-    this.a = Math.random()*.6+.3;
-    // Occasional larger glow nodes
-    if(Math.random()>.88){ this.r=3+Math.random()*2; this.a=.5+Math.random()*.3; this.glow=true; }
-  }
-
-  function color(type,a){
-    if(type==='teal') return `rgba(0,212,170,${a})`;
-    if(type==='purple') return `rgba(150,90,255,${a})`;
-    return `rgba(0,180,255,${a})`;
-  }
-
-  function init(){ resize(); pts=[]; for(let i=0;i<N;i++) pts.push(new Pt()); }
-
-  function draw(){
-    ctx.clearRect(0,0,W,H); // TRANSPARENT background — critical for mix-blend-mode
-
-    for(let i=0;i<pts.length;i++){
-      const p=pts[i];
-      p.x+=p.vx; p.y+=p.vy;
-      if(p.x<-20) p.x=W+20; if(p.x>W+20) p.x=-20;
-      if(p.y<-20) p.y=H+20; if(p.y>H+20) p.y=-20;
-
-      // Draw glow for larger nodes
-      if(p.glow){
-        const g=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,p.r*6);
-        g.addColorStop(0,color(p.type,p.a*.8));
-        g.addColorStop(1,color(p.type,0));
-        ctx.beginPath(); ctx.arc(p.x,p.y,p.r*6,0,Math.PI*2);
-        ctx.fillStyle=g; ctx.fill();
-      }
-
-      // Draw particle
-      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
-      ctx.fillStyle=color(p.type,p.a); ctx.fill();
-
-      // Draw connections
-      for(let j=i+1;j<pts.length;j++){
-        const q=pts[j];
-        const dx=p.x-q.x, dy=p.y-q.y;
-        const d=Math.sqrt(dx*dx+dy*dy);
-        if(d<DIST){
-          const al=(1-d/DIST)*.18;
-          const gr=ctx.createLinearGradient(p.x,p.y,q.x,q.y);
-          gr.addColorStop(0,color(p.type,al));
-          gr.addColorStop(1,color(q.type,al));
-          ctx.strokeStyle=gr; ctx.lineWidth=.7;
-          ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke();
-        }
-      }
-    }
-    requestAnimationFrame(draw);
-  }
-
-  init(); draw();
-  window.addEventListener('resize',init);
-})();
 
 /* ═══════════════════════════════════════════
    SCROLL REVEAL
