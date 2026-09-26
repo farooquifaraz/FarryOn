@@ -135,6 +135,16 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
          *  read as a signed byte exactly as its parser does. */
         private const val THUMBNAIL_CMD = -3
 
+        /** Thumbnail recovery budgets, per photo. Kept at one each: the
+         *  backend waits ~12 s for a photo in total, and a retake (the Dart
+         *  side's own retry) must still fit after them. */
+        private const val THUMBNAIL_RESTARTS = 1
+        private const val THUMBNAIL_NUDGES = 1
+
+        /** "total = 0" answers this soon after a start-over are replies to
+         *  the old stream's requests, not a refusal of the new one. */
+        private const val THUMBNAIL_ABORT_ECHO_MS = 500L
+
         /** requestId used for captures the glasses started themselves
          *  (touch gesture) — there is no app-side request to correlate. */
         private const val DEVICE_INITIATED_REQUEST_ID = "device-initiated"
@@ -2763,22 +2773,67 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         thumbnailWatchdog = null
     }
 
+    /**
+     * One transfer on our own chunk loop (see fetchThumbnail). Guarded by its
+     * own lock: chunks arrive on the BLE thread, the watchdog runs on main.
+     */
+    private class ThumbnailTransfer(val gen: Int, val requestId: String) {
+        var assembler = ThumbnailAssembler()
+
+        /** Start-over budget for when the glasses give up (total = 0). */
+        var restartsLeft = THUMBNAIL_RESTARTS
+
+        /** Ask-again budget for when the asked-for chunk never comes. */
+        var nudgesLeft = THUMBNAIL_NUDGES
+
+        /** When the last start-over was asked (0 = never). */
+        var restartedAtMs = 0L
+    }
+
+    /** The transfer on our own chunk loop, or null (idle / SDK fallback). */
+    @Volatile private var thumbnailTransfer: ThumbnailTransfer? = null
+
     private fun armThumbnailWatchdog(gen: Int, requestId: String) {
         cancelThumbnailWatchdog()
         val r = Runnable {
             if (gen != thumbnailFetchGen) return@Runnable
-            // Abort: bump the generation so late chunks are ignored.
-            thumbnailFetchGen++
-            thumbnailFetchActive = false
-            photoRequestId = null
-            Log.i(TAG, "thumbnail transfer stalled ($requestId)")
-            emitCaptureFailed(
-                requestId, "transfer_stalled",
-                "no thumbnail chunk within ${thumbnailChunkTimeoutMs(callMicRunning)} ms"
-            )
+            val waited = "no thumbnail chunk within ${thumbnailChunkTimeoutMs(callMicRunning)} ms"
+            val t = thumbnailTransfer?.takeIf { it.gen == gen }
+            if (t == null) {
+                failThumbnail(gen, requestId, waited)
+                return@Runnable
+            }
+            synchronized(t) {
+                if (gen != thumbnailFetchGen) return@Runnable
+                if (t.nudgesLeft > 0) {
+                    // A request or its answer got lost. Asking once more is
+                    // far cheaper than retaking the photo; if the first answer
+                    // was only slow, the assembler drops the second copy.
+                    t.nudgesLeft--
+                    val index = t.assembler.expected
+                    Log.i(TAG, "thumbnail: $waited — asking for chunk $index again")
+                    armThumbnailWatchdog(gen, requestId)
+                    requestThumbnailChunk(index)
+                    return@Runnable
+                }
+                failThumbnail(gen, requestId, waited)
+            }
         }
         thumbnailWatchdog = r
         main.postDelayed(r, thumbnailChunkTimeoutMs(callMicRunning))
+    }
+
+    /** Give up on the transfer: typed failure, late chunks ignored. */
+    private fun failThumbnail(gen: Int, requestId: String, detail: String) {
+        if (gen != thumbnailFetchGen) return
+        cancelThumbnailWatchdog()
+        // Bump the generation so late chunks are ignored.
+        thumbnailFetchGen++
+        thumbnailFetchActive = false
+        thumbnailTransfer = null
+        photoRequestId = null
+        Log.i(TAG, "thumbnail transfer stalled ($requestId): $detail")
+        emitCaptureFailed(requestId, "transfer_stalled", detail)
     }
 
     /**
@@ -2811,19 +2866,21 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
             fetchThumbnailViaSdk(gen, requestId)
             return
         }
-        val assembler = ThumbnailAssembler()
+        val transfer = ThumbnailTransfer(gen, requestId)
+        thumbnailTransfer = transfer
         // Our own handler in the SDK's cmd-0xFD slot — exactly where
         // getPictureThumbnails would put its own — so every chunk passes
         // through the assembler, which asks for the next one only once.
         LargeDataHandler.getInstance().respMap[THUMBNAIL_CMD] =
             object : ILargeDataResponse<PictureThumbnailsResponse> {
                 override fun parseData(cmd: Int, resp: PictureThumbnailsResponse?) {
-                    onThumbnailPacket(gen, requestId, assembler, resp?.subData)
+                    onThumbnailPacket(transfer, resp?.subData)
                 }
             }
         if (!requestThumbnailChunk(0)) {
             // The reflective call broke at runtime: hand the stream back to
             // the SDK's own loop rather than lose the photo.
+            thumbnailTransfer = null
             fetchThumbnailViaSdk(gen, requestId)
         }
     }
@@ -2832,33 +2889,57 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      * One thumbnail packet from the glasses (BLE callback thread). The
      * assembler decides; this only acts on its verdict.
      */
-    private fun onThumbnailPacket(
-        gen: Int,
-        requestId: String,
-        assembler: ThumbnailAssembler,
-        packet: ByteArray?,
-    ) {
-        synchronized(assembler) {
-            if (gen != thumbnailFetchGen) return // stalled/superseded
+    private fun onThumbnailPacket(t: ThumbnailTransfer, packet: ByteArray?) {
+        synchronized(t) {
+            if (t.gen != thumbnailFetchGen) return // stalled/superseded
+            val assembler = t.assembler
             when (val step = assembler.accept(packet)) {
                 is ThumbnailAssembler.Step.Next -> {
-                    armThumbnailWatchdog(gen, requestId)
+                    armThumbnailWatchdog(t.gen, t.requestId)
                     requestThumbnailChunk(step.index)
                 }
                 is ThumbnailAssembler.Step.Done -> {
                     if (assembler.duplicates > 0) {
                         Log.i(TAG, "thumbnail: dropped ${assembler.duplicates} repeated chunk(s)")
                     }
-                    completeThumbnail(requestId, step.jpeg)
+                    completeThumbnail(t.requestId, step.jpeg)
                 }
                 // A repeat asks for nothing; the chunk actually asked for is
                 // still on its way and the watchdog is still running.
                 ThumbnailAssembler.Step.Duplicate -> Unit
-                ThumbnailAssembler.Step.Aborted -> Unit
+                ThumbnailAssembler.Step.Aborted -> onThumbnailAborted(t)
                 ThumbnailAssembler.Step.Malformed ->
                     Log.i(TAG, "thumbnail: unreadable packet (${packet?.size ?: 0} bytes)")
             }
         }
+    }
+
+    /**
+     * The glasses answered "total = 0": they have stopped this stream (GS5
+     * MAX, 2026-09-25, mid-transfer at 24/26 and 29/33). The SDK swallows
+     * this packet silently, which used to cost a 3 s stall before failing.
+     * The photo is still on the glasses, so start over from chunk 0 at once;
+     * a second give-up fails right away. Caller holds [t]'s lock.
+     */
+    private fun onThumbnailAborted(t: ThumbnailTransfer) {
+        val now = SystemClock.elapsedRealtime()
+        // Answers to requests sent before the start-over can still be in
+        // flight; they are not the glasses refusing the new stream.
+        if (t.restartedAtMs > 0 && now - t.restartedAtMs < THUMBNAIL_ABORT_ECHO_MS) return
+        if (t.restartsLeft > 0) {
+            t.restartsLeft--
+            t.restartedAtMs = now
+            val a = t.assembler
+            Log.i(
+                TAG,
+                "thumbnail: glasses stopped at chunk ${a.expected}/${a.total} — starting over"
+            )
+            t.assembler = ThumbnailAssembler()
+            armThumbnailWatchdog(t.gen, t.requestId)
+            requestThumbnailChunk(0)
+            return
+        }
+        failThumbnail(t.gen, t.requestId, "the glasses stopped sending the picture (total = 0)")
     }
 
     /**
@@ -2913,6 +2994,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     private fun completeThumbnail(requestId: String, jpeg: ByteArray) {
         cancelThumbnailWatchdog()
         thumbnailFetchActive = false
+        thumbnailTransfer = null
         val elapsed = (SystemClock.elapsedRealtime() - photoStartMs).toInt()
         Log.i(TAG, "thumbnail complete: ${jpeg.size} bytes in $elapsed ms")
         if (jpeg.isNotEmpty()) {
