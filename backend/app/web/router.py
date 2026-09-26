@@ -144,7 +144,10 @@ async def _about(lang: str, request: Request) -> HTMLResponse:
     the bottom appears the moment the number is configured.
     """
     try:
-        page = contact.render(_ABOUT.read_text(encoding="utf-8"), get_settings())
+        settings = get_settings()
+        page = pricing.render(
+            contact.render(_ABOUT.read_text(encoding="utf-8"), settings), settings
+        )
     except OSError as exc:  # pragma: no cover - the template ships with the package
         logger.warning("site.about_missing", error=str(exc))
         raise HTTPException(status_code=404, detail="page not found") from exc

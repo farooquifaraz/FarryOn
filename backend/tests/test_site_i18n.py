@@ -144,7 +144,7 @@ def test_every_hindi_key_is_still_on_the_page_or_a_rule(tmp_path, monkeypatch) -
     products._cache.clear()
     page = web._INDEX.read_text(encoding="utf-8")
     landing = contact.render(shop.render(products.render(pricing.render(page, settings), settings), settings), settings)
-    about = contact.render(web._ABOUT.read_text(encoding="utf-8"), settings)
+    about = pricing.render(contact.render(web._ABOUT.read_text(encoding="utf-8"), settings), settings)
     present = set(_text_nodes(landing)) | set(_text_nodes(about))
     for html in (landing, about):
         present |= set(re.findall(r'data-[ma]="([^"]+)"', html))
