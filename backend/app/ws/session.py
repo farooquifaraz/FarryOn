@@ -294,6 +294,12 @@ class Session:
         #: Quiet-triggered nudge bookkeeping: the last frame time a quiet
         #: nudge was sent for, so each pause nudges at most once.
         self._quiet_nudged_for: float = 0.0
+        #: Manual detection: when the last question went to the provider
+        #: (activity window closed / typed turn) with no provider event
+        #: since, and how many such questions in a row went unanswered.
+        #: See ``_maybe_manual_deaf``.
+        self._awaiting_reply_since: float = 0.0
+        self._unanswered: int = 0
         self._turn_watch_task: asyncio.Task[None] | None = None
         #: Consecutive nudges (either kind) with nothing heard since. Reset
         #: the moment the provider transcribes the user.
@@ -1270,6 +1276,8 @@ class Session:
                         self._orchestrator.note_user_turn()
                         self._orchestrator.note_user_text(text)
                 await self._send_state("thinking")
+                if self._manual_vad:
+                    self._awaiting_reply_since = time.monotonic()
                 # A typed turn has no audio VAD, so give the model the current
                 # camera view for "what is this?"-style questions even when
                 # continuous streaming is gated off.
@@ -1697,6 +1705,7 @@ class Session:
             while not self._closing:
                 await asyncio.sleep(0.1)
                 await self._maybe_quiet_nudge(time.monotonic())
+                await self._maybe_manual_deaf(time.monotonic())
         except asyncio.CancelledError:  # pragma: no cover - teardown
             raise
         except Exception as exc:  # noqa: BLE001 - a watcher must never end a session
@@ -1761,6 +1770,53 @@ class Session:
             quiet_s=round(now - last, 1),
             unheard_s=None,
         )
+        return True
+
+    def _provider_alive(self) -> None:
+        """Anything at all from the provider proves it is listening."""
+        self._awaiting_reply_since = 0.0
+        self._unanswered = 0
+
+    async def _maybe_manual_deaf(self, now: float) -> bool:
+        """Manual detection: a question the provider never answered.
+
+        The unheard-audio triggers above reason about the provider's own
+        detector and are off under manual markers, so a connection that went
+        deaf there stayed deaf (device 2026-09-26 15:12). Each question with
+        no provider event for ``manual_vad_deaf_seconds`` is one unanswered;
+        ``manual_vad_deaf_reconnect_after`` in a row close the socket without
+        a notice, exactly like the stuck reconnect, so the app comes back on
+        a fresh connection with the conversation kept. Returns True when it
+        reconnected.
+        """
+        wait = float(getattr(self._settings, "manual_vad_deaf_seconds", 0.0) or 0.0)
+        if wait <= 0.0 or self._mode != "agent" or not self._manual_vad:
+            return False
+        since = self._awaiting_reply_since
+        if since <= 0.0 or now - since < wait:
+            return False
+        self._awaiting_reply_since = 0.0  # counted once per question
+        self._unanswered += 1
+        logger.info(
+            "turn.unanswered",
+            session_id=self.session_id,
+            turn=self._turn_index,
+            count=self._unanswered,
+        )
+        give_up = int(getattr(self._settings, "manual_vad_deaf_reconnect_after", 0) or 0)
+        if give_up <= 0 or self._unanswered < give_up:
+            return False
+        logger.warning(
+            "turn.stuck_reconnect",
+            session_id=self.session_id,
+            turn=self._turn_index,
+            reason="manual_unanswered",
+            unanswered=self._unanswered,
+        )
+        self._unanswered = 0
+        closer = getattr(self, "_close_for_reconnect", None)
+        if callable(closer):
+            await closer()
         return True
 
     async def _note_unheard_audio(self, now: float) -> None:
@@ -1898,6 +1954,8 @@ class Session:
             else:
                 await self._gateway.send_activity_end()
             self._activity_open = start
+            if not start:
+                self._awaiting_reply_since = time.monotonic()
         except Exception as exc:  # noqa: BLE001 - a marker must never end a session
             logger.warning(
                 "vad.marker_failed",
@@ -1963,6 +2021,7 @@ class Session:
 
     async def _handle_event(self, event: GatewayEvent) -> None:
         """Map one :class:`GatewayEvent` to a ``PROTOCOL.md`` server message."""
+        self._provider_alive()
         if event.type == EventType.TRANSCRIPT:
             assert isinstance(event, TranscriptEvent)
             if (

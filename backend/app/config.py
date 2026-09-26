@@ -496,6 +496,19 @@ class Settings(BaseSettings):
     # audio cap: music keeps the gate open and must never trip this. 0
     # disables.
     stuck_reconnect_after_nudges: int = Field(default=3)
+    # The same last resort under MANUAL activity detection (glasses mic),
+    # where every trigger above is off because the turn window is ours.
+    # Device 2026-09-26 15:12: after a normal turn the provider answered
+    # nothing more — two utterances, a typed "yes" and two more utterances,
+    # no transcript, no reply, no error — and the session sat deaf until the
+    # user gave up. A question (the activity window closed, or a typed turn)
+    # that gets no provider event at all within `manual_vad_deaf_seconds`
+    # counts as unanswered; after `manual_vad_deaf_reconnect_after` in a row
+    # the socket is closed the same silent way, so the app reconnects and
+    # the resume handle keeps the conversation. Any provider event resets
+    # the count. 0 disables.
+    manual_vad_deaf_seconds: float = Field(default=8.0)
+    manual_vad_deaf_reconnect_after: int = Field(default=2)
 
     #: Run the model's activity detection MANUALLY for a glasses microphone:
     #: the app's own energy gate says when speech starts and stops

@@ -335,3 +335,88 @@ async def test_a_switchable_provider_still_reconnects_when_the_mic_changes_mode(
     assert s.closes == 0
     await s._audio_kind_changed("phone")  # manual → automatic: reconnect
     assert s.closes == 1
+
+
+# ---- #2d: the same last resort under manual detection -----------------------------
+
+class _DeafSettings:
+    manual_vad_deaf_seconds = 8.0
+    manual_vad_deaf_reconnect_after = 2
+
+
+class _MarkerGateway(_Gateway):
+    async def send_activity_start(self):
+        pass
+
+    async def send_activity_end(self):
+        pass
+
+
+def _manual_session():
+    s = _session(_MarkerGateway(), _DeafSettings())
+    s._mode = "agent"
+    s._manual_vad = True
+    closed: list[bool] = []
+
+    async def fake_close():
+        closed.append(True)
+
+    s._close_for_reconnect = fake_close  # type: ignore[method-assign]
+    return s, closed
+
+
+async def test_closing_the_activity_window_starts_the_wait() -> None:
+    s, _ = _manual_session()
+    await s._handle_speech_marker(True)
+    assert s._awaiting_reply_since == 0.0, "still talking: nothing asked yet"
+    await s._handle_speech_marker(False)
+    assert s._awaiting_reply_since > 0.0
+
+
+async def test_two_unanswered_questions_drop_the_socket() -> None:
+    # Device 2026-09-26 15:12: after a normal turn the provider answered
+    # nothing — utterances and a typed "yes" — and the glasses session sat
+    # deaf, because every stuck trigger was off under manual markers.
+    s, closed = _manual_session()
+    s._awaiting_reply_since = 100.0
+    assert await s._maybe_manual_deaf(107.0) is False, "under 8 s: wait"
+    assert await s._maybe_manual_deaf(108.5) is False
+    assert s._unanswered == 1 and closed == []
+    assert await s._maybe_manual_deaf(120.0) is False, "counted once per question"
+    s._awaiting_reply_since = 130.0
+    assert await s._maybe_manual_deaf(138.5) is True
+    assert closed == [True]
+    assert s._unanswered == 0
+
+
+async def test_any_provider_event_resets_the_count() -> None:
+    s, closed = _manual_session()
+    s._awaiting_reply_since = 100.0
+    await s._maybe_manual_deaf(109.0)
+    assert s._unanswered == 1
+    s._provider_alive()  # a transcript, audio, a tool call — anything
+    s._awaiting_reply_since = 130.0
+    await s._maybe_manual_deaf(139.0)
+    assert closed == [], "one unanswered after an answer is not two in a row"
+
+
+async def test_an_answer_in_time_is_not_unanswered() -> None:
+    s, closed = _manual_session()
+    s._awaiting_reply_since = 100.0
+    s._provider_alive()
+    assert await s._maybe_manual_deaf(200.0) is False
+    assert s._unanswered == 0 and closed == []
+
+
+async def test_the_provider_detector_path_is_untouched() -> None:
+    s, closed = _manual_session()
+    s._manual_vad = False  # automatic detection has its own triggers
+    s._awaiting_reply_since = 100.0
+    assert await s._maybe_manual_deaf(500.0) is False
+    assert closed == []
+
+
+def test_the_manual_deaf_defaults() -> None:
+    f = Settings.model_fields
+    assert f["manual_vad_deaf_seconds"].default == 8.0
+    assert f["manual_vad_deaf_reconnect_after"].default == 2
