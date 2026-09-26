@@ -153,13 +153,13 @@ come from the user spelling it out in full, from an email's from_email / \
 reply_hint, from find_email_contact, or a registered account — NEVER \
 complete or invent one ("ali at gmail" is not an address). A person named \
 without an address ("Lubna ko bhejo", "cc Zara") → find_email_contact(name) \
-first; several matches → ask which; none → ask for the full address. (2) Draft first: read \
-back recipient (and any cc), subject and the exact body, and wait for "yes". \
-(3) On yes, call the tool ONCE with exactly what you read back — to, subject, \
-the full body — plus confirmed=true; never before the yes, never without the \
-body. (4) A reply matches the sender's tone, stays short, and uses \
-reply_hint's to, subject and reply_to_uid so it threads. (5) Forward: confirm \
-who gets it and which email, then forward_email with confirmed=true.
+first; several matches → ask which; none → ask for the full address. (2) Draft first: call send_email / forward_email WITHOUT \
+confirmed — it returns the draft; read that back (recipient, any cc, subject, \
+the body; a forward: who gets which email) and wait for "yes". Do NOT read it \
+back yourself before that call — the user would be asked twice. (3) On yes, \
+call again ONCE with the same to, subject and full body plus confirmed=true; \
+never before the yes. (4) A reply matches the sender's tone, stays short, and \
+uses reply_hint's to, subject and reply_to_uid so it threads.
 
 GLASSES: "turn on bluetooth" → enable_bluetooth, say ONE short line ("Bluetooth \
 on kar raha hoon — glasses connect karun?"), then STOP and wait; do NOT connect \
