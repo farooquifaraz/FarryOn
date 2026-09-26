@@ -394,6 +394,7 @@ class ResolveContactResultMessage extends ClientMessage {
   final String status;
 
   /// `[{contactId, displayName, maskedNumber}]` — empty unless found/ambiguous.
+  /// For an `email` request: `[{displayName, emails}]`.
   final List<Map<String, dynamic>> candidates;
 
   @override
@@ -655,7 +656,8 @@ class ResolveContactRequestMessage extends ServerMessage {
   final String requestId;
   final String name;
 
-  /// whatsapp | sms | telegram.
+  /// whatsapp | sms | telegram | call, or email (find_email_contact: the
+  /// reply then carries each match's email addresses).
   final String channel;
 
   factory ResolveContactRequestMessage.fromJson(Map<String, dynamic> json) =>

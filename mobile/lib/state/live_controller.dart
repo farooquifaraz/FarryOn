@@ -2563,6 +2563,30 @@ class LiveController {
         return;
       }
       final matches = await _findContactsByName(req.name);
+      if (req.channel == 'email') {
+        // find_email_contact: the addresses themselves, since the server is
+        // the one that sends the mail. On Android the phone's contacts carry
+        // every synced Google (Gmail) contact, so this is the Gmail address
+        // book too.
+        final candidates = <Map<String, dynamic>>[];
+        for (final c in matches) {
+          final emails = c.emails
+              .map((e) => e.address.trim())
+              .where((a) => a.contains('@'))
+              .toSet()
+              .toList();
+          if (emails.isEmpty) continue;
+          candidates.add({'displayName': c.displayName, 'emails': emails});
+          if (candidates.length >= 8) break;
+        }
+        if (candidates.isEmpty) {
+          await reply(matches.isEmpty ? 'not_found' : 'no_email');
+        } else {
+          await reply(
+              candidates.length == 1 ? 'found' : 'ambiguous', candidates);
+        }
+        return;
+      }
       // Collapse to distinct numbers, minting an id for each.
       final seen = <String>{};
       final candidates = <Map<String, dynamic>>[];
