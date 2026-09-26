@@ -135,6 +135,9 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
          *  read as a signed byte exactly as its parser does. */
         private const val THUMBNAIL_CMD = -3
 
+        /** BleOperateManager.init() already ran in this process (see init). */
+        @Volatile private var vendorReceiversRegistered = false
+
         /** Thumbnail recovery budgets, per photo. Kept at one each: the
          *  backend waits ~12 s for a photo in total, and a retake (the Dart
          *  side's own retry) must still fit after them. */
@@ -3644,7 +3647,18 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         LargeDataHandler.getInstance()
         BleOperateManager.getInstance(app).apply {
             setApplication(app)
-            init()
+            // The vendor init() does one thing: register three receivers
+            // (incl. the big-data one that feeds the packet parser), with no
+            // way to unregister them. This bridge is rebuilt whenever the
+            // activity is (app closed from recents, process kept), so a second
+            // init() doubled every glasses packet — single-piece notifies
+            // arrived twice and the multi-piece photo jammed the parser for
+            // good (device 2026-09-26 15:07: capture notify never reached us).
+            // Once per process is all it ever needs.
+            if (!vendorReceiversRegistered) {
+                init()
+                vendorReceiversRegistered = true
+            }
         }
         BleBaseControl.getInstance(app).setmContext(app)
         localBroadcast(register = true, bleReceiver, BleAction.getIntentFilter())
