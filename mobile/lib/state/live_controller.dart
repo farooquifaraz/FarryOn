@@ -3290,18 +3290,44 @@ class LiveController {
   /// glasses" is no proof a recorder is running: a release (glasses left the
   /// phone's Bluetooth) stops the native mic underneath a kind that never
   /// changed (device 2026-09-15 23:22).
-  Future<void> _ensureGlassesMic() async {
-    if (_registry.audioKind != CaptureDeviceKind.glasses) {
-      await setAudioDevice(CaptureDeviceKind.glasses);
-      return;
-    }
-    if (!_state.micOpen) return;
-    _log.info('glasses mic: restarting on the returned link');
-    await _stopAudio();
-    await _startAudio();
+  Future<void> _ensureGlassesMic() => _queueAudioSwitch(() async {
+        if (_registry.audioKind != CaptureDeviceKind.glasses) {
+          await _switchAudioDevice(CaptureDeviceKind.glasses);
+          return;
+        }
+        if (!_state.micOpen) return;
+        _log.info('glasses mic: restarting on the returned link');
+        await _stopAudio();
+        await _startAudio();
+      });
+
+  /// Device switches run one at a time, in the order they were asked for.
+  /// A switch awaits stop/initialize/start, and the "already on that
+  /// device?" check reads the registry, which only changes midway. Unqueued,
+  /// a glasses drop-and-return two seconds apart (device 2026-09-26 15:04,
+  /// app reopened) asked "phone" then "glasses": the second call saw the
+  /// registry still on glasses, returned at once, and the first then
+  /// finished — the camera stayed on the phone while the glasses were back.
+  /// Queued, each request runs after the one before, so the last one wins.
+  Future<void> _audioSwitches = Future<void>.value();
+  Future<void> _videoSwitches = Future<void>.value();
+
+  Future<void> _queueAudioSwitch(Future<void> Function() job) {
+    final run = _audioSwitches.then((_) => job());
+    _audioSwitches = run.catchError((Object _) {});
+    return run;
   }
 
-  Future<void> setAudioDevice(CaptureDeviceKind kind) async {
+  Future<void> _queueVideoSwitch(Future<void> Function() job) {
+    final run = _videoSwitches.then((_) => job());
+    _videoSwitches = run.catchError((Object _) {});
+    return run;
+  }
+
+  Future<void> setAudioDevice(CaptureDeviceKind kind) =>
+      _queueAudioSwitch(() => _switchAudioDevice(kind));
+
+  Future<void> _switchAudioDevice(CaptureDeviceKind kind) async {
     if (kind == _registry.audioKind) return;
     _log.info('audio device → $kind');
     final wasListening = _state.micOpen;
@@ -3316,7 +3342,10 @@ class LiveController {
 
   /// Select the camera device (phone ⇄ glasses). Restarts only the video
   /// stream; audio is untouched.
-  Future<void> setVideoDevice(CaptureDeviceKind kind) async {
+  Future<void> setVideoDevice(CaptureDeviceKind kind) =>
+      _queueVideoSwitch(() => _switchVideoDevice(kind));
+
+  Future<void> _switchVideoDevice(CaptureDeviceKind kind) async {
     if (kind == _registry.videoKind) return;
     _log.info('video device → $kind');
     final wasOn = _state.cameraOn;

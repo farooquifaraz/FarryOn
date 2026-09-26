@@ -1319,6 +1319,31 @@ void main() {
       await ctl.dispose();
     });
 
+    test('glasses that drop and come straight back keep the camera', () async {
+      // Device 2026-09-26 15:04 (app reopened): the link dropped and was back
+      // two seconds later. "Phone" was still switching when "glasses" was
+      // asked; the second call saw the registry still on glasses and did
+      // nothing, and the photo was then taken with the phone camera.
+      final glasses = FakeGlassesBridge();
+      final ctl = newGlassesController(glasses);
+      await ctl.connect();
+      await tick();
+      glasses.emit('connectionState',
+          {'state': 'connected', 'mac': 'AA', 'name': 'SNT GS5 MAX_9475'});
+      await tick();
+      expect(ctl.state.videoKind, 'glasses');
+
+      // Drop and return back to back — no settling in between.
+      glasses.emit('connectionState', {'state': 'disconnected'});
+      glasses.emit('connectionState',
+          {'state': 'connected', 'mac': 'AA', 'name': 'SNT GS5 MAX_9475'});
+      await tick();
+      await tick();
+      expect(ctl.state.videoKind, 'glasses',
+          reason: 'the last request (glasses) must win');
+      await ctl.dispose();
+    });
+
     test('the answer reaches the chip', () async {
       final glasses = FakeGlassesBridge();
       final ctl = newGlassesController(glasses);
