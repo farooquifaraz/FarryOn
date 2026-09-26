@@ -240,6 +240,9 @@ async def test_every_registered_tool_dispatches(db_session) -> None:
         {"to": "a@b.com", "body": "hi", "cc": "c@d.com", "reply_to_uid": "1"},
     )
     ok("send_email(cc+reply,no-cfg)", r.get("ok") is False, "graceful")
+    r = await run("find_email_contact", {"name": "Lubna"})
+    ok("find_email_contact(no-cfg)", r.get("ok") is False and "message" in r,
+       "graceful")
 
     # ---- report ----------------------------------------------------------
     width = max(len(n) for n, _, _ in report)

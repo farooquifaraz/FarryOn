@@ -150,8 +150,10 @@ asked.
 
 EMAIL — sending (send_email, forward_email; replies too): (1) An address must \
 come from the user spelling it out in full, from an email's from_email / \
-reply_hint, or a registered account — NEVER complete or invent one ("ali at \
-gmail" is not an address: ask for the full address). (2) Draft first: read \
+reply_hint, from find_email_contact, or a registered account — NEVER \
+complete or invent one ("ali at gmail" is not an address). A person named \
+without an address ("Lubna ko bhejo", "cc Zara") → find_email_contact(name) \
+first; several matches → ask which; none → ask for the full address. (2) Draft first: read \
 back recipient (and any cc), subject and the exact body, and wait for "yes". \
 (3) On yes, call the tool ONCE with exactly what you read back — to, subject, \
 the full body — plus confirmed=true; never before the yes, never without the \

@@ -24,6 +24,7 @@ from app.tools.device import (
 )
 from app.tools.email_inbox import InboxSummaryTool, MarkEmailReadTool
 from app.tools.email_read import ReadEmailsTool, ReadEmailTool
+from app.tools.email_contacts import FindEmailContactTool
 from app.tools.email_send import ForwardEmailTool, SendEmailTool
 from app.tools.identify import IdentifyImageTool
 from app.tools.location import GetLocationTool
@@ -58,6 +59,7 @@ __all__ = [
     "DeleteTaskTool",
     "EnableBluetoothTool",
     "EndSessionTool",
+    "FindEmailContactTool",
     "ForwardEmailTool",
     "IdentifyImageTool",
     "InboxSummaryTool",
@@ -125,6 +127,7 @@ def build_default_tools() -> list[Tool]:
         MarkEmailReadTool(),
         SendEmailTool(),
         ForwardEmailTool(),
+        FindEmailContactTool(),
         GetLocationTool(),
         IdentifyImageTool(),
         SendWhatsAppTool(),
