@@ -36,8 +36,10 @@ import com.glasses.ble.base.bluetooth.BleBaseControl
 import com.glasses.ble.base.bluetooth.BleOperateManager
 import com.glasses.ble.base.bluetooth.DeviceManager
 import com.glasses.ble.base.bluetooth.QCBluetoothCallbackCloneReceiver
+import com.glasses.ble.base.communication.ILargeDataResponse
 import com.glasses.ble.base.communication.LargeDataHandler
 import com.glasses.ble.base.communication.bigData.resp.GlassesDeviceNotifyListener
+import com.glasses.ble.base.communication.bigData.resp.PictureThumbnailsResponse
 import com.glasses.ble.base.communication.bigData.resp.GlassesDeviceNotifyRsp
 import com.glasses.ble.base.communication.file.FileHandle
 import com.glasses.ble.base.communication.file.SimpleCallback
@@ -128,6 +130,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         /** Vendor thumbnailSize argument (range 0x00..0x06). 0x02 measures
          *  512×384 / 15-33 KB — recognition-grade; lower is faster. */
         private const val THUMBNAIL_SIZE: Byte = 0x02
+
+        /** The SDK's response-map key for thumbnail chunks: cmd byte 0xFD,
+         *  read as a signed byte exactly as its parser does. */
+        private const val THUMBNAIL_CMD = -3
 
         /** requestId used for captures the glasses started themselves
          *  (touch gesture) — there is no app-side request to correlate. */
@@ -2800,8 +2806,68 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         // Device-initiated captures (touch gesture) have no app-side request.
         val requestId = photoRequestId ?: DEVICE_INITIATED_REQUEST_ID
         val gen = ++thumbnailFetchGen
-        val buffer = java.io.ByteArrayOutputStream()
         armThumbnailWatchdog(gen, requestId)
+        if (thumbnailChunkRequest == null) {
+            fetchThumbnailViaSdk(gen, requestId)
+            return
+        }
+        val assembler = ThumbnailAssembler()
+        // Our own handler in the SDK's cmd-0xFD slot — exactly where
+        // getPictureThumbnails would put its own — so every chunk passes
+        // through the assembler, which asks for the next one only once.
+        LargeDataHandler.getInstance().respMap[THUMBNAIL_CMD] =
+            object : ILargeDataResponse<PictureThumbnailsResponse> {
+                override fun parseData(cmd: Int, resp: PictureThumbnailsResponse?) {
+                    onThumbnailPacket(gen, requestId, assembler, resp?.subData)
+                }
+            }
+        if (!requestThumbnailChunk(0)) {
+            // The reflective call broke at runtime: hand the stream back to
+            // the SDK's own loop rather than lose the photo.
+            fetchThumbnailViaSdk(gen, requestId)
+        }
+    }
+
+    /**
+     * One thumbnail packet from the glasses (BLE callback thread). The
+     * assembler decides; this only acts on its verdict.
+     */
+    private fun onThumbnailPacket(
+        gen: Int,
+        requestId: String,
+        assembler: ThumbnailAssembler,
+        packet: ByteArray?,
+    ) {
+        synchronized(assembler) {
+            if (gen != thumbnailFetchGen) return // stalled/superseded
+            when (val step = assembler.accept(packet)) {
+                is ThumbnailAssembler.Step.Next -> {
+                    armThumbnailWatchdog(gen, requestId)
+                    requestThumbnailChunk(step.index)
+                }
+                is ThumbnailAssembler.Step.Done -> {
+                    if (assembler.duplicates > 0) {
+                        Log.i(TAG, "thumbnail: dropped ${assembler.duplicates} repeated chunk(s)")
+                    }
+                    completeThumbnail(requestId, step.jpeg)
+                }
+                // A repeat asks for nothing; the chunk actually asked for is
+                // still on its way and the watchdog is still running.
+                ThumbnailAssembler.Step.Duplicate -> Unit
+                ThumbnailAssembler.Step.Aborted -> Unit
+                ThumbnailAssembler.Step.Malformed ->
+                    Log.i(TAG, "thumbnail: unreadable packet (${packet?.size ?: 0} bytes)")
+            }
+        }
+    }
+
+    /**
+     * The SDK's own loop (it asks for the next chunk on EVERY arrival, so a
+     * repeated chunk multiplies). Only used when the private request method
+     * is missing from a future .aar.
+     */
+    private fun fetchThumbnailViaSdk(gen: Int, requestId: String) {
+        val buffer = java.io.ByteArrayOutputStream()
         LargeDataHandler.getInstance().getPictureThumbnails { _, done, data ->
             if (gen != thumbnailFetchGen) return@getPictureThumbnails // aborted
             if (data != null && data.isNotEmpty()) buffer.write(data)
@@ -2809,36 +2875,70 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 armThumbnailWatchdog(gen, requestId)
                 return@getPictureThumbnails
             }
-            cancelThumbnailWatchdog()
-            thumbnailFetchActive = false
-            val jpeg = buffer.toByteArray()
-            val elapsed = (SystemClock.elapsedRealtime() - photoStartMs).toInt()
-            Log.i(TAG, "thumbnail complete: ${jpeg.size} bytes in $elapsed ms")
-            if (jpeg.isNotEmpty()) {
-                // Persist for test 3.3 (thumbnail → AI recognition offline):
-                // exactly the bytes Stage B would send to Gemini Vision.
-                try {
-                    File(albumDir, "thumb_${System.currentTimeMillis()}.jpg")
-                        .writeBytes(jpeg)
-                } catch (e: Exception) {
-                    Log.i(TAG, "thumb save: $e")
-                }
-                emit(
-                    "thumbnail",
-                    mapOf(
-                        "requestId" to requestId,
-                        "jpeg" to jpeg,
-                        "elapsedMs" to if (photoRequestId != null) elapsed else -1,
-                    )
+            completeThumbnail(requestId, buffer.toByteArray())
+        }
+    }
+
+    /** Ask the glasses for thumbnail chunk [index]. False if the call failed. */
+    private fun requestThumbnailChunk(index: Int): Boolean {
+        val method = thumbnailChunkRequest ?: return false
+        return try {
+            method.invoke(LargeDataHandler.getInstance(), index)
+            true
+        } catch (e: Throwable) {
+            Log.i(TAG, "thumbnail chunk $index request failed: $e")
+            false
+        }
+    }
+
+    /**
+     * `LargeDataHandler.syncPictureThumbnails(int)` — the SDK's own "send me
+     * chunk N" (cmd 0xFD, `01 <N:2 LE>`). Private in the .aar, so reached by
+     * reflection (release builds are not minified); null if a future SDK
+     * renames it, and the fetch then falls back to getPictureThumbnails.
+     */
+    private val thumbnailChunkRequest: java.lang.reflect.Method? by lazy {
+        try {
+            LargeDataHandler::class.java
+                .getDeclaredMethod("syncPictureThumbnails", Int::class.javaPrimitiveType)
+                .apply { isAccessible = true }
+        } catch (e: Throwable) {
+            Log.i(TAG, "syncPictureThumbnails unavailable — SDK thumbnail loop: $e")
+            null
+        }
+    }
+
+    /** The whole thumbnail is in (or came back empty): report it and let the
+     *  link and the call mic go back to normal. */
+    private fun completeThumbnail(requestId: String, jpeg: ByteArray) {
+        cancelThumbnailWatchdog()
+        thumbnailFetchActive = false
+        val elapsed = (SystemClock.elapsedRealtime() - photoStartMs).toInt()
+        Log.i(TAG, "thumbnail complete: ${jpeg.size} bytes in $elapsed ms")
+        if (jpeg.isNotEmpty()) {
+            // Persist for test 3.3 (thumbnail → AI recognition offline):
+            // exactly the bytes Stage B would send to Gemini Vision.
+            try {
+                File(albumDir, "thumb_${System.currentTimeMillis()}.jpg")
+                    .writeBytes(jpeg)
+            } catch (e: Exception) {
+                Log.i(TAG, "thumb save: $e")
+            }
+            emit(
+                "thumbnail",
+                mapOf(
+                    "requestId" to requestId,
+                    "jpeg" to jpeg,
+                    "elapsedMs" to if (photoRequestId != null) elapsed else -1,
                 )
-            } else {
-                emitCaptureFailed(requestId, "empty_image", "thumbnail fetch: 0 bytes")
-            }
-            photoRequestId = null
-            main.post {
-                setFastLink(false)
-                resumeCallMicIfPaused()
-            }
+            )
+        } else {
+            emitCaptureFailed(requestId, "empty_image", "thumbnail fetch: 0 bytes")
+        }
+        photoRequestId = null
+        main.post {
+            setFastLink(false)
+            resumeCallMicIfPaused()
         }
     }
 

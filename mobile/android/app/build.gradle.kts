@@ -124,4 +124,6 @@ dependencies {
     // NoClassDefFoundError: okhttp3.MediaType (hit on-device 2026-07-06).
     implementation("com.squareup.okhttp3:okhttp:4.9.3")
     implementation("com.google.code.gson:gson:2.8.9")
+    // Plain-JVM tests for the pure glasses logic (ThumbnailAssembler).
+    testImplementation("junit:junit:4.13.2")
 }
