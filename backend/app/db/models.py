@@ -704,6 +704,31 @@ class Order(Base):
     )
 
 
+class ShopPrice(Base):
+    """A price set from the admin panel (modules/shop), overriding the list
+    in ``app.web.products``.
+
+    One row per (``key``, ``currency``): ``key`` is a model slug (``gs5``) or
+    a delivery destination (``delivery:IN``, ``delivery:*`` for everywhere
+    else); ``amount`` is whole units of ``currency``. Absent row = the price
+    in the code. The website, the cart and the Stripe charge all read the
+    same merged list (``service.price_book``).
+    """
+
+    __tablename__ = "shop_prices"
+    __table_args__ = (
+        Index("ix_shop_prices_key_currency", "key", "currency", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(40))
+    currency: Mapped[str] = mapped_column(String(3))
+    amount: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
 class ShopStock(Base):
     """What is sold out, set from the admin panel (modules/shop).
 

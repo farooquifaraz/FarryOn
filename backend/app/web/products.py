@@ -142,6 +142,39 @@ def delivery_charge(country: str, currency: str) -> int:
     table = DELIVERY.get(country.upper()) or DELIVERY["*"]
     return int(table.get(currency.upper(), 0))
 
+
+class PriceBook:
+    """The prices actually in force: the lists above, with whatever the
+    admin panel changed laid over them (``modules.shop.service.price_book``).
+
+    Built once per request and handed to everything that prints or charges
+    a price — the spec cards, the cart catalog, the Stripe lines — so the
+    figure a buyer sees is the figure they pay, even right after an edit.
+    """
+
+    def __init__(
+        self,
+        prices: dict[str, dict[str, int]] | None = None,
+        delivery: dict[str, dict[str, int]] | None = None,
+    ) -> None:
+        self.prices = {s: dict(p) for s, p in (prices or PRICES).items()}
+        self.delivery = {c: dict(p) for c, p in (delivery or DELIVERY).items()}
+
+    def price(self, slug: str, currency: str) -> int:
+        return int(self.prices[slug][currency.upper()])
+
+    def aed(self) -> dict[str, int]:
+        return {slug: p["AED"] for slug, p in self.prices.items()}
+
+    def delivery_charge(self, country: str, currency: str) -> int:
+        table = self.delivery.get(country.upper()) or self.delivery["*"]
+        return int(table.get(currency.upper(), 0))
+
+
+def default_book() -> PriceBook:
+    """The code's own lists, untouched — for callers with no database."""
+    return PriceBook()
+
 # Colour choices, for the models that come in more than one.
 COLOURS: dict[str, list[str]] = {
     "gs5": ["Black", "Red", "Cream"],

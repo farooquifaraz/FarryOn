@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.responses import AppError
-from app.db.models import Order, ShopStock
+from app.db.models import Order, ShopPrice, ShopStock
 from app.logging_conf import get_logger
 from app.modules.shop.mail import (  # noqa: F401 - re-exported for callers
     address_line,
@@ -25,10 +25,12 @@ from app.modules.shop.schemas import CartItem, Customer
 from app.web.products import (
     COLOURS,
     CURRENCIES,
+    DELIVERY,
     MODELS,
     PRICES,
     PRICES_AED,
-    delivery_charge,
+    PriceBook,
+    default_book,
 )
 
 logger = get_logger(__name__)
@@ -77,7 +79,113 @@ async def set_stock(db: AsyncSession, key: str, *, in_stock: bool) -> dict:
     return {**known[key], "in_stock": in_stock}
 
 
-def _line(item: CartItem, sold_out: set[str], currency: str = "AED") -> dict:
+# ---- Prices -----------------------------------------------------------------
+
+#: Ceilings that catch a slipped key (a price typed with two extra zeros),
+#: in whole units per currency. Delivery may be 0 (free); a model may not.
+_MAX_PRICE = {"AED": 100_000, "INR": 2_500_000, "USD": 30_000}
+_DELIVERY_PREFIX = "delivery:"
+
+
+def price_keys() -> list[dict]:
+    """Every priced thing, in card order: each model, then each delivery
+    destination (a named country first, "*" = everywhere else last)."""
+    out = [{"key": slug, "label": MODELS[slug], "kind": "model"} for slug in PRICES]
+    for country in DELIVERY:
+        label = "Delivery — everywhere else" if country == "*" else f"Delivery — {country}"
+        out.append({"key": f"{_DELIVERY_PREFIX}{country}", "label": label, "kind": "delivery"})
+    return out
+
+
+def _default_prices(key: str) -> dict[str, int]:
+    if key.startswith(_DELIVERY_PREFIX):
+        return dict(DELIVERY[key[len(_DELIVERY_PREFIX):]])
+    return dict(PRICES[key])
+
+
+async def price_book(db: AsyncSession) -> PriceBook:
+    """The prices in force: the code's lists with the admin's edits laid
+    over them. A row for a key or currency that no longer exists is ignored
+    rather than trusted."""
+    rows = (await db.execute(select(ShopPrice))).scalars().all()
+    book = default_book()
+    for r in rows:
+        cur = (r.currency or "").upper()
+        if cur not in CURRENCIES or r.amount is None:
+            continue
+        if r.key.startswith(_DELIVERY_PREFIX):
+            country = r.key[len(_DELIVERY_PREFIX):]
+            if country in book.delivery:
+                book.delivery[country][cur] = int(r.amount)
+        elif r.key in book.prices:
+            book.prices[r.key][cur] = int(r.amount)
+    return book
+
+
+async def price_list(db: AsyncSession) -> list[dict]:
+    """The admin's table: each priced thing, what is charged now in each
+    currency, the code's default, and which currencies were changed."""
+    book = await price_book(db)
+    out = []
+    for k in price_keys():
+        key = k["key"]
+        if k["kind"] == "delivery":
+            now = book.delivery[key[len(_DELIVERY_PREFIX):]]
+        else:
+            now = book.prices[key]
+        default = _default_prices(key)
+        out.append({
+            **k,
+            "prices": {c: int(now[c]) for c in CURRENCIES},
+            "defaults": {c: int(default[c]) for c in CURRENCIES},
+            "custom": [c for c in CURRENCIES if int(now[c]) != int(default[c])],
+        })
+    return out
+
+
+async def set_price(
+    db: AsyncSession, key: str, *, currency: str, amount: int | None
+) -> tuple[dict, int | None]:
+    """Set one price (``amount``) or put it back to the code's list
+    (``None``). Returns the key's row as :func:`price_list` shows it, and
+    the amount charged before the change (for the audit log)."""
+    known = {k["key"]: k for k in price_keys()}
+    if key not in known:
+        raise AppError("UNKNOWN_KEY", f"'{key}' isn't a model or delivery we price.", status_code=404)
+    currency = currency.upper()
+    if currency not in CURRENCIES:
+        raise AppError("CURRENCY", f"Use one of {', '.join(CURRENCIES)}.", status_code=400)
+    is_delivery = known[key]["kind"] == "delivery"
+    if amount is not None:
+        floor = 0 if is_delivery else 1
+        if amount < floor or amount > _MAX_PRICE[currency]:
+            raise AppError(
+                "PRICE_RANGE",
+                f"{currency} price must be between {floor} and {_MAX_PRICE[currency]:,}.",
+                status_code=400,
+            )
+    before = next(r for r in await price_list(db) if r["key"] == key)["prices"][currency]
+    row = (
+        await db.execute(
+            select(ShopPrice).where(ShopPrice.key == key, ShopPrice.currency == currency)
+        )
+    ).scalar_one_or_none()
+    if amount is None:
+        if row is not None:
+            await db.delete(row)
+    elif row is None:
+        db.add(ShopPrice(key=key, currency=currency, amount=int(amount)))
+    else:
+        row.amount = int(amount)
+        row.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info("shop.price_set", key=key, currency=currency, amount=amount, before=before)
+    return next(r for r in await price_list(db) if r["key"] == key), before
+
+
+def _line(
+    item: CartItem, sold_out: set[str], currency: str = "AED", book: PriceBook | None = None
+) -> dict:
     """One Stripe line item, priced from the catalog — never from the client.
 
     Refuses a model or colour that is sold out: the page greys those out,
@@ -109,16 +217,16 @@ def _line(item: CartItem, sold_out: set[str], currency: str = "AED") -> dict:
         "quantity": item.qty,
         "price_data": {
             "currency": currency.lower(),
-            "unit_amount": PRICES[item.slug][currency] * 100,
+            "unit_amount": (book or default_book()).price(item.slug, currency) * 100,
             "product_data": {"name": name},
         },
     }
 
 
-def _delivery_line(country: str, currency: str) -> dict | None:
+def _delivery_line(country: str, currency: str, book: PriceBook | None = None) -> dict | None:
     """The courier, as a line of its own on the Stripe page — or None when
     delivery there is free."""
-    amount = delivery_charge(country, currency)
+    amount = (book or default_book()).delivery_charge(country, currency)
     if amount <= 0:
         return None
     return {
@@ -131,7 +239,9 @@ def _delivery_line(country: str, currency: str) -> dict | None:
     }
 
 
-def _summary(items: list[CartItem], currency: str = "AED") -> list[dict]:
+def _summary(
+    items: list[CartItem], currency: str = "AED", book: PriceBook | None = None
+) -> list[dict]:
     """The order's own record of what was bought — in the row and the mails.
     ``price`` is per unit in the order's currency; ``price_aed`` stays for
     older readers."""
@@ -141,8 +251,8 @@ def _summary(items: list[CartItem], currency: str = "AED") -> list[dict]:
             "name": MODELS[i.slug],
             "colour": (i.colour or None) if COLOURS.get(i.slug) else None,
             "qty": i.qty,
-            "price": PRICES[i.slug][currency],
-            "price_aed": PRICES_AED[i.slug],
+            "price": (book or default_book()).price(i.slug, currency),
+            "price_aed": (book or default_book()).price(i.slug, "AED"),
         }
         for i in items
     ]
@@ -227,12 +337,15 @@ async def create_checkout(
             status_code=400,
         )
     sold_out = await sold_out_keys(db)
-    lines = [_line(i, sold_out, currency) for i in items]
-    delivery = delivery_charge(customer.country, currency)
-    courier = _delivery_line(customer.country, currency)
+    # One read of the prices for the whole checkout: the Stripe lines, the
+    # delivery line and the order summary can't straddle an admin edit.
+    book = await price_book(db)
+    lines = [_line(i, sold_out, currency, book) for i in items]
+    delivery = book.delivery_charge(customer.country, currency)
+    courier = _delivery_line(customer.country, currency, book)
     if courier:
         lines.append(courier)
-    summary = _summary(items, currency)
+    summary = _summary(items, currency, book)
     total = sum(i["price"] * i["qty"] for i in summary) + delivery
     metadata = {
         "kind": ORDER_KIND,

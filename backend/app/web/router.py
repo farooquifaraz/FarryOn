@@ -104,9 +104,12 @@ async def _landing(lang: str, request: Request, db: AsyncSession) -> HTMLRespons
         # is on disk, and resolves to nothing at all when there is none.
         page = products.render(page, settings)
         # Glasses prices, the Buy / Add-to-cart buttons and the catalog the
-        # cart script reads — all from one price table (web/products.py),
-        # with whatever the admin panel has marked sold out.
-        page = shop.render(page, settings, await shop_service.sold_out_keys(db))
+        # cart script reads — all from one price table (web/products.py with
+        # the admin panel's price edits laid over it), with whatever the
+        # admin panel has marked sold out.
+        page = shop.render(
+            page, settings, await shop_service.sold_out_keys(db), await shop_service.price_book(db)
+        )
         # The WhatsApp buttons and the footer's social icons. Both resolve to
         # nothing when their settings are unset — which is the point: the page
         # used to ship a WhatsApp link and four social icons that went nowhere.

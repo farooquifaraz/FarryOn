@@ -23,6 +23,8 @@ from app.web.products import (
     PRICES,
     PRICES_AED,
     Gallery,
+    PriceBook,
+    default_book,
     galleries,
 )
 
@@ -124,10 +126,14 @@ def thumb_url(gallery: Gallery | None) -> str | None:
     return None
 
 
-def catalog(settings: Settings, sold_out: set[str] | None = None) -> dict:
+def catalog(
+    settings: Settings, sold_out: set[str] | None = None, book: PriceBook | None = None
+) -> dict:
     """What the cart script needs: names, prices, colours and their stock,
-    a thumbnail when there is photography, where we deliver."""
+    a thumbnail when there is photography, where we deliver. ``book`` is the
+    prices in force (admin edits included); without it, the code's lists."""
     sold_out = out_of_stock(settings) if sold_out is None else sold_out
+    book = book or default_book()
     found = galleries(settings)
     items = {}
     for slug, name in MODELS.items():
@@ -135,8 +141,8 @@ def catalog(settings: Settings, sold_out: set[str] | None = None) -> dict:
             continue
         items[slug] = {
             "name": name,
-            "price_aed": PRICES_AED[slug],
-            "prices": PRICES[slug],
+            "price_aed": book.price(slug, "AED"),
+            "prices": dict(book.prices[slug]),
             "in_stock": model_in_stock(sold_out, slug),
             "colours": [
                 {"name": c, "in_stock": colour_in_stock(sold_out, slug, c)}
@@ -149,11 +155,11 @@ def catalog(settings: Settings, sold_out: set[str] | None = None) -> dict:
     for c in ship_to:
         names.setdefault(c, c)
     # the countries with their own delivery price first, then the rest A–Z
-    priced = [c for c in DELIVERY if c != "*" and c in ship_to]
+    priced = [c for c in book.delivery if c != "*" and c in ship_to]
     return {
         "items": items,
         "currencies": list(CURRENCIES),
-        "delivery": DELIVERY,
+        "delivery": book.delivery,
         "ship_to": ship_to,
         "ship_to_names": [names.get(c, c) for c in ship_to],
         "countries": [[c, names[c]] for c in priced]
@@ -207,22 +213,30 @@ def buy_row(sold_out: set[str], slug: str) -> str:
     )
 
 
-def render(html: str, settings: Settings, sold_out: set[str] | None = None) -> str:
+def render(
+    html: str,
+    settings: Settings,
+    sold_out: set[str] | None = None,
+    book: PriceBook | None = None,
+) -> str:
     """Fill the price and buy-row slots on the spec cards and the catalog
     block the cart script reads. ``sold_out`` is the union of the env list
-    and the admin toggles (service.sold_out_keys); without it, env only."""
+    and the admin toggles (service.sold_out_keys); without it, env only.
+    ``book`` is the prices in force (service.price_book); without it, the
+    code's lists."""
     sold_out = out_of_stock(settings) if sold_out is None else sold_out
-    for slug, price in PRICES_AED.items():
-        html = html.replace(f"<!--PRICE_AED:{slug}-->", str(price))
+    book = book or default_book()
+    for slug in PRICES_AED:
+        html = html.replace(f"<!--PRICE_AED:{slug}-->", str(book.price(slug, "AED")))
         html = html.replace(
             f"<!--PRICE_FIXED:{slug}-->",
-            f'data-inr="{PRICES[slug]["INR"]}" data-usd="{PRICES[slug]["USD"]}"',
+            f'data-inr="{book.price(slug, "INR")}" data-usd="{book.price(slug, "USD")}"',
         )
     for slug in MODELS:
         html = html.replace(f"<!--BUY_ROW:{slug}-->", buy_row(sold_out, slug))
     block = (
         '<script id="shop-catalog" type="application/json">'
-        + json.dumps(catalog(settings, sold_out), ensure_ascii=False).replace("</", "<\\/")
+        + json.dumps(catalog(settings, sold_out, book), ensure_ascii=False).replace("</", "<\\/")
         + "</script>"
     )
     return html.replace("<!--SHOP_CATALOG-->", block)

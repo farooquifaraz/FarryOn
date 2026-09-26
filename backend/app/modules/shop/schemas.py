@@ -67,3 +67,11 @@ class OrderStatusRequest(BaseModel):
 
 class StockRequest(BaseModel):
     in_stock: bool
+
+
+class PriceRequest(BaseModel):
+    """One price: whole units of ``currency``; ``amount: null`` puts it back
+    to the price in the code."""
+
+    currency: Literal["AED", "INR", "USD"]
+    amount: int | None = Field(default=None, ge=0)

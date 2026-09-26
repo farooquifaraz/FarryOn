@@ -20,6 +20,7 @@ from app.modules.audit.service import write_audit
 from app.modules.shop import service
 from app.modules.shop.schemas import (
     OrderStatusRequest,
+    PriceRequest,
     ShopCheckoutRequest,
     StockRequest,
 )
@@ -129,6 +130,42 @@ async def set_stock_endpoint(
         entity_type="stock",
         entity_id=None,
         after={"key": key, "in_stock": body.in_stock},
+        ip=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    return ok(out)
+
+
+# ---- Prices (admin) -------------------------------------------------------------
+
+
+@admin_router.get("/prices", dependencies=[Depends(require_permission("billing.read"))])
+async def list_prices_endpoint(db: AsyncSession = Depends(get_db)) -> dict:
+    """Every model and delivery destination: the price charged now in each
+    currency, the code's default, and which were changed here."""
+    return ok(await service.price_list(db))
+
+
+@admin_router.put("/prices/{key}", dependencies=[Depends(require_permission("billing.manage"))])
+async def set_price_endpoint(
+    key: str,
+    body: PriceRequest,
+    request: Request,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Set one price (``gs5`` / ``delivery:IN`` in AED, INR or USD), or put
+    it back to the code's price with ``amount: null``. Takes effect on the
+    next page load and the next checkout; orders already paid keep theirs."""
+    out, before = await service.set_price(db, key, currency=body.currency, amount=body.amount)
+    await write_audit(
+        db,
+        actor_id=actor.id,
+        action="price.set",
+        entity_type="price",
+        entity_id=None,
+        before={"key": key, "currency": body.currency, "amount": before},
+        after={"key": key, "currency": body.currency, "amount": out["prices"][body.currency]},
         ip=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )

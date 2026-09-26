@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiRequestError, type Envelope } from "../lib/api";
-import { Can } from "../lib/auth";
+import { Can, useAuth } from "../lib/auth";
 import Pager from "../components/Pager";
 import { money } from "./Dashboard";
 
@@ -40,6 +40,18 @@ interface StockRow {
   model: string;
   colour: string | null;
   in_stock: boolean;
+}
+
+type Currency = "AED" | "INR" | "USD";
+const CURRENCIES: Currency[] = ["AED", "INR", "USD"];
+
+interface PriceRow {
+  key: string;
+  label: string;
+  kind: "model" | "delivery";
+  prices: Record<Currency, number>;
+  defaults: Record<Currency, number>;
+  custom: Currency[];
 }
 
 const STATUSES = ["paid", "shipped", "delivered", "cancelled"] as const;
@@ -98,6 +110,7 @@ export default function Orders() {
       </div>
       <RevenueStrip />
       <StockCard />
+      <PricesCard />
       <div className="toolbar">
         {FILTERS.map((f) => (
           <button key={f} className={`chip ${filter === f ? "on" : ""}`} onClick={() => { setFilter(f); setPage(1); }}>{f}</button>
@@ -239,6 +252,176 @@ function StockCard() {
                         {m.in_stock ? "On sale" : "Out of stock"}
                       </button>
                     </Can>
+                  </td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+
+/** What each model and each delivery costs, in the three price lists the
+ *  website sells in. A saved price is what the next visitor sees and the
+ *  next checkout charges; orders already paid keep what they paid. "Reset"
+ *  puts a row back to the price in the code. */
+function PricesCard() {
+  const { can } = useAuth();
+  const editable = can("billing.manage");
+  const [rows, setRows] = useState<PriceRow[]>([]);
+  const [draft, setDraft] = useState<Record<string, Record<Currency, string>>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await api<Envelope<PriceRow[]>>("/api/v1/admin/prices");
+      setRows(res.data);
+      const d: Record<string, Record<Currency, string>> = {};
+      for (const r of res.data) {
+        d[r.key] = { AED: String(r.prices.AED), INR: String(r.prices.INR), USD: String(r.prices.USD) };
+      }
+      setDraft(d);
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "Could not load prices.");
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  function changed(r: PriceRow): Currency[] {
+    const d = draft[r.key];
+    return d ? CURRENCIES.filter((c) => d[c].trim() !== String(r.prices[c])) : [];
+  }
+
+  function invalid(r: PriceRow): string | null {
+    const floor = r.kind === "delivery" ? 0 : 1;
+    for (const c of changed(r)) {
+      const v = draft[r.key][c].trim();
+      if (!/^\d+$/.test(v) || Number(v) < floor) {
+        return `${c}: whole number${floor ? " above 0" : " (0 = free)"}`;
+      }
+    }
+    return null;
+  }
+
+  async function save(r: PriceRow) {
+    const list = changed(r);
+    if (list.length === 0) return;
+    const summary = list.map((c) => `${c} ${r.prices[c]} → ${draft[r.key][c].trim()}`).join(", ");
+    if (!window.confirm(`${r.label}: ${summary}?
+
+The website and checkout use it right away.`)) return;
+    setBusy(r.key);
+    setError(null);
+    setSaved(null);
+    try {
+      for (const c of list) {
+        await api(`/api/v1/admin/prices/${encodeURIComponent(r.key)}`, {
+          method: "PUT",
+          body: { currency: c, amount: Number(draft[r.key][c].trim()) },
+        });
+      }
+      setSaved(`${r.label} saved.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "Save failed.");
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function reset(r: PriceRow) {
+    if (r.custom.length === 0) return;
+    const summary = r.custom.map((c) => `${c} ${r.prices[c]} → ${r.defaults[c]}`).join(", ");
+    if (!window.confirm(`Put ${r.label} back to the standard price (${summary})?`)) return;
+    setBusy(r.key);
+    setError(null);
+    setSaved(null);
+    try {
+      for (const c of r.custom) {
+        await api(`/api/v1/admin/prices/${encodeURIComponent(r.key)}`, {
+          method: "PUT",
+          body: { currency: c, amount: null },
+        });
+      }
+      setSaved(`${r.label} back to the standard price.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "Reset failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div className="sub">Prices — what the website shows and Stripe charges</div>
+      {error && <div className="error-text">{error}</div>}
+      {saved && <div style={{ color: "var(--teal, #00d4aa)", marginBottom: 8 }}>{saved}</div>}
+      <table>
+        <thead>
+          <tr>
+            <th>Item</th>
+            {CURRENCIES.map((c) => <th key={c}>{c}</th>)}
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr><td colSpan={5} className="loading">Loading…</td></tr>
+          ) : (
+            rows.map((r) => {
+              const bad = invalid(r);
+              const dirty = changed(r).length > 0;
+              return (
+                <tr key={r.key}>
+                  <td><b>{r.label}</b></td>
+                  {CURRENCIES.map((c) => (
+                    <td key={c}>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        aria-label={`${r.label} price in ${c}`}
+                        style={{ width: 96 }}
+                        disabled={!editable || busy === r.key}
+                        value={draft[r.key]?.[c] ?? ""}
+                        onChange={(e) =>
+                          setDraft((d) => ({ ...d, [r.key]: { ...d[r.key], [c]: e.target.value } }))
+                        }
+                      />
+                      {r.custom.includes(c) && (
+                        <div style={{ fontSize: 11, color: "var(--td)" }}>standard {r.defaults[c]}</div>
+                      )}
+                    </td>
+                  ))}
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <Can permission="billing.manage">
+                      <button
+                        className="btn-outline btn-sm"
+                        disabled={!dirty || !!bad || busy === r.key}
+                        title={bad ?? (dirty ? "Save the new price" : "Nothing changed")}
+                        onClick={() => void save(r)}
+                      >
+                        Save
+                      </button>{" "}
+                      {r.custom.length > 0 && (
+                        <button
+                          className="btn-outline btn-sm"
+                          disabled={busy === r.key}
+                          title="Back to the standard price"
+                          onClick={() => void reset(r)}
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </Can>
+                    {bad && <div className="error-text" style={{ fontSize: 11 }}>{bad}</div>}
                   </td>
                 </tr>
               );
