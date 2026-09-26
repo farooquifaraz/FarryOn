@@ -41,6 +41,7 @@ class _FakeImap:
         self.folders = folders
         self.flags = flags
         self.current = ""
+        self.searches: list[str] = []
 
     def list(self):
         return "OK", [
@@ -53,15 +54,24 @@ class _FakeImap:
 
     def uid(self, cmd, *args):
         if cmd == "SEARCH":
-            header = args[0]
+            # Like a real server: an exact, case-insensitive substring of
+            # that header — a misspelled word finds nothing.
+            header, word = args[0], args[1].strip('"').lower()
+            self.searches.append(word)
             msgs = self.folders[self.current].get(header, [])
-            self._last = msgs
-            ids = " ".join(str(i + 1) for i in range(len(msgs)))
-            return "OK", [ids.encode()]
+            field = "from:" if header == "FROM" else "to:"
+            ids = [
+                str(i + 1) for i, raw in enumerate(msgs)
+                if any(word in ln.lower() for ln in raw.decode().split("\r\n")
+                       if ln.lower().startswith(field))
+            ]
+            self._msgs = msgs
+            return "OK", [" ".join(ids).encode()]
         if cmd == "FETCH":
             out = []
-            for i, raw in enumerate(self._last):
-                out.append((f"{i + 1} (UID {i + 1} BODY[HEADER] {{{len(raw)}}}".encode(), raw))
+            for uid in args[0].split(","):
+                raw = self._msgs[int(uid) - 1]
+                out.append((f"{uid} (UID {uid} BODY[HEADER] {{{len(raw)}}}".encode(), raw))
                 out.append(b")")
             return "OK", out
         raise AssertionError(cmd)
@@ -218,3 +228,43 @@ async def test_one_named_account_limits_the_search(db_session, monkeypatch) -> N
 async def test_no_name_asks_who(db_session) -> None:
     out = await FindEmailContactTool().run(_ctx(db_session), name="  ")
     assert out["status"] == "not_found"
+
+
+async def test_a_misspelled_surname_still_finds_the_person(
+    db_session, monkeypatch
+) -> None:
+    # Device 2026-09-26: "Lubna Faruqi" found nobody — the mailbox was only
+    # searched for "faruqi", which no header contains.
+    gmail = _FakeImap(
+        {"INBOX": {"FROM": [
+            _mail('"Lubna Farooqui" <lubna.f@live.com>', "me@gmail.com"),
+            _mail('"Lubna Khan" <lkhan@x.com>', "me@gmail.com"),
+        ]}},
+        {},
+    )
+    _serve(monkeypatch, {"me@gmail.com": gmail})
+    out = await FindEmailContactTool().run(
+        _ctx(db_session, accounts=(_GMAIL,)), name="Lubna Faruqi"
+    )
+    assert out["status"] == "found"
+    assert out["person"]["email"] == "lubna.f@live.com"
+    assert set(gmail.searches) == {"lubna", "faruqi"}
+
+
+async def test_the_phone_is_asked_again_for_the_first_name(db_session) -> None:
+    asked: list[str] = []
+
+    async def resolve(name, channel):
+        asked.append(name)
+        if name == "lubna":
+            return {"status": "ambiguous", "candidates": [
+                {"displayName": "Lubna Farooqui", "emails": ["lubna.f@live.com"]},
+                {"displayName": "Lubna Khan", "emails": ["lkhan@x.com"]},
+            ]}
+        return {"status": "not_found", "candidates": []}
+
+    ctx = ToolContext(session=db_session, emails=[], resolve_contact=resolve)
+    out = await FindEmailContactTool().run(ctx, name="Lubna Faruqi")
+    assert asked == ["Lubna Faruqi", "lubna"]
+    assert out["status"] == "found"
+    assert out["person"]["email"] == "lubna.f@live.com"

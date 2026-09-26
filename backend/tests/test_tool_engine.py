@@ -53,6 +53,7 @@ def test_export_schemas_matches_protocol() -> None:
         "mark_email_read",
         "send_email",
         "forward_email",
+        "find_email_contact",
         "get_location",
         "identify_image",
         "send_whatsapp",

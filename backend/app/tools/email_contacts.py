@@ -96,11 +96,37 @@ def _parts(display: str, address: str) -> list[str]:
     return [p for p in pieces if len(p) >= 2]
 
 
+#: Spellings of the same sound in romanised Urdu/Hindi/Arabic names, folded
+#: before the fuzzy compare: "Farooqui" / "Faruqi", "Rida" / "Ridha",
+#: "Mohammad" / "Muhammad". Plain edit distance alone scored Faruqi vs
+#: Farooqui at 0.71 — below the bar (device 2026-09-26).
+_SOUNDS = (("oo", "u"), ("ou", "u"), ("ee", "i"), ("aa", "a"), ("ph", "f"),
+           ("qu", "q"), ("w", "v"))
+
+
+def _fold(word: str) -> str:
+    w = word.lower()
+    for a, b in _SOUNDS:
+        w = w.replace(a, b)
+    # A silent/aspirate h after a consonant ("dh", "kh", "th") and doubled
+    # letters are spelling, not sound.
+    w = re.sub(r"(?<=[bcdfgjklmnpqrstvxz])h", "", w)
+    w = re.sub(r"(.)\1+", r"\1", w)
+    w = w.replace("o", "u")
+    return w
+
+
 def _word_matches(term: str, parts: list[str]) -> bool:
+    ft = _fold(term)
     for p in parts:
         if p == term or p.startswith(term) or (len(p) >= 4 and term.startswith(p)):
             return True
-        if len(term) >= 4 and difflib.SequenceMatcher(None, term, p).ratio() >= _FUZZY:
+        if len(term) < 4:
+            continue
+        fp = _fold(p)
+        if ft == fp:
+            return True
+        if difflib.SequenceMatcher(None, ft, fp).ratio() >= _FUZZY:
             return True
     return False
 
@@ -114,11 +140,17 @@ def matches(name: str, display: str, address: str) -> bool:
     return all(_word_matches(t, parts) for t in terms)
 
 
-def _search_word(name: str) -> str:
-    """The one word the mailbox is searched for server-side — the longest,
-    since it is the most distinctive; the rest is matched locally."""
-    terms = sorted(_terms(name), key=len, reverse=True)
-    return terms[0] if terms else ""
+def _search_words(name: str) -> list[str]:
+    """The words the mailbox is searched for server-side, one search each.
+
+    Every word, not just one: speech-to-text misspells names ("Faruqi" for
+    "Farooqui", device 2026-09-26) and an IMAP search is an exact substring
+    match, so a search on the misspelled word alone found nobody. Searching
+    each word and matching the whole name locally (fuzzily) finds the person
+    as long as ONE word came through right — usually the first name.
+    """
+    words = [t for t in _terms(name) if len(t) >= 3]
+    return sorted(set(words), key=len, reverse=True)[:3]
 
 
 def _folders(imap: imaplib.IMAP4_SSL, is_gmail: bool) -> list[tuple[str, str]]:
@@ -161,8 +193,8 @@ def _folders(imap: imaplib.IMAP4_SSL, is_gmail: bool) -> list[tuple[str, str]]:
 def _search_mailbox(host: str, address: str, password: str, name: str
                     ) -> list[dict[str, Any]]:
     """People in one mailbox whose name/address matches ``name``."""
-    word = _search_word(name)
-    if not word:
+    words = _search_words(name)
+    if not words:
         return []
     imap, _total = _open(host, address, password)
     people: dict[str, dict[str, Any]] = {}
@@ -172,14 +204,18 @@ def _search_mailbox(host: str, address: str, password: str, name: str
                 typ, _ = imap.select(_imap_quote(folder), readonly=True)
                 if typ != "OK":
                     continue
-                typ, data = imap.uid("SEARCH", header, _imap_quote(word))
+                found: set[bytes] = set()
+                for word in words:
+                    typ, data = imap.uid("SEARCH", header, _imap_quote(word))
+                    if typ == "OK" and data and data[0]:
+                        found.update(data[0].split())
             except imaplib.IMAP4.error as exc:
                 logger.info("email_contacts.search_failed", folder=folder,
                             error=str(exc))
                 continue
-            if typ != "OK" or not data or not data[0]:
+            if not found:
                 continue
-            uids = data[0].split()[-_MAX_MESSAGES:]
+            uids = sorted(found, key=int)[-_MAX_MESSAGES:]
             rows = _fetch_batch(
                 imap, uids,
                 "(UID BODY.PEEK[HEADER.FIELDS (FROM TO CC DATE)])",
@@ -214,23 +250,42 @@ def _search_mailbox(host: str, address: str, password: str, name: str
     return list(people.values())
 
 
-async def _from_device(ctx: ToolContext, name: str) -> list[dict[str, Any]]:
-    """Email addresses of matching people in the phone's contacts."""
-    if ctx.resolve_contact is None:
-        return []
+async def _ask_device(ctx: ToolContext, name: str) -> dict[str, Any]:
     try:
-        res = await asyncio.wait_for(
+        return await asyncio.wait_for(
             ctx.resolve_contact(name, "email"), timeout=_DEVICE_TIMEOUT_S
-        )
+        ) or {}
     except Exception as exc:  # noqa: BLE001
         logger.info("email_contacts.device_failed", error=repr(exc))
+        return {}
+
+
+async def _from_device(ctx: ToolContext, name: str) -> list[dict[str, Any]]:
+    """Email addresses of matching people in the phone's contacts.
+
+    The phone wants every spoken word in the contact, so one misspelled word
+    finds nobody. Then it is asked again for the first name alone, and those
+    matches are kept only if the WHOLE name still fits them fuzzily — "Lubna
+    Faruqi" keeps "Lubna Farooqui", not every other Lubna.
+    """
+    if ctx.resolve_contact is None:
         return []
+    res = await _ask_device(ctx, name)
+    fuzzy_filter = False
+    terms = _terms(name)
+    if not (res.get("candidates")) and len(terms) > 1:
+        res = await _ask_device(ctx, terms[0])
+        fuzzy_filter = True
     out: list[dict[str, Any]] = []
     for c in (res or {}).get("candidates") or []:
         # An older app answers an "email" request with phone matches only;
         # those carry no address and are simply not email contacts.
         for addr in c.get("emails") or ([c["email"]] if c.get("email") else []):
             addr = (addr or "").strip().lower()
+            if fuzzy_filter and not matches(
+                name, c.get("displayName") or "", addr
+            ):
+                continue
             if "@" in addr:
                 out.append({
                     "email": addr,
