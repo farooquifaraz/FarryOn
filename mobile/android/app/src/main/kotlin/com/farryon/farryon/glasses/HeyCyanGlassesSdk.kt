@@ -301,6 +301,11 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     /** Whether the BLE link is currently asked to run at high priority. */
     @Volatile private var fastLink = false
 
+    /** The GATT the high-priority request was made on. A reconnect makes a
+     *  new GATT that starts balanced, so "already fast" only counts for the
+     *  same object. */
+    @Volatile private var fastLinkGatt: BluetoothGatt? = null
+
     /**
      * Ask Android for the short BLE connection interval while a photo is on
      * its way, and give it back afterwards. The vendor SDK never asks
@@ -313,17 +318,25 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      */
     @SuppressLint("MissingPermission")
     private fun setFastLink(fast: Boolean) {
-        // Asking again is cheap and survives a reconnect (a new GATT starts
-        // balanced); releasing what was never asked is skipped.
+        // Releasing what was never asked is skipped.
         if (!fast && !fastLink) return
         try {
             val mac = connectedMac ?: DeviceManager.getInstance().deviceAddress ?: return
             val gatt = BleBaseControl.getInstance(app).getGatt(mac) ?: return
+            // Asking again on the SAME link is not free: every request is a
+            // fresh connection-parameter negotiation, and the second one
+            // (takeAiPhoto asked, then the "photo captured" notify asked
+            // again) lands 1 ms before the first thumbnail chunk request.
+            // GS5 MAX, 2026-09-25: that exact moment is where it began
+            // sending every chunk twice and the transfer died. A new GATT
+            // (reconnect) starts balanced, so it is still asked there.
+            if (fast && fastLink && gatt === fastLinkGatt) return
             val ok = gatt.requestConnectionPriority(
                 if (fast) BluetoothGatt.CONNECTION_PRIORITY_HIGH
                 else BluetoothGatt.CONNECTION_PRIORITY_BALANCED
             )
             fastLink = fast && ok
+            fastLinkGatt = if (fastLink) gatt else null
             Log.i(TAG, "photo link priority ${if (fast) "HIGH" else "BALANCED"} ok=$ok")
         } catch (e: Throwable) {
             Log.i(TAG, "photo link priority: $e")
@@ -2783,7 +2796,7 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         cancelPhotoWatchdog()
         thumbnailFetchActive = true
         pauseCallMicForPhoto() // a touch-gesture photo never went through takeAiPhoto
-        setFastLink(true) // ditto; a no-op when takeAiPhoto already asked
+        setFastLink(true) // ditto; skipped when takeAiPhoto already asked
         // Device-initiated captures (touch gesture) have no app-side request.
         val requestId = photoRequestId ?: DEVICE_INITIATED_REQUEST_ID
         val gen = ++thumbnailFetchGen
