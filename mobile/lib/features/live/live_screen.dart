@@ -305,14 +305,19 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
             child: Align(
               alignment: Alignment.topCenter,
               child: Padding(
-                padding: const EdgeInsets.only(top: 58),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+                padding: const EdgeInsets.only(top: 58, left: 12, right: 12),
+                // Wrap, not Row: with a long glasses name ("SNT GS5 MAX")
+                // the row ran off the right edge and cut the battery off
+                // (device 2026-09-26). Now the pill drops to a second line
+                // instead of leaving the screen.
+                child: Wrap(
+                  alignment: WrapAlignment.center,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 6,
                   children: [
                     _MicChip(state: state),
-                    const SizedBox(width: 8),
                     _CamChip(state: state),
-                    const SizedBox(width: 8),
                     // HeyCyan-style: the glasses card is ALWAYS on the
                     // dashboard — an honest Disconnected when they're off,
                     // and tapping it connects (with a chooser when several
@@ -548,17 +553,23 @@ class _GlassesPill extends StatefulWidget {
   State<_GlassesPill> createState() => _GlassesPillState();
 }
 
+/// The glasses name as the pill shows it — the model, without the vendor
+/// prefix or the serial suffix: "L802_2B1D" → "L802", "L 801_DD8A" → "L801",
+/// "SNT GS5 MAX_9475" → "GS5 MAX", "SANVNET GS4 MAX_2BAB" → "GS4 MAX". The
+/// pill is tight on space; the full name lives on the Settings card.
+@visibleForTesting
+String? glassesPillName(String? name) {
+  if (name == null || name.trim().isEmpty) return null;
+  final head = name.split('_').first.trim();
+  final gs = RegExp(r'GS\s*(\d+)(\s*MAX)?', caseSensitive: false).firstMatch(head);
+  if (gs != null) return 'GS${gs[1]}${gs[2] != null ? ' MAX' : ''}';
+  final compact = head.replaceAll(' ', '');
+  return compact.isEmpty ? name.trim() : compact;
+}
+
 class _GlassesPillState extends State<_GlassesPill> {
   bool _connecting = false;
   Timer? _connectingTimeout;
-
-  /// "L802_2B1D" → "L802", "L 801_DD8A" → "L801" — the pill is tight on
-  /// space, the full name lives on the Settings card.
-  String? _shortName(String? name) {
-    if (name == null || name.isEmpty) return null;
-    final head = name.split('_').first.replaceAll(' ', '');
-    return head.isEmpty ? name : head;
-  }
 
   @override
   void didUpdateWidget(_GlassesPill old) {
@@ -659,13 +670,20 @@ class _GlassesPillState extends State<_GlassesPill> {
               color: color,
             ),
             if (connected) ...[
-              if (_shortName(widget.state.glassesName) != null) ...[
+              if (glassesPillName(widget.state.glassesName) != null) ...[
                 const SizedBox(width: 6),
-                Text(_shortName(widget.state.glassesName)!,
-                    style: TextStyle(
-                        color: color,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600)),
+                // Flexible + ellipsis: the name gives way, the battery never
+                // does.
+                Flexible(
+                  child: Text(glassesPillName(widget.state.glassesName)!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      softWrap: false,
+                      style: TextStyle(
+                          color: color,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600)),
+                ),
               ],
               if (noAudio) ...[
                 const SizedBox(width: 6),
