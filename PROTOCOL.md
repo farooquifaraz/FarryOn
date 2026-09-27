@@ -55,7 +55,11 @@ All JSON messages have a `type` field.
 // Sent once, immediately after the socket opens.
 { "type": "hello",
   "protocolVersion": 1,
-  "client": { "platform": "android|ios", "appVersion": "1.0.0" },
+  "client": { "platform": "android|ios",
+              "appVersion": "1.0.0+4543",   // version+versionCode from the package
+              "abi": "arm64|arm32|x86_64",  // optional; which split APK this is
+              "features": ["update_required"] },  // optional; error codes this
+                                                  // build shows itself (§4)
   "device": {                      // which capture device is feeding media
     "kind": "phone|glasses|external",
     "id": "string",
@@ -133,6 +137,15 @@ Fatal `error` codes the app treats specially (server → client, §4):
 On the two provider codes the app stops auto-reconnecting and shows a
 "service unavailable" overlay with a manual retry (a reconnect loop into the
 same failure looked like a spinner that never ended).
+`update_required` — this build is older than the server still serves
+(`MIN_APP_BUILD`, compared as the website's base build: versionCode less
+the split-per-abi offset, +1000 arm32 / +2000 arm64 / +4000 x86_64). Sent
+right after `hello`, before any provider connects, with the download URL in
+`message`. A build that lists `update_required` in `client.features` gets it
+fatal and shows its own Download screen; an older build gets it non-fatal
+(shown as a banner) followed by a fatal `provider_unavailable`. The app also
+reads `GET /download/info` (`build.build`, `minBuild`) at start to offer a
+newer build itself.
 ```
 { "type": "text", "text": "..." }    // typed user input (no mic)
 { "type": "interrupt" }              // barge-in: stop current TTS playback
