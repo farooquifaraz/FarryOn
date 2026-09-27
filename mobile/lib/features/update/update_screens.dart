@@ -6,6 +6,7 @@ import '../../core/app_update.dart';
 import '../../core/config_store.dart';
 import '../../core/theme.dart';
 import '../../core/ui.dart';
+import '../../state/auth.dart';
 import '../../state/providers.dart';
 
 /// What [AppUpdate.check] found at start (null until it has answered, or
@@ -106,20 +107,43 @@ Future<void> offerUpdate(BuildContext context, UpdateStatus status) async {
   );
   if (download == true) {
     await openDownload(status.downloadUrl);
-  } else {
+  } else if (download == false) {
+    // Only the user's own "Later" puts it off. A dialog the app closed
+    // itself (null — e.g. the sign-in step popping every route above home)
+    // is offered again at the next start.
     await ConfigStore.markUpdateOfferDismissed(latest);
   }
 }
 
 /// Runs [AppUpdate.check] once, shortly after start, and offers what it
 /// finds. A check that fails says nothing — no prompt on a guess.
+///
+/// The offer waits for the sign-in state to settle: restoring the saved
+/// session ends with every route above home popped (app.dart), and on the
+/// Vivo (2026-09-27) that pop closed the dialog the instant it opened —
+/// which was then taken for "Later", so the build was never offered again.
 Future<void> runStartupUpdateCheck(
   WidgetRef ref,
-  BuildContext? Function() context,
-) async {
+  BuildContext? Function() context, {
+  Duration settle = const Duration(milliseconds: 1500),
+  Duration restoreTimeout = const Duration(seconds: 15),
+}) async {
   final status = await AppUpdate.check(ref.read(configProvider));
+  // One line in the device log, so "why was no update offered?" has an
+  // answer on the phone itself.
+  debugPrint(status == null
+      ? 'update check: no answer'
+      : 'update check: current=${status.current} latest=${status.latest} '
+          'min=${status.minimum} downloadable=${status.downloadable} '
+          'dismissed=${ConfigStore.updateOfferDismissed()}');
   if (status == null) return;
   ref.read(appUpdateProvider.notifier).state = status;
+  if (status.required || !status.available) return;
+  final waited = Stopwatch()..start();
+  while (ref.read(authProvider).isRestoring && waited.elapsed < restoreTimeout) {
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+  }
+  await Future<void>.delayed(settle);
   final ctx = context();
   if (!status.required && status.available && ctx != null && ctx.mounted) {
     await offerUpdate(ctx, status);
