@@ -55,6 +55,12 @@
     <!-- Resolve a spoken contact name to a WhatsApp number (read-only, on-device). -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
+    <!-- App updates: the app is sideloaded, so it fetches its own new APK and
+         opens Android's Install sheet for it (InstallChannel). Android 8+ asks
+         the user once to allow "Install unknown apps" for FarryOn; every
+         install is still confirmed by the user on the system sheet. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- make_call: place the call outright rather than filling in the dialer.
          Runtime-granted, and refusable: with no permission the app opens the
          dialer instead and says so, so a "no" costs a tap, never a silence. -->
@@ -133,6 +139,18 @@
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
+        <!-- Lends a downloaded update APK (cache/updates/) to the package
+             installer as a content:// grant — see InstallChannel and
+             res/xml/file_paths.xml for the one folder it exposes. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
     <queries>

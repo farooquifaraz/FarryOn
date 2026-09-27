@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the app's FileProvider may hand to other apps (InstallChannel):
+     only the updates folder in its own cache, where core/app_installer.dart
+     puts a downloaded APK. Nothing else on disk is reachable through it. -->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>

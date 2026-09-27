@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/app_installer.dart';
 import '../../core/app_update.dart';
 import '../../core/config_store.dart';
 import '../../core/theme.dart';
@@ -13,12 +16,132 @@ import '../../state/providers.dart';
 /// when it couldn't tell).
 final appUpdateProvider = StateProvider<UpdateStatus?>((ref) => null);
 
-/// Open the APK download in the browser. Android then shows its own
-/// "Install" prompt — a sideloaded app can't install itself silently.
+/// Open the APK download in the browser — the fallback when the in-app
+/// install below cannot run. Android then shows its own "Install" prompt.
 Future<void> openDownload(Uri url) async {
   try {
     await launchUrl(url, mode: LaunchMode.externalApplication);
   } catch (_) {}
+}
+
+/// Fetch the update inside the app and open Android's Install sheet.
+///
+/// The browser route stalled on a Vivo (2026-09-27: Chrome finished the
+/// file but never offered Install), so the app downloads the APK itself,
+/// with a progress bar, and hands it to the installer. Android 8+ first
+/// wants "Install unknown apps" allowed for FarryOn: the user is sent to
+/// that page and can tap again afterwards. Anything that goes wrong is said
+/// in plain words, with the browser download offered as the way round.
+Future<void> installUpdate(
+  BuildContext context, {
+  required Uri url,
+  int? build,
+}) async {
+  if (!await AppInstaller.canInstall()) {
+    if (!context.mounted) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Aurora.surfaceHigh,
+        title: const Text('Allow updates from FarryOn',
+            style: TextStyle(color: Aurora.textPrimary)),
+        content: const Text(
+          'Android needs your permission once for FarryOn to install its own '
+          'updates. On the next screen, turn on "Allow from this source", '
+          'then come back and tap Update again.',
+          style: TextStyle(color: Aurora.textMuted, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Not now'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Open settings'),
+          ),
+        ],
+      ),
+    );
+    if (go == true) await AppInstaller.openInstallSettings();
+    return;
+  }
+  if (!context.mounted) return;
+  final progress = ValueNotifier<double?>(null);
+  // The progress sheet closes itself when the download ends, whatever the
+  // outcome; Back does nothing to it.
+  final done = Completer<void>();
+  unawaited(showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) {
+      done.future.whenComplete(() {
+        if (ctx.mounted) Navigator.of(ctx).pop();
+      });
+      return PopScope(
+        canPop: false,
+        child: AlertDialog(
+          backgroundColor: Aurora.surfaceHigh,
+          title: const Text('Downloading update…',
+              style: TextStyle(color: Aurora.textPrimary)),
+          content: ValueListenableBuilder<double?>(
+            valueListenable: progress,
+            builder: (_, value, __) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                LinearProgressIndicator(value: value, color: Aurora.mint),
+                const SizedBox(height: 10),
+                Text(
+                  value == null ? 'Starting…' : '${(value * 100).round()}%',
+                  style: const TextStyle(color: Aurora.textMuted),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  ));
+  String? failure;
+  try {
+    await AppInstaller.fetchAndInstall(
+      url,
+      build: build,
+      onProgress: (f) => progress.value = f,
+    );
+  } on InstallFailure catch (e) {
+    failure = e.message;
+  } catch (e) {
+    failure = 'Something went wrong: $e';
+  } finally {
+    done.complete();
+  }
+  if (failure == null || !context.mounted) return;
+  final fallback = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: Aurora.surfaceHigh,
+      title: const Text("Couldn't install the update",
+          style: TextStyle(color: Aurora.textPrimary)),
+      content: Text(
+        '$failure\n\nYou can download it in the browser instead and tap '
+        'Install when Android asks.',
+        style: const TextStyle(color: Aurora.textMuted, height: 1.4),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('Close'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Open in browser'),
+        ),
+      ],
+    ),
+  );
+  if (fallback == true) await openDownload(url);
 }
 
 /// This build is below the oldest one still served. Nothing else of the app
@@ -66,7 +189,7 @@ class UpdateRequiredScreen extends StatelessWidget {
                 GradientButton(
                   label: 'Download update',
                   icon: Icons.download_rounded,
-                  onPressed: () => openDownload(downloadUrl),
+                  onPressed: () => installUpdate(context, url: downloadUrl),
                 ),
               ],
             ),
@@ -106,7 +229,9 @@ Future<void> offerUpdate(BuildContext context, UpdateStatus status) async {
     ),
   );
   if (download == true) {
-    await openDownload(status.downloadUrl);
+    if (context.mounted) {
+      await installUpdate(context, url: status.downloadUrl, build: latest);
+    }
   } else if (download == false) {
     // Only the user's own "Later" puts it off. A dialog the app closed
     // itself (null — e.g. the sign-in step popping every route above home)
@@ -179,7 +304,10 @@ class _AppUpdateRowState extends ConsumerState<AppUpdateRow> {
             'and try again.'),
       ));
     } else if (status.available || status.required) {
-      await openDownload(status.downloadUrl);
+      if (mounted) {
+        await installUpdate(context,
+            url: status.downloadUrl, build: status.latest);
+      }
     } else {
       messenger.showSnackBar(const SnackBar(
         content: Text("You're on the latest version."),
@@ -229,7 +357,8 @@ class UpdateChip extends ConsumerWidget {
       return const SizedBox.shrink();
     }
     return GestureDetector(
-      onTap: () => openDownload(status.downloadUrl),
+      onTap: () => installUpdate(context,
+          url: status.downloadUrl, build: status.latest),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(

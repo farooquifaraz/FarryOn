@@ -24,6 +24,11 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             applicationContext,
         )
+        // App updates: open Android's Install sheet for an APK the app fetched.
+        InstallChannel.register(
+            flutterEngine.dartExecutor.binaryMessenger,
+            applicationContext,
+        )
         // "Call Ahmed" — placed for real, once the user has granted the
         // permission; falls back to the dialer when they haven't.
         call = CallChannel.register(
