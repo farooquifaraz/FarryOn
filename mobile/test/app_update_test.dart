@@ -155,6 +155,32 @@ void main() {
     expect(find.textContaining("You're on the latest version"), findsOneWidget);
   });
 
+  testWidgets('the dashboard chip shows only while a newer build is out',
+      (tester) async {
+    Future<void> show(UpdateStatus? status) async {
+      await tester.pumpWidget(ProviderScope(
+        key: UniqueKey(),
+        overrides: [appUpdateProvider.overrideWith((ref) => status)],
+        child: const MaterialApp(home: Scaffold(body: UpdateChip())),
+      ));
+      await tester.pump();
+    }
+
+    await show(null);
+    expect(find.text('Update available'), findsNothing);
+    await show(_newer());
+    expect(find.text('Update available'), findsOneWidget);
+    await show(UpdateStatus(
+      current: 2540,
+      latest: 2540,
+      minimum: 0,
+      downloadable: true,
+      downloadUrl: Uri.parse('https://farryon.test/download/arm64'),
+    ));
+    expect(find.text('Update available'), findsNothing,
+        reason: 'gone once this build is the latest');
+  });
+
   testWidgets('a dialog the app closed itself is offered again', (tester) async {
     // Vivo 2026-09-27: the sign-in step popped every route above home and
     // took the update dialog with it; that used to count as "Later".

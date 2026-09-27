@@ -213,3 +213,43 @@ class _AppUpdateRowState extends ConsumerState<AppUpdateRow> {
     );
   }
 }
+
+
+/// The dashboard's "Update available" chip. Present whenever the last check
+/// found a newer build on the website — on every start, whether or not the
+/// startup dialog was put off — and gone once this build is the latest.
+/// Tapping opens the download; Android then asks to Install.
+class UpdateChip extends ConsumerWidget {
+  const UpdateChip({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(appUpdateProvider);
+    if (status == null || !(status.available || status.required)) {
+      return const SizedBox.shrink();
+    }
+    return GestureDetector(
+      onTap: () => openDownload(status.downloadUrl),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Aurora.mint.withValues(alpha: 0.6)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.system_update_rounded, size: 14, color: Aurora.mint),
+            SizedBox(width: 6),
+            Text('Update available',
+                style: TextStyle(
+                    color: Aurora.mint,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700)),
+          ],
+        ),
+      ),
+    );
+  }
+}

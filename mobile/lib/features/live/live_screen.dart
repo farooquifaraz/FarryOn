@@ -21,6 +21,7 @@ import '../glasses_lab/glasses_lab_screen.dart';
 import '../settings/settings_screen.dart';
 import '../settings/subscription_screen.dart';
 import '../translate/translate_screen.dart';
+import '../update/update_screens.dart';
 import 'mic_status.dart';
 import 'widgets/aurora_orb.dart';
 import 'widgets/camera_preview_view.dart';
@@ -316,6 +317,10 @@ class _LiveScreenState extends ConsumerState<LiveScreen>
                   spacing: 8,
                   runSpacing: 6,
                   children: [
+                    // A newer build on the website: shown on every start
+                    // until the update is in, whatever "Later" said to the
+                    // startup dialog (Faraz, 2026-09-27). Tap = download.
+                    const UpdateChip(),
                     _MicChip(state: state),
                     _CamChip(state: state),
                     // HeyCyan-style: the glasses card is ALWAYS on the
