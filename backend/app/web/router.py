@@ -265,6 +265,17 @@ async def product_catalog(slug: str) -> FileResponse:
     )
 
 
+def _build_number() -> int | None:
+    """The base build from build-info.json beside the APKs, or None."""
+    info = _apk_dir() / "build-info.json"
+    try:
+        data = json.loads(info.read_text(encoding="utf-8"))
+        build = data.get("build") if isinstance(data, dict) else None
+        return int(build) if isinstance(build, (int, float, str)) and str(build).isdigit() else None
+    except (OSError, ValueError):
+        return None
+
+
 @router.get("/download/info", include_in_schema=False)
 async def download_info() -> JSONResponse:
     """Live build metadata for the page (version + per-ABI availability/size)."""
@@ -423,7 +434,12 @@ async def download_apk(abi: str = "arm64") -> FileResponse:
     if path is None:
         logger.warning("site.apk_missing", abi=abi, dir=str(_apk_dir()))
         raise HTTPException(status_code=404, detail="build not available yet")
-    filename = f"FarryOn-{APP_VERSION}-{abi}.apk"
+    # The build number in the name, so each update is a NEW file to the
+    # browser and the phone — one name for every build meant Chrome's
+    # "Download file again?" and a growing "(1)", "(2)" (device 2026-09-27).
+    build = _build_number()
+    tag = f"-b{build}" if build else ""
+    filename = f"FarryOn-{APP_VERSION}{tag}-{abi}.apk"
     return FileResponse(
         path,
         media_type="application/vnd.android.package-archive",
