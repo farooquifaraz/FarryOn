@@ -149,3 +149,67 @@ Future<void> runStartupUpdateCheck(
     await offerUpdate(ctx, status);
   }
 }
+
+
+/// Settings → About → "App update": the way to update on demand, whatever
+/// the startup offer did (put off with Later, or never reached). Shows what
+/// the last check found; a tap checks again and, when a newer build is on
+/// the website, opens its download — Android then asks to Install.
+class AppUpdateRow extends ConsumerStatefulWidget {
+  const AppUpdateRow({super.key});
+
+  @override
+  ConsumerState<AppUpdateRow> createState() => _AppUpdateRowState();
+}
+
+class _AppUpdateRowState extends ConsumerState<AppUpdateRow> {
+  bool _checking = false;
+
+  Future<void> _tap() async {
+    if (_checking) return;
+    setState(() => _checking = true);
+    final status = await AppUpdate.check(ref.read(configProvider));
+    if (!mounted) return;
+    setState(() => _checking = false);
+    if (status != null) ref.read(appUpdateProvider.notifier).state = status;
+    final messenger = ScaffoldMessenger.of(context);
+    if (status == null) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text("Couldn't check for updates — check the connection "
+            'and try again.'),
+      ));
+    } else if (status.available || status.required) {
+      await openDownload(status.downloadUrl);
+    } else {
+      messenger.showSnackBar(const SnackBar(
+        content: Text("You're on the latest version."),
+      ));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final status = ref.watch(appUpdateProvider);
+    final String subtitle;
+    Color? colour;
+    if (_checking) {
+      subtitle = 'Checking…';
+    } else if (status != null && (status.available || status.required)) {
+      subtitle = 'New version ready (build ${status.latest}) — tap to '
+          'download and install';
+      colour = Aurora.mint;
+    } else if (status != null) {
+      subtitle = "You're on the latest version — tap to check again";
+    } else {
+      subtitle = 'Tap to check for a new version';
+    }
+    return SettingsRow(
+      icon: Icons.system_update_rounded,
+      gradient: Aurora.gradTeal,
+      title: 'App update',
+      subtitle: subtitle,
+      subtitleColor: colour,
+      onTap: _tap,
+    );
+  }
+}

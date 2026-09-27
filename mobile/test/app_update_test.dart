@@ -14,6 +14,7 @@ import 'package:farryon/core/config_store.dart';
 import 'package:farryon/features/update/update_screens.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -127,6 +128,31 @@ void main() {
     await tester.tap(find.text('Later'));
     await tester.pumpAndSettle();
     expect(ConfigStore.updateOfferDismissed(), 2540);
+  });
+
+  testWidgets('Settings says what the last check found', (tester) async {
+    Future<void> show(UpdateStatus? status) async {
+      await tester.pumpWidget(ProviderScope(
+        // A fresh scope each time: overrides are read once, at creation.
+        key: UniqueKey(),
+        overrides: [appUpdateProvider.overrideWith((ref) => status)],
+        child: const MaterialApp(home: Scaffold(body: AppUpdateRow())),
+      ));
+      await tester.pump();
+    }
+
+    await show(null);
+    expect(find.text('Tap to check for a new version'), findsOneWidget);
+    await show(_newer());
+    expect(find.textContaining('New version ready (build 2540)'), findsOneWidget);
+    await show(UpdateStatus(
+      current: 2540,
+      latest: 2540,
+      minimum: 0,
+      downloadable: true,
+      downloadUrl: Uri.parse('https://farryon.test/download/arm64'),
+    ));
+    expect(find.textContaining("You're on the latest version"), findsOneWidget);
   });
 
   testWidgets('a dialog the app closed itself is offered again', (tester) async {

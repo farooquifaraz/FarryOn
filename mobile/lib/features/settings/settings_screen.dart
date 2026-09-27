@@ -18,6 +18,7 @@ import '../data/notes_screen.dart';
 import '../data/reminders_screen.dart';
 import '../debug/debug_logs_screen.dart';
 import '../glasses/glasses_connect_flow.dart';
+import '../update/update_screens.dart';
 import 'subscription_screen.dart';
 
 /// The live, cloud-hosted FarryOn backend. Mirrors the constants the old
@@ -329,6 +330,7 @@ class SettingsScreen extends ConsumerWidget {
                 subtitle: 'L801 hardware test bench (debug only)',
                 onTap: onOpenGlassesLab,
               ),
+            const AppUpdateRow(),
             SettingsRow(
               icon: Icons.info_rounded,
               gradient: Aurora.gradGreen,
