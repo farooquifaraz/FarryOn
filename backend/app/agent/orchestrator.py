@@ -115,6 +115,10 @@ class Orchestrator:
         #: different arguments are never blocked at all.
         self._calls_since_speech: dict[str, int] = {}
         self._tool_calls_since_speech: dict[str, int] = {}
+        #: The vision tool call under way, if any (see ``_VISION_TOOLS``).
+        #: Resolves to its :class:`ToolResult`; a second call arriving while
+        #: it is pending awaits this instead of taking another photo.
+        self._vision_inflight: asyncio.Future[ToolResult] | None = None
         #: Metered resources already charged in the current user turn (see
         #: ToolContext.turn_charges). Same lifetime as the repeat guard's slate.
         self._turn_charges: set[str] = set()
@@ -430,6 +434,80 @@ class Orchestrator:
             call_id=event.id,
             session_id=self._session_id,
         )
+        if event.name in self._VISION_TOOLS:
+            return await self._one_look_at_a_time(event)
+        return await self._run_tool_call(event)
+
+    #: Tools whose ``tool_call`` makes the app take a photo. One at a time per
+    #: session: while the first is still waiting for its photo or looking at
+    #: it, the model can ask again — and did (live 2026-09-27 16:13: eight
+    #: identify_image calls in 50 s while the first had not answered, and
+    #: the glasses took a photo for five of them). Every call the app sees is
+    #: another shutter, so a call that arrives while one is in flight is
+    #: never sent to the app: it waits for the look under way and answers
+    #: with that.
+    _VISION_TOOLS = frozenset({"identify_image", "capture_photo"})
+
+    async def _one_look_at_a_time(self, event: ToolCallEvent) -> ToolResult:
+        inflight = self._vision_inflight
+        if inflight is not None and not inflight.done():
+            return await self._join_vision_call(event, inflight)
+        inflight = asyncio.get_running_loop().create_future()
+        self._vision_inflight = inflight
+        try:
+            result = await self._run_tool_call(event)
+        except BaseException:
+            # Whoever joined is told the look did not finish; nothing waits
+            # on a future that will never resolve.
+            inflight.cancel()
+            raise
+        inflight.set_result(result)
+        return result
+
+    async def _join_vision_call(
+        self, event: ToolCallEvent, inflight: asyncio.Future[ToolResult]
+    ) -> ToolResult:
+        """Answer ``event`` with the result of the vision call already under
+        way. The app is not told about this call, so it takes no photo."""
+        logger.info(
+            "tool_call.joined_inflight",
+            tool=event.name,
+            call_id=event.id,
+            session_id=self._session_id,
+        )
+        first: ToolResult | None = None
+        try:
+            first = await asyncio.shield(inflight)
+        except asyncio.CancelledError:
+            if not inflight.cancelled():
+                raise  # this call was cancelled, not the one it joined
+        except Exception as exc:  # noqa: BLE001 - the first call's failure
+            logger.warning("tool_call.joined_failed", error=repr(exc))
+        if first is None:
+            result = ToolResult(
+                name=event.name,
+                ok=False,
+                result=None,
+                error=(
+                    "The look at the camera that was already under way did "
+                    "not finish. Tell the user in one short sentence and do "
+                    "not call this tool again on your own."
+                ),
+                duration_ms=0,
+            )
+        else:
+            result = ToolResult(
+                name=event.name,
+                ok=first.ok,
+                result=first.result,
+                error=first.error,
+                duration_ms=0,
+            )
+        await self._feed_model(event, result)
+        return result
+
+    async def _run_tool_call(self, event: ToolCallEvent) -> ToolResult:
+        """The refusal gates, then the five steps of a tool call."""
         refusal = self._repeat_refusal(event)
         if refusal is not None:
             logger.warning(
@@ -551,12 +629,19 @@ class Orchestrator:
             }
         )
 
-        # 5. Feed the result back to the model to continue the turn. For
-        #    fire-and-forget device tools the model already spoke its one
-        #    acknowledgement WHEN it called the tool; if we hand back a plain
-        #    result it narrates a SECOND time (heard as a repeated response).
-        #    We must still send a result (the Live protocol requires one), so
-        #    we embed a "stay silent" instruction for these tools.
+        # 5. Feed the result back to the model to continue the turn.
+        await self._feed_model(event, result)
+        return result
+
+    async def _feed_model(self, event: ToolCallEvent, result: ToolResult) -> None:
+        """Hand a tool result back to the model under ``event``'s call id.
+
+        For fire-and-forget device tools the model already spoke its one
+        acknowledgement WHEN it called the tool; if we hand back a plain
+        result it narrates a SECOND time (heard as a repeated response). We
+        must still send a result (the Live protocol requires one), so we
+        embed a "stay silent" instruction for these tools.
+        """
         try:
             if result.ok and event.name in self._SILENT_RESULT_TOOLS:
                 payload: Any = {
@@ -575,8 +660,6 @@ class Orchestrator:
             )
         except Exception as exc:  # noqa: BLE001 - provider feedback best-effort
             logger.error("tool_call.feedback_failed", error=str(exc))
-
-        return result
 
     def _truncate_for_model(self, payload: Any) -> Any:
         """Cap the size of a tool result handed back to the model.

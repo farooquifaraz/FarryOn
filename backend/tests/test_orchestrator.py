@@ -198,3 +198,136 @@ async def test_the_same_call_again_without_a_reply_is_refused_but_a_new_ask_is_n
     assert "5 times" in (
         orch._repeat_refusal(ToolCallEvent(id="w9", name="web_search", args={"q": "x"})) or ""
     )
+
+
+async def test_a_second_look_while_one_is_in_flight_joins_it_and_takes_no_photo():
+    """Live 2026-09-27 16:13: eight identify_image calls in 50 s while the
+    first had not answered; the glasses took a photo for five of them. Every
+    ``tool_call`` the app sees is another shutter, so a vision call arriving
+    while one is in flight is never sent to the app: it waits for the look
+    under way and both call ids get that one result. Once it has finished,
+    the next call is a fresh look (and a fresh photo) again.
+    """
+    from app.agent.tool_engine import ToolResult
+    from app.ai.events import ToolCallEvent
+
+    sent: list[dict] = []
+    told: list[tuple] = []
+    release = asyncio.Event()
+
+    async def notify(msg):
+        sent.append(msg)
+
+    class _Engine:
+        async def dispatch(self, name, args, ctx):
+            await release.wait()
+            return ToolResult(
+                name=name, ok=True, result={"answer": "a red cup"}, duration_ms=5
+            )
+
+    class _Gateway:
+        async def send_tool_result(self, call_id, name, result, ok=True):
+            told.append((call_id, name, ok, result))
+
+    class _Db:
+        def add(self, row):
+            pass
+
+        async def flush(self):
+            pass
+
+        async def commit(self):
+            pass
+
+        async def rollback(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    orch = Orchestrator(
+        engine=_Engine(),  # type: ignore[arg-type]
+        gateway=_Gateway(),  # type: ignore[arg-type]
+        sessionmaker=_Db,  # type: ignore[arg-type]
+        notify_client=notify,
+    )
+    orch.note_user_turn()
+
+    first = asyncio.create_task(
+        orch.handle_tool_call(ToolCallEvent(id="c1", name="identify_image", args={"kind": "auto"}))
+    )
+    await asyncio.sleep(0.02)
+    second = asyncio.create_task(
+        orch.handle_tool_call(ToolCallEvent(id="c2", name="capture_photo", args={}))
+    )
+    await asyncio.sleep(0.02)
+    calls_seen_by_app = [m for m in sent if m["type"] == "tool_call"]
+    assert [m["id"] for m in calls_seen_by_app] == ["c1"], "one shutter, not two"
+    assert not second.done(), "the joiner waits for the look under way"
+
+    release.set()
+    r1, r2 = await asyncio.gather(first, second)
+    assert r1.ok and r2.ok
+    assert r2.result == r1.result
+    assert {(c, ok) for c, _, ok, _ in told} == {("c1", True), ("c2", True)}
+    # The app never heard of c2, so it gets no result for it either.
+    assert [m["id"] for m in sent if m["type"] == "tool_result"] == ["c1"]
+
+    # The look is over: the next call is a new one, photo and all.
+    r3 = await orch.handle_tool_call(
+        ToolCallEvent(id="c3", name="identify_image", args={"kind": "product"})
+    )
+    assert r3.ok
+    assert [m["id"] for m in sent if m["type"] == "tool_call"] == ["c1", "c3"]
+
+
+async def test_a_joined_look_whose_first_call_died_is_told_so():
+    """If the call being joined blows up, the joiner gets an honest failure
+    (tell the user, do not call again) rather than hanging or crashing."""
+    from app.ai.events import ToolCallEvent
+
+    told: list[tuple] = []
+    release = asyncio.Event()
+
+    class _Engine:
+        async def dispatch(self, name, args, ctx):
+            await release.wait()
+            raise RuntimeError("boom")
+
+    class _Gateway:
+        async def send_tool_result(self, call_id, name, result, ok=True):
+            told.append((call_id, ok))
+
+    class _Db:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    orch = Orchestrator(
+        engine=_Engine(),  # type: ignore[arg-type]
+        gateway=_Gateway(),  # type: ignore[arg-type]
+        sessionmaker=_Db,  # type: ignore[arg-type]
+        notify_client=lambda msg: asyncio.sleep(0),
+    )
+    first = asyncio.create_task(
+        orch.handle_tool_call(ToolCallEvent(id="c1", name="identify_image", args={}))
+    )
+    await asyncio.sleep(0.02)
+    second = asyncio.create_task(
+        orch.handle_tool_call(ToolCallEvent(id="c2", name="identify_image", args={}))
+    )
+    await asyncio.sleep(0.02)
+    release.set()
+    with pytest.raises(RuntimeError):
+        await first
+    r2 = await second
+    assert r2.ok is False
+    assert "did not finish" in (r2.error or "")
+    assert ("c2", False) in told
+    # And the slate is clean for the next look.
+    assert orch._vision_inflight is not None and orch._vision_inflight.cancelled()
