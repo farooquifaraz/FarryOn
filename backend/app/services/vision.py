@@ -65,6 +65,24 @@ WIKI_USER_AGENT = (
 # Vision rejects very large phone photos ("Bad image data"); 1280px is plenty.
 MAX_DIMENSION = 1280
 _HTTP_TIMEOUT = 30.0
+# A question about a photo is answered in 1.5-3 s (measured 2026-08-27). Live
+# 2026-09-27 16:13: the call sat for the full 30 s, eight times in a row, and
+# the tool's own 30 s ceiling fired first — so the model heard only "tool
+# timed out", asked again, and the glasses took a new photo for every retry.
+# The answer now gives up well inside the tool's budget and says why, so the
+# model can tell the user what happened instead of trying again.
+_ANSWER_TIMEOUT = 15.0
+
+#: What the model is told when the vision service does not answer in time.
+#: The user has already been waiting for the photo, so this must END the
+#: attempt — not start another one.
+VISION_TOOK_TOO_LONG = (
+    "Looking at the photo took too long: the vision service did not answer "
+    f"within {_ANSWER_TIMEOUT:.0f} seconds. Tell the user in ONE short "
+    "sentence, in their language, that the picture could not be analysed this "
+    "time and they can ask again in a moment. Do NOT call this tool again on "
+    "your own."
+)
 
 DetectMode = Literal["web", "landmark", "product", "auto"]
 
@@ -91,6 +109,13 @@ MARKETPLACES: list[dict[str, str]] = [
 
 class DetectionError(Exception):
     """A user-facing detection failure (bad image, API error, no key)."""
+
+
+class VisionTimeout(DetectionError):
+    """The vision service did not answer within :data:`_ANSWER_TIMEOUT`."""
+
+    def __init__(self) -> None:
+        super().__init__(VISION_TOOK_TOO_LONG)
 
 
 # -- Pure helpers ------------------------------------------------------------
@@ -428,7 +453,7 @@ async def gemini_vision_answer(
                 f"{GEMINI_BASE}/{model}:generateContent",
                 json=body,
                 headers=_api_key_header(gemini_key),
-                timeout=_HTTP_TIMEOUT,
+                timeout=_ANSWER_TIMEOUT,
             )
             if r.status_code in (404, 429, 500, 502, 503):
                 continue
@@ -437,6 +462,17 @@ async def gemini_vision_answer(
             metrics.GEMINI_API_CALLS.labels(purpose="answer", outcome="ok").inc()
             text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             return text.strip() or None
+        except httpx.TimeoutException as exc:
+            # No second model: another wait of the same length would only
+            # push the tool past its own ceiling, and the user is still
+            # holding for the answer.
+            logger.warning(
+                "vision.gemini_answer_timeout",
+                model=model,
+                timeout_s=_ANSWER_TIMEOUT,
+                error=repr(exc),
+            )
+            raise VisionTimeout() from exc
         except Exception as exc:  # noqa: BLE001 - best-effort
             logger.warning("vision.gemini_answer_failed", model=model, error=str(exc))
             continue
@@ -791,6 +827,12 @@ async def run_detection(
                 gemini_key=gemini_key, lang=lang, gem=gem,
             )
             return {"ok": True, "mode": "product", "result": product}
+    except VisionTimeout as exc:
+        # Flagged so a tool can tell a stalled service from a picture it
+        # could not read: the first ends the attempt, the second invites
+        # another try.
+        logger.warning("vision.answer_timed_out", mode=mode)
+        return {"ok": False, "error": str(exc), "timed_out": True}
     except DetectionError as exc:
         logger.info("vision.detect_failed", mode=mode, error=str(exc))
         return {"ok": False, "error": str(exc)}

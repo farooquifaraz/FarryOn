@@ -45,8 +45,13 @@ class IdentifyImageTool(Tool):
     #: The photo wait is capped at the patience (12 s) and the describe call
     #: runs after it, so the engine's 20 s default cut off photos that had
     #: already arrived (live 2026-09-22 12:09: photo at 16 s, tool killed at
-    #: 20 s mid-describe). A ceiling for a slow vision API, not a wait.
-    timeout_seconds = 30.0
+    #: 20 s mid-describe). A backstop above wait + describe (12 s + 15 s,
+    #: app.services.vision._ANSWER_TIMEOUT), never the thing that fires:
+    #: at 30 s it beat the describe call's own 30 s limit by a hair, so a
+    #: stalled vision service surfaced as a bare "tool timed out" and the
+    #: model asked again — eight calls, five glasses photos, no answer
+    #: (live 2026-09-27 16:13).
+    timeout_seconds = 40.0
     description = (
         "Capture the current camera view and look at it. Call this for 'what "
         "is this', 'what's in front of me', 'click a pic', 'scan/identify/"

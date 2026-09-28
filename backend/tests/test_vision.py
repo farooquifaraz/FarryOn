@@ -490,3 +490,35 @@ async def test_gemini_only_no_vision_key_still_identifies(monkeypatch) -> None:
     assert env["ok"] is True
     assert env["mode"] == "product"
     assert env["result"]["product_name"] == "Wireless Mouse"
+
+
+async def test_a_stalled_answer_gives_up_inside_the_tool_budget(monkeypatch) -> None:
+    """Live 2026-09-27 16:13: the glasses photo was in hand in 4 s, then the
+    vision call sat for the whole 30 s, eight times in a row. The tool's own
+    30 s ceiling fired first, so the model heard only "tool timed out" and
+    asked again — and the glasses took a new photo for every retry.
+
+    A stalled answer now gives up at ``_ANSWER_TIMEOUT``, does NOT try the
+    second model (another wait of the same length), and comes back flagged
+    ``timed_out`` with the words the model needs: tell the user, do not
+    call again.
+    """
+    calls: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        raise httpx.ReadTimeout("stalled", request=request)
+
+    _install_handler(monkeypatch, handle)
+    env = await vision.run_detection(
+        "auto",
+        settings=_settings(),
+        image_data=_tiny_jpeg_b64(),
+        question="What is this?",
+    )
+    assert env["ok"] is False
+    assert env["timed_out"] is True
+    assert "took too long" in env["error"]
+    assert "Do NOT call this tool again" in env["error"]
+    assert len(calls) == 1, "no second model after a stall"
+    assert vision._ANSWER_TIMEOUT < vision._HTTP_TIMEOUT

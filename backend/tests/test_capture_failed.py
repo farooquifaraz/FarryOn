@@ -131,3 +131,34 @@ async def test_identify_image_speaks_the_device_reason(db_session) -> None:
     )
     assert res["ok"] is False
     assert res["error"] == capture_failure_message("not_connected")
+
+
+async def test_capture_photo_reports_a_stalled_look_honestly(
+    db_session, monkeypatch
+) -> None:
+    """The glasses photo landed, but the describe call timed out. The model
+    must hear that — not the "the photo is now in view, describe what you
+    see" fallback, which has it narrate the frame BEFORE this one (the
+    one-behind bug of 2026-08-27)."""
+    from app.tools import device as device_mod
+
+    async def stalled(mode, **kwargs):
+        return {"ok": False, "error": "Looking at the photo took too long…",
+                "timed_out": True}
+
+    monkeypatch.setattr(device_mod, "run_detection", stalled)
+    live = {"frame": b"\xff\xd8jpeg", "at": time.monotonic()}
+
+    async def photo_landed(timeout: float | None = None) -> bool:
+        return True
+
+    ctx = ToolContext(
+        session=db_session,
+        wait_for_frame=photo_landed,
+        latest_frame=lambda: (live["frame"], live["at"]),  # type: ignore[return-value]
+    )
+    res = await CapturePhotoTool().run(ctx)
+    assert res["captured"] is True
+    assert res["analysed"] is False
+    assert "took too long" in res["_instruction"]
+    assert "describe what you see" not in res["_instruction"]

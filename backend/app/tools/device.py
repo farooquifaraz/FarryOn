@@ -72,8 +72,12 @@ class CapturePhotoTool(Tool):
     #: The photo wait is capped at the patience (12 s) and the describe call
     #: runs after it, so the engine's 20 s default cut off photos that had
     #: already arrived (live 2026-09-22 12:09: photo at 16 s, tool killed at
-    #: 20 s mid-describe). A ceiling for a slow vision API, not a wait.
-    timeout_seconds = 30.0
+    #: 20 s mid-describe). A backstop above wait + describe (12 s + 15 s,
+    #: app.services.vision._ANSWER_TIMEOUT), never the thing that fires:
+    #: at 30 s it beat the describe call's own 30 s limit by a hair, so a
+    #: stalled vision service surfaced as a bare "tool timed out" (live
+    #: 2026-09-27 16:13, eight times in a row).
+    timeout_seconds = 40.0
     description = (
         "Take a photo from the camera the user is looking through (their smart "
         "glasses) and look at it. Call this whenever the user asks about "
@@ -147,6 +151,15 @@ class CapturePhotoTool(Tool):
                         "_instruction": "This is what the camera actually sees "
                         "right now. Relay it to the user and answer their "
                         "question from it; do not describe anything else.",
+                    }
+                if detection.get("timed_out"):
+                    # The photo is here but the look at it never finished.
+                    # Not the fallback below: "describe what you see" would
+                    # have the model narrate the frame before this one.
+                    return {
+                        "captured": True,
+                        "analysed": False,
+                        "_instruction": detection.get("error"),
                     }
             except Exception as exc:  # noqa: BLE001 - fall back to native vision
                 logger.warning("capture_photo.describe_failed", error=repr(exc))

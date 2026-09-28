@@ -244,3 +244,37 @@ async def test_no_kind_at_all_is_treated_as_auto(db_session, monkeypatch) -> Non
     assert result["ok"] is True
     assert seen["question"]
     assert result["answer"] == "a lamp"
+
+
+async def test_the_tool_backstop_sits_above_wait_plus_describe() -> None:
+    """The tool's timeout is a backstop, never the thing that fires. At 30 s
+    it beat the describe call's own 30 s limit by a hair (live 2026-09-27
+    16:13), so a stalled vision service surfaced as a bare "tool timed out"
+    and the model retried. The budget must cover the longest wait for the
+    photo (the glasses patience) plus the describe call, with room to spare.
+    """
+    from app.config import Settings
+    from app.services.vision import _ANSWER_TIMEOUT
+    from app.tools.device import CapturePhotoTool
+
+    settings = Settings()
+    longest_wait = max(
+        settings.glasses_photo_patience_seconds, settings.frame_wait_seconds
+    )
+    for tool in (IdentifyImageTool, CapturePhotoTool):
+        assert tool.timeout_seconds >= longest_wait + _ANSWER_TIMEOUT + 5, tool.name
+
+
+async def test_a_stalled_look_is_reported_as_such(db_session, monkeypatch) -> None:
+    """The photo arrived but the look at it never finished: the model gets
+    the timed-out result as-is (tell the user, do not call again), not the
+    "try moving closer" line that invites another attempt."""
+    stalled = {"ok": False, "error": "Looking at the photo took too long…",
+               "timed_out": True}
+
+    async def fake_run_detection(mode, **kwargs):
+        return stalled
+
+    monkeypatch.setattr(identify_mod, "run_detection", fake_run_detection)
+    out = await IdentifyImageTool().run(_fresh_frame_ctx(db_session, b"\xff\xd8jpeg"))
+    assert out is stalled
