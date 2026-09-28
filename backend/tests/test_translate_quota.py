@@ -326,3 +326,27 @@ class TestAFailingDatabaseIsNotHammered:
             "the seconds withheld during the outage were never billed"
         )
         assert s._translate_flush_retry_at == 0.0
+
+
+class TestTypingIsNotAWayAroundTheBudget:
+    """The translator takes typed sentences when the glasses are off
+    (2026-09-28). A spent budget refuses them exactly as it refuses audio."""
+
+    async def test_a_typed_sentence_is_refused_once_the_budget_is_spent(
+        self, caps
+    ) -> None:
+        caps(5)
+        s = _session()
+        s._translate_capped = True
+        s._last_activity = 0.0
+        typed: list[str] = []
+
+        class _Gateway:
+            async def send_text(self, text: str) -> None:
+                typed.append(text)
+
+        s._gateway = _Gateway()
+        await s._dispatch_control({"type": "text", "text": "hello"})
+        assert typed == []
+        assert s._sent[-1][0] == "quota_exceeded"
+        assert s._sent_json[-1] == {"type": "session_expired", "reason": "quota_exceeded"}

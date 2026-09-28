@@ -295,9 +295,9 @@ class TestPassThrough:
         await gw.close()
         assert listener.closed
 
-    async def test_video_and_text_are_ignored_not_forwarded(self) -> None:
-        # A translate session has no camera and no chat. Quietly accepting them
-        # is the contract; forwarding them would be a surprise.
+    async def test_video_and_tool_results_are_ignored_not_forwarded(self) -> None:
+        # A translate session has no camera and no tools. Quietly accepting
+        # them is the contract; forwarding them would be a surprise.
         listener = _FakeListener([])
         gw = CascadeTranslateGateway(
             target_language="hi",
@@ -307,9 +307,75 @@ class TestPassThrough:
         )
         await gw.connect()
         await gw.send_video(b"jpeg")
-        await gw.send_text("hello")
         await gw.send_tool_result("1", "tool", {}, True)
         assert listener.audio_sent == 0
+
+
+class TestATypedSentenceIsTranslatedLikeAHeardOne:
+    """Without the glasses there is nowhere for a spoken translation to come
+    out that the microphone cannot hear, so the app offers typing instead
+    (2026-09-28). A typed line takes the heard line's road: HEARD card,
+    translate step, translation card — and never touches the listener."""
+
+    async def test_typed_text_goes_on_screen_and_through_the_translator(self) -> None:
+        listener = _FakeListener([])
+        translator = _FakeTranslator(detected="ar")
+        speaker = _FakeSpeaker()
+        gw = CascadeTranslateGateway(
+            target_language="hi",
+            listener=listener,
+            translator=translator,
+            speaker=speaker,
+        )
+        await gw.send_text("  مرحبا بالعالم ")
+        await gw.send_text(" . ")  # nothing a person could have said: dropped
+        await gw.connect()
+        events = await _collect(gw)
+
+        heard = [
+            e for e in events if e.type == EventType.TRANSCRIPT and e.role == "user"
+        ]
+        assert heard and heard[0].text == "مرحبا بالعالم" and heard[0].final
+        assert heard[0].utterance is not None and heard[0].utterance >= 1_000_000
+        # The translator names the language it read; the heard card learns it.
+        assert heard[-1].lang == "ar" and heard[-1].utterance == heard[0].utterance
+
+        assert translator.calls == [("مرحبا بالعالم", None, "hi")]
+        said = [
+            e
+            for e in events
+            if e.type == EventType.TRANSCRIPT and e.role == "assistant"
+        ]
+        assert [e.text for e in said] == ["[hi] مرحبا بالعالم"]
+        assert said[0].utterance == heard[0].utterance
+        assert speaker.spoken == ["[hi] مرحبا بالعالم"]
+        assert listener.audio_sent == 0
+
+    async def test_typed_lines_are_numbered_apart_from_heard_ones(self) -> None:
+        translator = _FakeTranslator()
+        gw = CascadeTranslateGateway(
+            target_language="hi",
+            listener=_FakeListener([_heard("مرحبا")]),
+            translator=translator,
+            speaker=_FakeSpeaker(),
+        )
+        await gw.send_text("hello")
+        await gw.send_text("again")
+        await gw.connect()
+        events = await _collect(gw)
+        typed = [
+            e.utterance
+            for e in events
+            if e.type == EventType.TRANSCRIPT and e.role == "user" and e.text in ("hello", "again")
+        ]
+        assert typed == [1_000_001, 1_000_002]
+        # The heard sentence carries its own (small) number or none at all.
+        heard = [
+            e.utterance
+            for e in events
+            if e.type == EventType.TRANSCRIPT and e.role == "user" and e.text == "مرحبا"
+        ]
+        assert all(u is None or u < 1_000_000 for u in heard)
 
 
 

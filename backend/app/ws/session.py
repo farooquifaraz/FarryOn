@@ -1268,10 +1268,14 @@ class Session:
             self._last_activity = time.monotonic()
         if mtype == "text":
             text = (message.get("text") or "").strip()
-            if text and self._voice_capped:
-                # The talk budget is spent: typing is not a way around it.
-                # Same message, same code — the app shows the cap notice and
-                # the Upgrade overlay.
+            capped = self._voice_capped or (
+                self._mode == "translate" and self._translate_capped
+            )
+            if text and capped:
+                # The talk budget is spent: typing is not a way around it —
+                # in the assistant or in the translator, which takes typed
+                # sentences when the glasses are off. Same message, same
+                # code — the app shows the cap notice and the Upgrade overlay.
                 await self._refuse_over_quota(self._quota_message())
                 return
             if text:

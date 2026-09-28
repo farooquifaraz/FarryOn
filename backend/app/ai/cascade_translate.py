@@ -61,6 +61,10 @@ logger = get_logger(__name__)
 #: use its English — only the source transcript that comes with it.
 _LISTEN_TARGET = "en"
 
+#: Typed sentences (``send_text``) are numbered from here. The recogniser
+#: counts heard ones from 1, so the two can never share a card on the phone.
+_TYPED_UTTERANCE_BASE = 1_000_000
+
 
 def _has_words(text: str) -> bool:
     """Whether this fragment carries anything a person could have said.
@@ -119,6 +123,8 @@ class CascadeTranslateGateway(AIGateway):
         #: The utterance before the one being translated, passed along as
         #: context so a sentence cut in the wrong place still reads as one.
         self._previous_text: str | None = None
+        #: Typed sentences so far (see :meth:`send_text`).
+        self._typed = 0
 
         if listener is None:
             from app.ai.gemini_asr import GeminiStreamingASR
@@ -145,8 +151,32 @@ class CascadeTranslateGateway(AIGateway):
         await self._listener.send_audio(pcm)
 
     async def send_text(self, text: str) -> None:
-        """Ignored: a translator has no chat channel."""
-        return None
+        """A typed sentence, translated like a heard one.
+
+        Without the glasses there is nowhere for a spoken translation to come
+        out that the listening microphone cannot hear, so the app offers
+        typing instead (2026-09-28): the sentence goes on screen as HEARD and
+        through the same translate step. The listener is never involved — no
+        microphone, no audio.
+        """
+        text = (text or "").strip()
+        if not _has_words(text) or self._closed:
+            return
+        self._typed += 1
+        # Numbered far above anything the recogniser counts, so a typed line
+        # and a heard one can never land on the same card.
+        utterance = _TYPED_UTTERANCE_BASE + self._typed
+        await self._queue.put(
+            TranscriptEvent(
+                role="user", text=text, final=True, lang=None, utterance=utterance
+            )
+        )
+        previous, self._previous_text = self._previous_text, text
+        task = asyncio.create_task(
+            self._translate_and_speak(text, None, utterance, previous)
+        )
+        self._work.add(task)
+        task.add_done_callback(self._work.discard)
 
     async def send_video(self, jpeg: bytes, ts_ms: int | None = None) -> None:
         """Ignored: the translate path never sees the camera."""
