@@ -33,7 +33,8 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Type to translate…'), findsOneWidget);
-    expect(find.text('No glasses — type below'), findsOneWidget);
+    // ...and the microphone button is live: the phone listens instead.
+    expect(find.text('Tap to start'), findsOneWidget);
 
     // Replace the route, disposing the screen, and let the detached
     // `_restore()` future run.

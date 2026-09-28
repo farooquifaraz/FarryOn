@@ -157,10 +157,6 @@ class TranslateController {
   DateTime? _lastChunkAt;
   final VoiceAudioMode _voiceAudioMode;
 
-  /// Whether the glasses are connected right now. Seeded when the screen opens
-  /// and kept current from the bridge's own connection events.
-  bool _glassesConnected = false;
-
   /// True when the translated audio comes out somewhere that cannot loop back
   /// into the microphone — a headset, earbuds, or the glasses. Reported by the
   /// platform when it declines to switch paths, which is a far better signal
@@ -189,10 +185,14 @@ class TranslateController {
     _client?.updateConfig(cfg);
   }
 
-  /// Seed the target language, captions setting and glasses state.
+  /// Seed the target language and captions setting.
+  ///
+  /// `glassesConnected` is accepted for the callers that still pass it; the
+  /// glasses no longer gate anything here (the phone's microphone listens
+  /// without them, 2026-09-28), and the audio route is read from the
+  /// platform, not from this flag.
   void primeFromConfig(AppConfig cfg, {bool glassesConnected = false}) {
     _config = cfg;
-    _glassesConnected = glassesConnected;
     _emit(_state.copyWith(
       targetLanguage: cfg.translateTargetLanguage,
       captionsOnly: cfg.translateCaptionsOnly,
@@ -218,41 +218,31 @@ class TranslateController {
     if (value) unawaited(_player.flush());
   }
 
-  /// Whether the glasses are connected, which live translation requires.
+  /// Whether the glasses are connected, which live translation prefers.
   ///
-  /// Not a limitation to work around — it is the design. The translation has
-  /// to come out somewhere that cannot be heard by the microphone that is
-  /// listening to the room, or it loops: on the phone's own speaker one
+  /// The translation should come out somewhere the microphone listening to
+  /// the room cannot hear it, or it loops: on the phone's own speaker one
   /// English sentence came back as fourteen translations of itself
-  /// (device-proven 2026-08-10), and the only way to stop that on a
-  /// loudspeaker was to hold the microphone — which then swallowed whatever
-  /// was said during the translation and chopped sentences into fragments.
+  /// (device-proven 2026-08-10). With the glasses on, the speaker is in the
+  /// wearer's ear: nothing has to be held, nothing is missed, and the room
+  /// can keep talking over the translation.
   ///
-  /// With the glasses on, the speaker is in the wearer's ear. Nothing has to
-  /// be held, nothing is missed, and the room can keep talking over the
-  /// translation — which is the entire point of a simultaneous interpreter.
-  ///
-  /// The same reasoning is visible in every product that does this: Google
-  /// Translate's continuous Listening mode is headphones-only on iOS, and
-  /// HeyCyan's own translator reads its audio off the glasses.
-  bool get glassesRequired => true;
+  /// They used to be required. Since 2026-09-28 the phone's own microphone
+  /// does the listening when they are off: the echo guard holds the
+  /// microphone while a translation plays on the loudspeaker (so speech
+  /// during playback is missed — the screen says so), and "Text only" avoids
+  /// even that. Not the simultaneous interpreter the glasses make, but a
+  /// translator that works with what is in hand.
+  bool get glassesRequired => false;
 
   /// Begin translating. Returns false when it could not start.
   Future<bool> start() async {
     if (_disposed) return true;
     if (_state.isRunning) {
-      // A typed session is not a listening one: the glasses arrived and the
-      // user tapped the microphone, so it ends and a voice session begins.
+      // A typed session is not a listening one: the user tapped the
+      // microphone, so it ends and a listening session begins.
       if (!_state.typing) return true;
       await stop();
-    }
-    if (!_glassesConnected) {
-      _emit(_state.copyWith(
-        status: TranslateStatus.idle,
-        error: 'Connect your glasses first. The translation plays in your ear '
-            'so it never loops back into the microphone.',
-      ));
-      return false;
     }
     final outcome = await _permissions.requestMicrophone();
     if (outcome != PermissionOutcome.granted) {
@@ -587,7 +577,6 @@ class TranslateController {
     _glassesSub ??= _glasses?.events().listen((event) {
       if (event.type != 'connectionState') return;
       final connected = event.data['state'] == 'connected';
-      _glassesConnected = connected;
       // Mid-session the route really does change under us: glasses arriving
       // move the sound into the wearer's ear, glasses leaving bring it back to
       // the phone's speaker and the echo path with it.

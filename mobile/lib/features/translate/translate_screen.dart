@@ -224,7 +224,7 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            if (!glassesOn) const _GlassesRequiredPanel(),
+            if (!glassesOn) const _PhoneMicPanel(),
             if (glassesOn && !s.isRunning && s.turns.isEmpty)
               const _FarryPausedNotice(),
             if (s.status == TranslateStatus.reconnecting) const _ReconnectBar(),
@@ -232,7 +232,7 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
             if (s.notice != null) _NoticeBar(s.notice!),
             Expanded(
               child: s.turns.isEmpty
-                  ? _EmptyState(running: s.isRunning, typing: !glassesOn)
+                  ? _EmptyState(running: s.isRunning, typing: s.typing)
                   : _TurnList(turns: s.turns, target: s.targetLanguage),
             ),
             // No glasses: type instead. The microphone stays closed, so the
@@ -240,7 +240,8 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
             if (!glassesOn) _TypeBar(onSend: _sendTyped),
             _Controls(
               state: s,
-              enabled: glassesOn,
+              // The phone's microphone listens when the glasses are off.
+              enabled: true,
               onToggle: _toggle,
               onCaptionsOnly: (v) {
                 _controller.setCaptionsOnly(v);
@@ -557,7 +558,7 @@ class _Controls extends StatelessWidget {
                           state.typing ? 'Typing — nothing is heard' : 'Listening…',
                         TranslateStatus.starting => 'Starting…',
                         TranslateStatus.reconnecting => 'Reconnecting…',
-                        _ => enabled ? 'Tap to start' : 'No glasses — type below',
+                        _ => enabled ? 'Tap to start' : 'Not available',
                       },
                       style: const TextStyle(
                           color: Aurora.textPrimary, fontSize: 14),
@@ -594,14 +595,13 @@ class _Controls extends StatelessWidget {
   }
 }
 
-/// Shown whenever the glasses are not connected — which is whenever live
-/// translation cannot work.
-///
-/// Says WHY, not just no. "Connect your glasses" on its own reads like an
-/// arbitrary lock; the reason is that the translation has to come out
-/// somewhere the listening microphone cannot hear it.
-class _GlassesRequiredPanel extends StatelessWidget {
-  const _GlassesRequiredPanel();
+/// Shown whenever the glasses are not connected: the phone's own microphone
+/// listens instead (2026-09-28), and the panel says what that costs — on the
+/// loudspeaker the microphone is held while a translation plays, so speech
+/// during it is missed; earphones or "Text only" avoid that. Typing is the
+/// other way in.
+class _PhoneMicPanel extends StatelessWidget {
+  const _PhoneMicPanel();
 
   @override
   Widget build(BuildContext context) => Container(
@@ -621,15 +621,17 @@ class _GlassesRequiredPanel extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Glasses not connected — type to translate',
+                    'Glasses not connected — listening on the phone',
                     style: TextStyle(color: Aurora.amber, fontSize: 13.5),
                   ),
                   SizedBox(height: 4),
                   Text(
-                    'Connect your glasses to translate what you hear: the '
-                    'translation plays in your ear, so the microphone can '
-                    'keep listening to the room without hearing it. Without '
-                    'them nothing is listened to — type a sentence instead.',
+                    "The phone's microphone hears whoever speaks, in any "
+                    'language, and the translation is shown below. On the '
+                    'loudspeaker anything said while it plays is missed — '
+                    'use earphones or "Text only". You can also type a '
+                    'sentence below. With the glasses on, the translation '
+                    'plays in your ear and nothing is missed.',
                     style: TextStyle(
                         color: Aurora.textMuted, fontSize: 12, height: 1.45),
                   ),

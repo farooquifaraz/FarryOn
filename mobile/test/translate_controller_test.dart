@@ -506,35 +506,37 @@ void main() {
       await glasses.controller.close();
     });
 
-    test('without them it refuses to start, and says why', () async {
-      // Not an arbitrary lock. On the phone's speaker the translation loops
-      // back into the microphone listening to the room.
+    test('without them the phone listens, and says what that costs', () async {
+      // They used to be required (the translation loops back into the
+      // microphone on the loudspeaker). Since 2026-09-28 the phone's own
+      // microphone listens instead, with the echo guard holding it while a
+      // translation plays — and the user is told that speech during playback
+      // is missed.
+      await controller.dispose();
+      controller = build(voiceAudioMode: _FakeVoiceAudioMode('applied'));
       controller.primeFromConfig(
         const AppConfig(host: 'h', port: 8000, secure: false),
         glassesConnected: false,
       );
       final ok = await controller.start();
+      await pump();
 
-      expect(ok, isFalse);
-      expect(controller.state.error, contains('glasses'));
-      expect(controller.state.error, contains('loops'),
-          reason: 'saying no without the reason reads as an arbitrary lock');
-      expect(fake.sentLog, isEmpty, reason: 'no socket should be opened');
-    });
-
-    test('connecting them mid-refusal makes it startable', () async {
-      controller.primeFromConfig(
-        const AppConfig(host: 'h', port: 8000, secure: false),
-        glassesConnected: false,
-      );
-      expect(await controller.start(), isFalse);
-
-      // The bridge reports them arriving.
-      controller.primeFromConfig(
-        const AppConfig(host: 'h', port: 8000, secure: false),
-        glassesConnected: true,
-      );
-      expect(await controller.start(), isTrue);
+      expect(ok, isTrue);
+      expect(controller.state.isRunning, isTrue);
+      expect(controller.state.error, isNull);
+      expect(controller.state.notice, contains('phone speaker'));
+      expect(sentJson().any((m) => m['type'] == 'hello'), isTrue,
+          reason: 'a socket is opened like any other session');
+      fake.pushJson({
+        'type': 'ready',
+        'sessionId': 's1',
+        'protocolVersion': kProtocolVersion,
+        'model': 'mock-translate-1',
+        'mode': 'translate',
+        'targetLanguage': 'hi',
+      });
+      await pump();
+      expect(source.audioStarted, isTrue, reason: 'the phone microphone is on');
     });
 
     test('a brief drop holds the session instead of ending it', () async {
