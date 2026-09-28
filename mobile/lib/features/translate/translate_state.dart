@@ -94,11 +94,18 @@ class TranslateState {
     this.turns = const [],
     this.startedAt,
     this.captionsOnly = false,
+    this.typing = false,
     this.error,
     this.notice,
   });
 
   final TranslateStatus status;
+
+  /// A typed session: sentences are typed, not heard. Opened when the
+  /// glasses are not connected — there is nowhere for a spoken translation
+  /// to come out that the microphone cannot hear, so the microphone is
+  /// never opened at all.
+  final bool typing;
 
   /// BCP-47 code being translated into.
   final String targetLanguage;
@@ -144,6 +151,7 @@ class TranslateState {
     DateTime? startedAt,
     bool clearStartedAt = false,
     bool? captionsOnly,
+    bool? typing,
     String? error,
     bool clearError = false,
     String? notice,
@@ -155,6 +163,7 @@ class TranslateState {
         turns: turns ?? this.turns,
         startedAt: clearStartedAt ? null : (startedAt ?? this.startedAt),
         captionsOnly: captionsOnly ?? this.captionsOnly,
+        typing: typing ?? this.typing,
         error: clearError ? null : (error ?? this.error),
         notice: clearNotice ? null : (notice ?? this.notice),
       );

@@ -239,7 +239,13 @@ class TranslateController {
 
   /// Begin translating. Returns false when it could not start.
   Future<bool> start() async {
-    if (_disposed || _state.isRunning) return true;
+    if (_disposed) return true;
+    if (_state.isRunning) {
+      // A typed session is not a listening one: the glasses arrived and the
+      // user tapped the microphone, so it ends and a voice session begins.
+      if (!_state.typing) return true;
+      await stop();
+    }
     if (!_glassesConnected) {
       _emit(_state.copyWith(
         status: TranslateStatus.idle,
@@ -297,6 +303,60 @@ class TranslateController {
     return true;
   }
 
+  /// Begin a typed session: sentences are typed and translated, nothing is
+  /// heard.
+  ///
+  /// This is what live translation offers without the glasses (2026-09-28).
+  /// No microphone permission is asked for, no audio route is taken and the
+  /// glasses are not watched — none of the loop this feature guards against
+  /// can happen when nothing is listening. The translation is still spoken by
+  /// the phone (unless "Text only" is on): with the microphone closed there
+  /// is nothing for it to loop back into.
+  Future<bool> startTyping() async {
+    if (_disposed) return true;
+    if (_state.isRunning) {
+      if (_state.typing) return true;
+      await stop(); // a listening session gives way to the typed one
+    }
+    _emit(_state.copyWith(
+      status: TranslateStatus.starting,
+      startedAt: DateTime.now(),
+      turns: const [],
+      typing: true,
+      clearError: true,
+      clearNotice: true,
+    ));
+    await _openSocket();
+    return true;
+  }
+
+  /// Translate one typed sentence.
+  ///
+  /// Opens a typed session first when none is running, and waits for the
+  /// server to be ready — a sentence sent before `ready` is dropped by the
+  /// client. The sentence comes back from the server as a HEARD line with its
+  /// translation under it, so nothing is added to the transcript here.
+  Future<bool> sendText(String text) async {
+    final line = text.trim();
+    if (line.isEmpty || _disposed) return false;
+    if (!_state.isRunning || !_state.typing) {
+      await startTyping();
+    }
+    if (_state.status != TranslateStatus.listening) {
+      try {
+        await _stateController.stream
+            .firstWhere((s) => s.status == TranslateStatus.listening || !s.isRunning)
+            .timeout(const Duration(seconds: 10));
+      } on TimeoutException {
+        _emit(_state.copyWith(error: 'Could not reach the server. Try again.'));
+        return false;
+      }
+      if (_state.status != TranslateStatus.listening) return false;
+    }
+    _client?.send(TextMessage(line));
+    return true;
+  }
+
   /// Stop translating and release the microphone.
   Future<void> stop() async {
     // Cancel first: a pending grace timer would otherwise fire into a session
@@ -304,6 +364,7 @@ class TranslateController {
     _glassesGrace?.cancel();
     _glassesGrace = null;
     if (!_state.isRunning && _client == null) return;
+    final typed = _state.typing;
     // Mid-sentence is where this usually lands, and a voice that keeps talking
     // after the user pressed stop is alarming.
     await _voice.stop();
@@ -311,9 +372,11 @@ class TranslateController {
     await _teardownSocket();
     await _player.flush();
     await _player.stop();
-    await _voiceAudioMode.exit();
+    // A typed session never took the voice audio route, so it has none to
+    // give back; leaving it would kick whatever the phone was playing.
+    if (!typed) await _voiceAudioMode.exit();
     unawaited(Notifications.clearActivity());
-    _emit(_state.copyWith(status: TranslateStatus.stopped));
+    _emit(_state.copyWith(status: TranslateStatus.stopped, typing: false));
   }
 
   // -- Socket ---------------------------------------------------------------
@@ -364,7 +427,8 @@ class TranslateController {
           status: TranslateStatus.listening,
           clearError: true,
         ));
-        unawaited(_startAudio());
+        // A typed session never opens the microphone.
+        if (!_state.typing) unawaited(_startAudio());
       case ConnectionStatus.reconnecting:
       case ConnectionStatus.connecting:
         if (_state.status == TranslateStatus.listening) {

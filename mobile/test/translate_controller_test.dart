@@ -868,4 +868,100 @@ void main() {
       expect(controller.state.turns.single.translated, 'नमस्ते।');
     });
   });
+  group('typing without the glasses', () {
+    // Without the glasses there is nowhere for a spoken translation to come
+    // out that the microphone cannot hear, so the screen used to be off. Now
+    // sentences can be typed (2026-09-28): a typed session never opens the
+    // microphone, never asks for it, never takes the voice audio route.
+    Future<void> connectTyping({String target = 'hi'}) async {
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: false,
+      );
+      await controller.setTargetLanguage(target);
+      final sent = controller.sendText('hello there');
+      await pump();
+      helloFrames = sentJson().where((m) => m['type'] == 'hello').toList();
+      fake.pushJson({
+        'type': 'ready',
+        'sessionId': 's1',
+        'protocolVersion': kProtocolVersion,
+        'model': 'mock-translate-1',
+        'mode': 'translate',
+        'targetLanguage': target,
+      });
+      await pump();
+      expect(await sent, isTrue);
+      await pump();
+    }
+
+    test('a typed sentence opens a translate session and is sent as text',
+        () async {
+      final audioMode = _FakeVoiceAudioMode('applied');
+      controller = build(
+        permissions: _DenyingPermissions(), // never asked, so never matters
+        voiceAudioMode: audioMode,
+      );
+      await connectTyping();
+
+      expect(helloFrames.single['mode'], 'translate');
+      expect(helloFrames.single['translate']['targetLanguage'], 'hi');
+      final texts = sentJson().where((m) => m['type'] == 'text').toList();
+      expect(texts.map((m) => m['text']), ['hello there']);
+      expect(controller.state.typing, isTrue);
+      expect(controller.state.status, TranslateStatus.listening);
+      // Nothing listens, nothing was asked for, no route was taken.
+      expect(source.audioStarted, isFalse);
+      expect(sentJson().any((m) => m['type'] == 'audio_start'), isFalse);
+      expect(audioMode.enters, 0);
+    });
+
+    test('the typed line comes back as a card with its translation spoken',
+        () async {
+      await connectTyping();
+      fake.pushJson({'type': 'transcript', 'role': 'user',
+        'text': 'hello there', 'final': true, 'utterance': 1000001});
+      fake.pushJson({'type': 'transcript', 'role': 'assistant',
+        'text': 'नमस्ते', 'final': true, 'lang': 'hi', 'utterance': 1000001});
+      await pump(5);
+
+      expect(controller.state.turns.single.heard, 'hello there');
+      expect(controller.state.turns.single.translated, 'नमस्ते');
+      expect(voice.said, ['नमस्ते'], reason: 'no microphone, so no loop to fear');
+    });
+
+    test('a blank line is not sent and starts nothing', () async {
+      expect(await controller.sendText('   '), isFalse);
+      await pump();
+      expect(controller.state.isRunning, isFalse);
+      expect(fake.sentLog, isEmpty);
+    });
+
+    test('stopping a typed session gives back no audio route it never took',
+        () async {
+      final audioMode = _FakeVoiceAudioMode('applied');
+      controller = build(voiceAudioMode: audioMode);
+      await connectTyping();
+      await controller.stop();
+      expect(controller.state.typing, isFalse);
+      expect(controller.state.isRunning, isFalse);
+      expect(audioMode.exits, 0);
+    });
+
+    test('the glasses arriving and the mic tapped ends the typed session',
+        () async {
+      await connectTyping();
+      controller.primeFromConfig(
+        const AppConfig(host: 'h', port: 8000, secure: false),
+        glassesConnected: true,
+      );
+      expect(await controller.start(), isTrue);
+      await pump();
+      expect(controller.state.typing, isFalse);
+      expect(controller.state.isRunning, isTrue);
+      // A second socket was dialled for the listening session.
+      expect(sentJson().where((m) => m['type'] == 'hello').length, 1,
+          reason: 'the new channel has its own log; the old one was torn down');
+    });
+  });
 }

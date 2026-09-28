@@ -114,6 +114,15 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
     await _controller.start();
   }
 
+  /// A typed sentence: the language is asked for first if none is chosen.
+  Future<void> _sendTyped(String text) async {
+    if (ref.read(translateProvider).targetLanguage.isEmpty) {
+      final picked = await _pickLanguage();
+      if (picked == null) return;
+    }
+    await _controller.sendText(text);
+  }
+
   Future<String?> _pickLanguage() async {
     final voice = DeviceVoice();
     final picked = await TranslateLanguagePicker.open(
@@ -223,9 +232,12 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
             if (s.notice != null) _NoticeBar(s.notice!),
             Expanded(
               child: s.turns.isEmpty
-                  ? _EmptyState(running: s.isRunning)
+                  ? _EmptyState(running: s.isRunning, typing: !glassesOn)
                   : _TurnList(turns: s.turns, target: s.targetLanguage),
             ),
+            // No glasses: type instead. The microphone stays closed, so the
+            // spoken translation cannot loop back into it.
+            if (!glassesOn) _TypeBar(onSend: _sendTyped),
             _Controls(
               state: s,
               enabled: glassesOn,
@@ -334,19 +346,23 @@ class _ErrorBar extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.running});
+  const _EmptyState({required this.running, this.typing = false});
   final bool running;
+  final bool typing;
 
   @override
   Widget build(BuildContext context) => Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 36),
           child: Text(
-            running
-                ? 'Listening…'
-                : 'Point the microphone at whoever is speaking. Their language '
-                    'is detected on its own — you only pick the one you want '
-                    'to hear.',
+            typing
+                ? 'Type a sentence below. Its language is detected on its '
+                    'own — you only pick the one you want it in.'
+                : running
+                    ? 'Listening…'
+                    : 'Point the microphone at whoever is speaking. Their '
+                        'language is detected on its own — you only pick the '
+                        'one you want to hear.',
             textAlign: TextAlign.center,
             style: const TextStyle(
                 color: Aurora.textMuted, fontSize: 13, height: 1.5),
@@ -537,10 +553,11 @@ class _Controls extends StatelessWidget {
                   children: [
                     Text(
                       switch (state.status) {
-                        TranslateStatus.listening => 'Listening…',
+                        TranslateStatus.listening =>
+                          state.typing ? 'Typing — nothing is heard' : 'Listening…',
                         TranslateStatus.starting => 'Starting…',
                         TranslateStatus.reconnecting => 'Reconnecting…',
-                        _ => enabled ? 'Tap to start' : 'Glasses needed',
+                        _ => enabled ? 'Tap to start' : 'No glasses — type below',
                       },
                       style: const TextStyle(
                           color: Aurora.textPrimary, fontSize: 14),
@@ -604,19 +621,103 @@ class _GlassesRequiredPanel extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Connect your glasses to translate',
+                    'Glasses not connected — type to translate',
                     style: TextStyle(color: Aurora.amber, fontSize: 13.5),
                   ),
                   SizedBox(height: 4),
                   Text(
-                    'The translation plays in your ear, so the microphone can '
-                    'keep listening to the room without hearing it. On the '
-                    "phone's speaker it would translate itself, over and over.",
+                    'Connect your glasses to translate what you hear: the '
+                    'translation plays in your ear, so the microphone can '
+                    'keep listening to the room without hearing it. Without '
+                    'them nothing is listened to — type a sentence instead.',
                     style: TextStyle(
                         color: Aurora.textMuted, fontSize: 12, height: 1.45),
                   ),
                 ],
               ),
+            ),
+          ],
+        ),
+      );
+}
+
+/// The typed way in: a sentence and a Send button, shown only while the
+/// glasses are off. Sending clears the field; the sentence comes back from
+/// the server as a card, translated.
+class _TypeBar extends StatefulWidget {
+  const _TypeBar({required this.onSend});
+  final Future<void> Function(String text) onSend;
+
+  @override
+  State<_TypeBar> createState() => _TypeBarState();
+}
+
+class _TypeBarState extends State<_TypeBar> {
+  final _ctl = TextEditingController();
+  bool _sending = false;
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    final text = _ctl.text.trim();
+    if (text.isEmpty || _sending) return;
+    setState(() => _sending = true);
+    try {
+      await widget.onSend(text);
+      _ctl.clear();
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _ctl,
+                minLines: 1,
+                maxLines: 3,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _send(),
+                style: const TextStyle(color: Aurora.textPrimary, fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: 'Type to translate…',
+                  hintStyle: const TextStyle(color: Aurora.textMuted),
+                  filled: true,
+                  fillColor: Aurora.glass,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Aurora.glassBorder),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Aurora.glassBorder),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton.filled(
+              onPressed: _sending ? null : _send,
+              tooltip: 'Send',
+              style: IconButton.styleFrom(backgroundColor: Aurora.teal),
+              icon: _sending
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Aurora.tealInk),
+                    )
+                  : const Icon(Icons.send_rounded, color: Aurora.tealInk),
             ),
           ],
         ),

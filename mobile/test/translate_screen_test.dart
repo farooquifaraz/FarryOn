@@ -26,12 +26,14 @@ void main() {
     await tester.pump();
     expect(find.text('Live translation'), findsOneWidget);
     // With no glasses connected — which is what a test binding has — the
-    // screen explains why it cannot run rather than offering a button that
-    // would fail.
+    // screen says so and offers typing instead of a microphone button that
+    // would fail (2026-09-28).
     expect(
-      find.textContaining('Connect your glasses'),
+      find.textContaining('Glasses not connected'),
       findsOneWidget,
     );
+    expect(find.text('Type to translate…'), findsOneWidget);
+    expect(find.text('No glasses — type below'), findsOneWidget);
 
     // Replace the route, disposing the screen, and let the detached
     // `_restore()` future run.
