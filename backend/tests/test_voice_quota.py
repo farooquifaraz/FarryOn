@@ -45,6 +45,7 @@ def _session(user_id: int | None = 7) -> Session:
     s = Session.__new__(Session)
     s.session_id = "test-session"
     s._user_id = user_id
+    s._authed_user_id = user_id
     # None means "no resolved plan", so plan_cap() falls back to default_plan —
     # which is what cap_of() sets. A real session resolves this in
     # _load_voice_usage; this fixture skips that to test metering in isolation.
@@ -263,3 +264,76 @@ async def test_typing_is_not_a_way_around_a_spent_budget(cap_of) -> None:
     await s._dispatch_control({"type": "text", "text": "hello?"})
     assert s._sent[-1][0] == "quota_exceeded"
     assert s._sent_json[-1]["type"] == "session_expired"
+
+
+async def test_the_budget_is_the_signed_in_users_before_the_owner_row_is_resolved(
+    cap_of,
+) -> None:
+    """Live 2026-09-28: two free users at 31 and 35 of their 30 lifetime
+    minutes, still talking; not one quota event in 30 days of logs.
+
+    The budget is loaded before the owner row is resolved (a spent trial is
+    refused before any provider is connected). Keyed on the resolved owner
+    alone, that load read the anonymous pool — always empty — so every
+    session started from zero, and the plan was resolved for nobody, so a
+    paying user was metered on the free cap. The handshake token already
+    names the user: the load must spend THEIR budget.
+    """
+    cap_of(5)
+    async with get_sessionmaker()() as db:
+        await repo.bump_daily_usage(db, user_key="u42", day=_TODAY, voice_seconds=5)
+        await db.commit()
+
+    s = _session(user_id=None)  # the owner row is not resolved yet...
+    s._authed_user_id = 42  # ...but the token named the user
+    assert s._usage_key() == "u42"
+    await s._load_voice_usage()
+    assert s._voice_used_s == 5.0
+    assert await s._refuse_if_budget_spent() is True
+    assert s._sent[-1][0] == "quota_exceeded"
+
+
+async def test_a_spent_budget_is_refused_at_connect_in_translate_too(cap_of) -> None:
+    """One shared talk budget: a trial spent on the assistant is spent on
+    live translation too, and it is told at the door — not on the first
+    audio chunk of a session already running on the operator's model."""
+    cap_of(5)
+    s = _session()
+    s._translate_used_s = 5.0
+    s._translate_capped = False
+    assert await s._refuse_if_translate_budget_spent() is True
+    assert s._translate_capped is True
+    assert s._sent[-1][0] == "quota_exceeded"
+    assert s._sent_json[-1] == {"type": "session_expired", "reason": "quota_exceeded"}
+
+    fresh = _session()
+    fresh._translate_used_s = 4.0
+    fresh._translate_capped = False
+    assert await fresh._refuse_if_translate_budget_spent() is False
+    assert fresh._sent == []
+
+
+async def test_a_failed_budget_load_is_retried_once(cap_of, monkeypatch) -> None:
+    """A DB hiccup on the one read that decides the budget used to hand the
+    session a fresh 30 minutes; it gets a second try first."""
+    cap_of(5)
+    async with get_sessionmaker()() as db:
+        await repo.bump_daily_usage(db, user_key="u7", day=_TODAY, voice_seconds=5)
+        await db.commit()
+
+    from app.ws import session as session_mod
+
+    real = session_mod.get_sessionmaker
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("db is having a moment")
+        return real()
+
+    monkeypatch.setattr(session_mod, "get_sessionmaker", flaky)
+    s = _session()
+    await s._load_voice_usage()
+    assert calls["n"] == 2
+    assert s._voice_used_s == 5.0

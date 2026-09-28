@@ -531,6 +531,12 @@ class Session:
             # never be reached.
             if self._mode == "translate":
                 await self._load_translate_usage()
+                # The same door the assistant has: a spent budget is told
+                # here, not on the first audio chunk of a session already
+                # running on the operator's model.
+                if await self._refuse_if_translate_budget_spent():
+                    reason = "quota_exceeded"
+                    return
                 metrics.TRANSLATE_SESSIONS.labels(
                     target=self._translate["target_language"]
                 ).inc()
@@ -2369,10 +2375,47 @@ class Session:
         await self._refuse_over_quota(self._quota_message())
         return True
 
+    async def _refuse_if_translate_budget_spent(self) -> bool:
+        """The translate twin of :meth:`_refuse_if_budget_spent`: one shared
+        talk budget, so a trial spent on the assistant is spent here too."""
+        if not get_settings().quota_enforcement_enabled:
+            return False
+        cap = plan_cap("voice_seconds", self._plan_name)
+        if cap < 0 or self._translate_used_s < cap:
+            return False
+        self._translate_capped = True
+        logger.info(
+            "quota.refused_at_connect",
+            session_id=self.session_id,
+            user_key=self._usage_key(),
+            used_s=round(self._translate_used_s, 1),
+            cap_s=cap,
+            plan=self._plan_name,
+            mode="translate",
+        )
+        await self._refuse_over_quota(self._quota_message())
+        return True
+
+    @property
+    def _owner_id(self) -> int | None:
+        """Whose budget this session spends: the resolved owner once
+        ``_persist_session_start`` has run, else the user the handshake
+        token named.
+
+        The budget is loaded BEFORE the owner row is resolved (a spent trial
+        must be refused before any provider is connected, and the owner is
+        persisted alongside the gateway). Keyed on ``_user_id`` alone, that
+        load read the anonymous pool — always empty — so every session
+        started from zero: two free users were at 31 and 35 of their 30
+        lifetime minutes and still talking (live 2026-09-28), and a paying
+        user was metered on the free plan's cap all session long.
+        """
+        return self._user_id if self._user_id is not None else self._authed_user_id
+
     def _usage_key(self) -> str:
         """The daily_usage key — same spelling the tools use, so one person is
         one row rather than two."""
-        return user_key_for(self._user_id, self.session_id)
+        return user_key_for(self._owner_id, self.session_id)
 
     async def _flush_voice_usage(self) -> None:
         """Write the speech counted since the last flush, and fold it into the
@@ -2559,7 +2602,7 @@ class Session:
                 from app.modules.billing import service as billing
 
                 self._plan_name = await billing.active_plan_name(
-                    db, self._user_id
+                    db, self._owner_id
                 )
                 # The shared talk budget, over the plan's own window.
                 self._translate_used_s = float(
@@ -2577,20 +2620,35 @@ class Session:
         """
         if not get_settings().quota_enforcement_enabled:
             return
-        try:
-            async with get_sessionmaker()() as db:
-                # Read the plan first: it decides whether the budget is this
-                # month's or a lifetime trial total.
-                # Resolve the caps-bearing plan here, in the same one-shot DB
-                # trip: the alternative is a query per audio frame. A signed-in
-                # user gets their subscription's plan; anonymous falls back to
-                # the default inside active_plan_name.
-                from app.modules.billing import service as billing
+        # A load that fails leaves the session on a fresh budget (metering
+        # protects the bill; a DB hiccup must not refuse everyone), so one
+        # hiccup gets a second try before that happens, and it is logged as
+        # the error it is.
+        for attempt in (1, 2):
+            try:
+                async with get_sessionmaker()() as db:
+                    # Read the plan first: it decides whether the budget is
+                    # this month's or a lifetime trial total.
+                    # Resolve the caps-bearing plan here, in the same one-shot
+                    # DB trip: the alternative is a query per audio frame. A
+                    # signed-in user gets their subscription's plan; anonymous
+                    # falls back to the default inside active_plan_name.
+                    from app.modules.billing import service as billing
 
-                self._plan_name = await billing.active_plan_name(db, self._user_id)
-                self._voice_used_s = float(await self._talk_used_seconds(db))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("quota.voice_load_failed", error=str(exc))
+                    self._plan_name = await billing.active_plan_name(
+                        db, self._owner_id
+                    )
+                    self._voice_used_s = float(await self._talk_used_seconds(db))
+                return
+            except Exception as exc:  # noqa: BLE001
+                if attempt == 1:
+                    await asyncio.sleep(0.3)
+                    continue
+                logger.error(
+                    "quota.voice_load_failed",
+                    user_key=self._usage_key(),
+                    error=str(exc),
+                )
 
     async def _resolve_owner(self, db: AsyncSession) -> User:
         """Load the signed-in user, or the shared anonymous row if there is none.
