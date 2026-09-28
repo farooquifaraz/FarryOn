@@ -50,6 +50,7 @@ class ToolActivity {
     this.result,
     this.error,
     this.needsPermission = false,
+    this.startedAt,
   });
 
   final String id;
@@ -61,6 +62,10 @@ class ToolActivity {
   final Map<String, dynamic>? result;
   final String? error;
   final bool needsPermission;
+
+  /// When the `tool_call` arrived, so a card can show how long the user has
+  /// been waiting (a glasses photo takes 5–15 s; nothing on screen said so).
+  final DateTime? startedAt;
 
   bool get isPending => ok == null;
 
@@ -77,6 +82,7 @@ class ToolActivity {
         result: result ?? this.result,
         error: error ?? this.error,
         needsPermission: needsPermission,
+        startedAt: startedAt,
       );
 }
 

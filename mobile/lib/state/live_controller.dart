@@ -2168,6 +2168,7 @@ class LiveController {
         name: msg.name,
         args: msg.args,
         needsPermission: msg.needsPermission,
+        startedAt: DateTime.now(),
       ));
     if (list.length > _maxTools) {
       list.removeRange(0, list.length - _maxTools);
