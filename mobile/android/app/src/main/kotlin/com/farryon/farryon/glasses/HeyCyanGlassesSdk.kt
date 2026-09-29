@@ -1187,9 +1187,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         LargeDataHandler.getInstance().glassesControl(
             byteArrayOf(0x02, 0x01, 0x0e)
         ) { _, rsp ->
-            if (rsp != null && rsp.errorCode > 0 && rsp.errorCode != 0xff) {
-                emit("deviceEvent", mapOf("hex" to "restart refused err=${rsp.errorCode}"))
-            }
+            // The reply code is not a verdict: the GS4 answered err=1 and
+            // rebooted anyway (device 2026-09-29: link down 0.3 s later,
+            // back in 6 s). Logged for the record, never read as a refusal.
+            emit("deviceEvent", mapOf("hex" to "restart ack err=${rsp?.errorCode}"))
         }
     }
 
@@ -1206,12 +1207,12 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
         LargeDataHandler.getInstance().glassesControl(
             byteArrayOf(0x02, 0x01, 0x0a)
         ) { _, rsp ->
-            if (rsp != null && rsp.errorCode > 0 && rsp.errorCode != 0xff) {
-                emit("deviceEvent", mapOf("hex" to "factory reset refused err=${rsp.errorCode}"))
-                return@glassesControl
-            }
-            // Sent. Forget the device on our side; the link will drop by
-            // itself as the glasses wipe.
+            // As with restart, the code is an ack, not a verdict (err=1 on
+            // the GS4, which dropped the link 2 s later). Forget the device
+            // on our side either way: the SDK's reconnect must not dial a
+            // headset that has just been told to forget this phone. If the
+            // glasses ignored the command the user pairs again with one tap.
+            emit("deviceEvent", mapOf("hex" to "factory reset ack err=${rsp?.errorCode}"))
             main.postDelayed({
                 app.getSharedPreferences("glasses_lab", Context.MODE_PRIVATE)
                     .edit().remove("last_mac").apply()
