@@ -19,7 +19,6 @@ import '../data/reminders_screen.dart';
 import '../debug/debug_logs_screen.dart';
 import '../glasses/glasses_connect_flow.dart';
 import '../update/update_screens.dart';
-import 'calendar_page.dart';
 import 'glasses_page.dart';
 import 'subscription_screen.dart';
 
@@ -190,9 +189,6 @@ class SettingsScreen extends ConsumerWidget {
               subtitle: emailSub,
               onTap: () => _push(context, const _EmailPage()),
             ),
-            // Google Calendar link (features/settings/calendar_page.dart):
-            // hides itself when the build has no Google client id.
-            const CalendarSettingsRow(),
             SettingsRow(
               icon: Icons.travel_explore_rounded,
               gradient: Aurora.gradPurple,
