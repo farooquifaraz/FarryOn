@@ -80,6 +80,33 @@ class _FakeSink implements WebSocketSink {
   Future<void> get done => Future.value();
 }
 
+/// A channel whose close never completes — a connect that never finished.
+class _HangingCloseChannel extends FakeChannel {
+  @override
+  WebSocketSink get sink => _HangingSink(super.sink, this);
+}
+
+class _HangingSink implements WebSocketSink {
+  _HangingSink(this._inner, this._channel);
+  final WebSocketSink _inner;
+  final FakeChannel _channel;
+
+  @override
+  void add(dynamic data) => _inner.add(data);
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) =>
+      _inner.addError(error, stackTrace);
+  @override
+  Future<void> addStream(Stream<dynamic> stream) => _inner.addStream(stream);
+  @override
+  Future<void> get done => _inner.done;
+  @override
+  Future<void> close([int? closeCode, String? closeReason]) {
+    _channel.closed = true;
+    return Completer<void>().future; // never
+  }
+}
+
 AppConfig _config() =>
     const AppConfig(host: 'localhost', port: 8000, secure: false);
 
@@ -484,6 +511,40 @@ void main() {
       client.updateConfig(_config().copyWith(provider: 'cascade'));
       await Future<void>.delayed(const Duration(milliseconds: 50));
       expect(connectCount, 2, reason: 'a new hello has to carry the provider');
+    });
+
+    test('a socket whose close never finishes still gets a reconnect',
+        () async {
+      // S23 2026-09-29: the backend restarted, the phone could reach it, and
+      // the app sat on "Reconnecting" for minutes without one attempt. The
+      // reconnect is scheduled once the old socket's close completes — and
+      // closing a socket whose connect never completed can hang forever.
+      FakeChannel? latest;
+      var connectCount = 0;
+      final client = WebSocketLiveClient(
+        config: _config(),
+        platform: 'android',
+        deviceInfoProvider: _device,
+        channelFactory: (_) {
+          connectCount++;
+          return latest = connectCount == 1 ? _HangingCloseChannel() : FakeChannel();
+        },
+      );
+      addTearDown(client.dispose);
+
+      client.start();
+      await Future<void>.delayed(Duration.zero);
+      latest!.pushJson({'type': 'ready', 'sessionId': 's', 'protocolVersion': 1});
+      await Future<void>.delayed(Duration.zero);
+
+      latest!.drop();
+      await Future<void>.delayed(Duration.zero);
+      expect(client.currentStatus, ConnectionStatus.reconnecting);
+
+      // The close is abandoned after its bound (2 s) and the reconnect goes
+      // ahead; without the bound this would wait forever.
+      await Future<void>.delayed(const Duration(milliseconds: 3200));
+      expect(connectCount, 2, reason: 'a hung close must not stop the reconnect');
     });
 
     test('stop() prevents further reconnects', () async {

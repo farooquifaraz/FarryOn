@@ -606,11 +606,20 @@ class WebSocketLiveClient {
 
     await sub?.cancel();
     try {
-      await channel?.sink.close(closeCode);
+      // Bounded: closing a socket whose connect never completed (server down,
+      // connection refused) can hang, and the reconnect is scheduled only
+      // once this returns — so the app sat on "Reconnecting" for good after
+      // the server came back (S23, 2026-09-29: backend restarted, phone could
+      // reach it, not one attempt for minutes).
+      await channel?.sink.close(closeCode).timeout(_closeTimeout);
     } catch (_) {
-      // Ignore close races on an already-dead socket.
+      // Ignore close races on an already-dead socket, and a close that
+      // would not finish: the socket is dropped either way.
     }
   }
+
+  /// How long a socket close may take before it is abandoned.
+  static const Duration _closeTimeout = Duration(seconds: 2);
 
   void _setStatus(ConnectionStatus status) {
     if (status == _currentStatus) return;
