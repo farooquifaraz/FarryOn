@@ -1692,11 +1692,17 @@ class LiveController {
   bool _micServiceOn = false;
   Timer? _micServiceDrop;
 
-  /// How long a reconnect may run before the mic service is let go. Long
-  /// enough to ride out a Wi-Fi blip (the client's backoff tops out at 8 s),
-  /// short enough that "Connecting…" to an unreachable server does not hold
-  /// a wake-lock, a Wi-Fi lock and a microphone notification all afternoon.
-  static Duration micServiceGrace = const Duration(seconds: 60);
+  /// How long a reconnect may run before the mic service is let go.
+  ///
+  /// Long enough to ride out a Wi-Fi blip with the screen off: the moment
+  /// the service is gone, Doze cuts the app's network (netpolicy showed the
+  /// uid blocked BATTERY_SAVER|DOZE|APP_BACKGROUND, every SYN dropped) and
+  /// the session cannot come back until the phone is woken. Short enough
+  /// that "Connecting…" to an unreachable server does not hold a wake-lock,
+  /// a Wi-Fi lock and a microphone notification all afternoon — three
+  /// minutes of no server is a session the server has given up on too
+  /// (its idle cap is five).
+  static Duration micServiceGrace = const Duration(minutes: 3);
 
   /// Keep the mic foreground service (CPU wake-lock, Wi-Fi lock, "Farry is
   /// listening" notification) tied to a LIVE socket.
