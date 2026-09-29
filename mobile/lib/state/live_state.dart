@@ -123,6 +123,8 @@ class LiveSessionState {
     this.glassesAudioReady,
     this.glassesAudioPaired,
     this.glassesName,
+    this.glassesMac,
+    this.glassesInfo = const {},
     this.glassesTalking = false,
     this.glassesWorn = false,
     this.recording,
@@ -200,6 +202,14 @@ class LiveSessionState {
   /// the dashboard card. Kept across a drop so the card can say WHICH pair.
   final String? glassesName;
 
+  /// Bluetooth address of the (last) connected glasses, for the About page.
+  final String? glassesMac;
+
+  /// Versions the glasses reported (`btFirmware`, `btHardware`,
+  /// `wifiFirmware`, `wifiHardware`), from the bridge's `deviceInfo` event.
+  /// Empty until asked (Settings → Glasses → About) or until a connect.
+  final Map<String, Object?> glassesInfo;
+
   /// True while the user is long-pressing and glasses-mic PCM is flowing.
   final bool glassesTalking;
 
@@ -275,6 +285,8 @@ class LiveSessionState {
     bool? glassesAudioReady,
     bool? glassesAudioPaired,
     String? glassesName,
+    String? glassesMac,
+    Map<String, Object?>? glassesInfo,
     bool? glassesTalking,
     bool? glassesWorn,
     GlassesRecording? recording,
@@ -314,6 +326,8 @@ class LiveSessionState {
         glassesAudioReady: glassesAudioReady ?? this.glassesAudioReady,
         glassesAudioPaired: glassesAudioPaired ?? this.glassesAudioPaired,
         glassesName: glassesName ?? this.glassesName,
+        glassesMac: glassesMac ?? this.glassesMac,
+        glassesInfo: glassesInfo ?? this.glassesInfo,
         glassesTalking: glassesTalking ?? this.glassesTalking,
         glassesWorn: glassesWorn ?? this.glassesWorn,
         recording: clearRecording ? null : (recording ?? this.recording),

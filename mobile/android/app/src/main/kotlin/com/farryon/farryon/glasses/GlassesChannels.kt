@@ -459,6 +459,8 @@ class GlassesChannels private constructor(
                 }
                 "requestBattery" -> { sdk.requestBattery(); result.success(null) }
                 "requestDeviceInfo" -> { sdk.requestDeviceInfo(); result.success(null) }
+                "restartGlasses" -> { sdk.restart(); result.success(null) }
+                "factoryResetGlasses" -> { sdk.factoryReset(); result.success(null) }
                 "takePhoto" -> { sdk.takePhoto(); result.success(null) }
                 "takeAiPhoto" -> {
                     val requestId = UUID.randomUUID().toString()

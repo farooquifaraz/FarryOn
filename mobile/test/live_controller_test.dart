@@ -166,7 +166,13 @@ class FakeGlassesBridge implements GlassesBridgeApi {
   @override
   Future<void> requestBattery() async => batteryCalls++;
   @override
-  Future<void> requestDeviceInfo() async {}
+  Future<void> requestDeviceInfo() async => infoCalls++;
+  int infoCalls = 0;
+  final powerCalls = <String>[];
+  @override
+  Future<void> restart() async => powerCalls.add('restart');
+  @override
+  Future<void> factoryReset() async => powerCalls.add('factoryReset');
   @override
   Future<void> takePhoto() async {}
   @override
@@ -1556,6 +1562,68 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 250));
       expect(ctl.state.connection, isNot(ConnectionStatus.connected));
       expect(glasses.micCalls, isEmpty);
+    });
+  });
+  group('glasses restart, factory reset and about', () {
+    // Settings → Glasses (2026-09-29), modelled on the vendor app.
+    late FakeGlassesBridge glasses;
+
+    LiveController build() {
+      glasses = FakeGlassesBridge();
+      final ctl = LiveController(
+        config: const AppConfig(host: 'h', port: 8000, secure: false),
+        registry: DeviceRegistry(factory: (_) => FakeCaptureSource()),
+        player: FakePcmPlayer(),
+        permissions: GrantingPermissions(),
+        clientFactory: (cfg, deviceInfo) => WebSocketLiveClient(
+          config: cfg,
+          platform: 'android',
+          deviceInfoProvider: deviceInfo,
+          channelFactory: (_) => FakeChannel(),
+        ),
+        platform: 'android',
+        glassesBridge: glasses,
+      );
+      addTearDown(ctl.dispose);
+      return ctl;
+    }
+
+    test('what the glasses report lands on the state', () async {
+      final ctl = build();
+      await ctl.connect(); // the bridge is listened to from connect on
+      await tick();
+      glasses.emit('connectionState',
+          {'state': 'connected', 'name': 'GS4 MAX_2BAB', 'mac': '63:08:F1:2B:2B:AB'});
+      glasses.emit('deviceInfo', {
+        'btFirmware': '2.20.16',
+        'btHardware': 'AM01W_V2.2',
+        'wifiFirmware': '1.00.28',
+        'wifiHardware': 'WIFIAM01W_V2.2',
+      });
+      await tick();
+      expect(ctl.state.glassesMac, '63:08:F1:2B:2B:AB');
+      expect(ctl.state.glassesInfo['btFirmware'], '2.20.16');
+      expect(ctl.state.glassesInfo['wifiHardware'], 'WIFIAM01W_V2.2');
+      expect(await ctl.refreshGlassesInfo(), isTrue);
+      expect(glasses.infoCalls, 1);
+    });
+
+    test('restart and reset reach the bridge only while connected', () async {
+      final ctl = build();
+      await ctl.connect(); // the bridge is listened to from connect on
+      await tick();
+      expect(await ctl.restartGlasses(), isFalse);
+      expect(await ctl.factoryResetGlasses(), isFalse);
+      expect(glasses.powerCalls, isEmpty);
+
+      glasses.emit('connectionState', {'state': 'connected', 'name': 'GS4'});
+      glasses.emit('deviceInfo', {'btFirmware': '2.20.16'});
+      await tick();
+      expect(await ctl.restartGlasses(), isTrue);
+      expect(await ctl.factoryResetGlasses(), isTrue);
+      expect(glasses.powerCalls, ['restart', 'factoryReset']);
+      expect(ctl.state.glassesInfo, isEmpty,
+          reason: 'after a reset nothing the glasses said still holds');
     });
   });
 }

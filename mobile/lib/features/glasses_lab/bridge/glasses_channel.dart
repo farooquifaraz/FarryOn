@@ -38,6 +38,13 @@ abstract class GlassesBridgeApi {
   /// Ask for firmware/hardware versions — arrives as a `deviceInfo` event.
   Future<void> requestDeviceInfo();
 
+  /// Reboot the glasses. The link drops and comes back on its own.
+  Future<void> restart();
+
+  /// Factory-reset the glasses: pairing, Wi-Fi and media on the headset are
+  /// erased, and the saved pairing on this side is forgotten with them.
+  Future<void> factoryReset();
+
   /// Plain photo onto glasses storage (no transfer).
   Future<void> takePhoto();
 
@@ -236,6 +243,13 @@ class GlassesChannel implements GlassesBridgeApi {
   @override
   Future<void> requestDeviceInfo() =>
       _method.invokeMethod<void>('requestDeviceInfo');
+
+  @override
+  Future<void> restart() => _method.invokeMethod<void>('restartGlasses');
+
+  @override
+  Future<void> factoryReset() =>
+      _method.invokeMethod<void>('factoryResetGlasses');
 
   @override
   Future<void> takePhoto() => _method.invokeMethod<void>('takePhoto');

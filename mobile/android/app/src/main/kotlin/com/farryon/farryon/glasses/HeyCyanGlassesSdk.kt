@@ -1176,6 +1176,51 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
     }
 
     /**
+     * Reboot the glasses. The bytes are the vendor sample's `btnRestart`
+     * (GlassesSDKSample DeviceActivity.kt: glassesControl 0x02 0x01 0x0e).
+     * The link drops and the SDK's own reconnect (setNeedConnect + target
+     * MAC, the same path as a power-cycle) rejoins when they are back.
+     */
+    override fun restart() {
+        Log.i(TAG, "restart glasses")
+        emit("deviceEvent", mapOf("hex" to "restart → 02 01 0e"))
+        LargeDataHandler.getInstance().glassesControl(
+            byteArrayOf(0x02, 0x01, 0x0e)
+        ) { _, rsp ->
+            if (rsp != null && rsp.errorCode > 0 && rsp.errorCode != 0xff) {
+                emit("deviceEvent", mapOf("hex" to "restart refused err=${rsp.errorCode}"))
+            }
+        }
+    }
+
+    /**
+     * Factory reset: the vendor sample's `btnFactory` (glassesControl
+     * 0x02 0x01 0x0a). Everything on the headset goes — its pairing with
+     * this phone included — so the saved MAC and the reconnect target are
+     * dropped here as well: nothing must keep dialling a device that no
+     * longer knows this phone. The next connect is a fresh pairing.
+     */
+    override fun factoryReset() {
+        Log.i(TAG, "factory reset glasses")
+        emit("deviceEvent", mapOf("hex" to "factory reset → 02 01 0a"))
+        LargeDataHandler.getInstance().glassesControl(
+            byteArrayOf(0x02, 0x01, 0x0a)
+        ) { _, rsp ->
+            if (rsp != null && rsp.errorCode > 0 && rsp.errorCode != 0xff) {
+                emit("deviceEvent", mapOf("hex" to "factory reset refused err=${rsp.errorCode}"))
+                return@glassesControl
+            }
+            // Sent. Forget the device on our side; the link will drop by
+            // itself as the glasses wipe.
+            main.postDelayed({
+                app.getSharedPreferences("glasses_lab", Context.MODE_PRIVATE)
+                    .edit().remove("last_mac").apply()
+                disconnect()
+            }, 1500L)
+        }
+    }
+
+    /**
      * All glasses-initiated reports land here. loadData[6] is the report type
      * (vendor sample). Battery (0x05) maps to a typed event; everything else
      * is forwarded as `deviceEvent` with the raw payload hex — never swallowed

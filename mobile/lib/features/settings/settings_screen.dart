@@ -19,6 +19,8 @@ import '../data/reminders_screen.dart';
 import '../debug/debug_logs_screen.dart';
 import '../glasses/glasses_connect_flow.dart';
 import '../update/update_screens.dart';
+import 'calendar_page.dart';
+import 'glasses_page.dart';
 import 'subscription_screen.dart';
 
 /// The live, cloud-hosted FarryOn backend. Mirrors the constants the old
@@ -150,27 +152,10 @@ class SettingsScreen extends ConsumerWidget {
                   : 'Disconnected · tap to connect',
               subtitleColor: glassesConnected ? Aurora.mint : null,
               onTap: () async {
-                final notifier = ref.read(liveProvider.notifier);
+                // Connected: the pair's own page (restart, factory reset,
+                // about, disconnect). Not connected: connect, as before.
                 if (glassesConnected) {
-                  final sure = await showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('Disconnect glasses?'),
-                      content: const Text(
-                          'They will stay disconnected until you connect again.'),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: const Text('Cancel'),
-                        ),
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx, true),
-                          child: const Text('Disconnect'),
-                        ),
-                      ],
-                    ),
-                  );
-                  if (sure == true) await notifier.disconnectGlasses();
+                  _push(context, const GlassesPage());
                 } else {
                   await runGlassesConnectFlow(context, ref);
                 }
@@ -205,6 +190,9 @@ class SettingsScreen extends ConsumerWidget {
               subtitle: emailSub,
               onTap: () => _push(context, const _EmailPage()),
             ),
+            // Google Calendar link (features/settings/calendar_page.dart):
+            // hides itself when the build has no Google client id.
+            const CalendarSettingsRow(),
             SettingsRow(
               icon: Icons.travel_explore_rounded,
               gradient: Aurora.gradPurple,

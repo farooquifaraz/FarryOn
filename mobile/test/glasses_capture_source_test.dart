@@ -49,6 +49,10 @@ class _FakeBridge implements GlassesBridgeApi {
   @override
   Future<void> requestDeviceInfo() async {}
   @override
+  Future<void> restart() async {}
+  @override
+  Future<void> factoryReset() async {}
+  @override
   Future<void> takePhoto() async {}
   @override
   Future<String> takeAiPhoto() async {

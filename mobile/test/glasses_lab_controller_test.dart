@@ -64,6 +64,12 @@ class _FakeBridge implements GlassesBridgeApi {
   Future<void> requestDeviceInfo() => _maybeFail('requestDeviceInfo');
 
   @override
+  Future<void> restart() => _maybeFail('restart');
+
+  @override
+  Future<void> factoryReset() => _maybeFail('factoryReset');
+
+  @override
   Future<void> takePhoto() => _maybeFail('takePhoto');
 
   @override

@@ -1074,6 +1074,48 @@ class LiveController {
     }
   }
 
+  /// Settings → Glasses → About: ask the glasses for their versions. The
+  /// answer lands in [LiveSessionState.glassesInfo] via the `deviceInfo`
+  /// event. Returns false when there is no bridge or the ask failed.
+  Future<bool> refreshGlassesInfo() async {
+    try {
+      await _glassesBridge?.requestDeviceInfo();
+      return _glassesBridge != null;
+    } catch (e) {
+      _log.warn('requestDeviceInfo failed: $e');
+      return false;
+    }
+  }
+
+  /// Settings → Glasses → Restart. The link drops and the SDK's reconnect
+  /// brings it back (the same path as a power-cycle, TEST_PLAN EA7).
+  Future<bool> restartGlasses() async {
+    if (!_state.glassesConnected) return false;
+    try {
+      _log.info('glasses restart requested');
+      await _glassesBridge?.restart();
+      return true;
+    } catch (e) {
+      _log.warn('restart glasses failed: $e');
+      return false;
+    }
+  }
+
+  /// Settings → Glasses → Restore factory settings. The bridge forgets the
+  /// pairing on its side too, so the card goes back to "tap to connect".
+  Future<bool> factoryResetGlasses() async {
+    if (!_state.glassesConnected) return false;
+    try {
+      _log.info('glasses factory reset requested');
+      await _glassesBridge?.factoryReset();
+      _emit(_state.copyWith(glassesInfo: const {}));
+      return true;
+    } catch (e) {
+      _log.warn('factory reset glasses failed: $e');
+      return false;
+    }
+  }
+
   bool _connectingGlasses = false;
 
   /// Tracks the last glasses connection state so the camera auto-switches only
@@ -1111,6 +1153,7 @@ class LiveController {
         _emit(_state.copyWith(
           glassesConnected: connected,
           glassesName: name,
+          glassesMac: event.data['mac'] as String?,
           clearGlassesBattery: !connected || otherPair,
         ));
         // The connect attempt has resolved (either way) — release the in-flight
@@ -1184,6 +1227,12 @@ class LiveController {
           _emit(_state.copyWith(glassesBattery: pct));
           _maybeWarnLowBattery(pct);
         }
+      case 'deviceInfo':
+        // Versions for Settings → Glasses → About. Kept on the state so the
+        // page can show what the glasses last said even after they drop.
+        _emit(_state.copyWith(
+          glassesInfo: Map<String, Object?>.from(event.data),
+        ));
       case 'voiceCommand':
         // The glasses' temple long-press doubles as a Bluetooth headset
         // "assistant" button; with Farry as its handler the press reaches

@@ -71,6 +71,15 @@ interface GlassesSdk {
     fun setAutoReconnect(enabled: Boolean)
     fun requestBattery()
     fun requestDeviceInfo()
+
+    /** Reboot the glasses (vendor control 0x02 0x01 0x0e). They drop the
+     *  link and come back on their own; the SDK's reconnect rejoins. */
+    fun restart()
+
+    /** Factory-reset the glasses (vendor control 0x02 0x01 0x0a): pairing,
+     *  Wi-Fi and media on the headset are erased. The saved MAC is forgotten
+     *  too — the next connect is a fresh pairing. */
+    fun factoryReset()
     fun takePhoto()
     fun takeAiPhoto(requestId: String)
 
@@ -209,10 +218,23 @@ class StubGlassesSdk : GlassesSdk {
             "deviceInfo",
             mapOf(
                 "btFirmware" to "STUB-BT-1.0.2",
+                "btHardware" to "L801 (simulated)",
                 "wifiFirmware" to "STUB-WIFI-0.9.1",
-                "hardware" to "L801 (simulated)",
+                "wifiHardware" to "WIFI-SIM",
             )
         )
+    }
+
+    override fun restart() {
+        emit("deviceEvent", mapOf("hex" to "restart (simulated)"))
+        connected = false
+        emit("connectionState", mapOf("state" to "disconnected"))
+        main.postDelayed({ connect("AA:BB:CC:DD:EE:FF") }, 3000L)
+    }
+
+    override fun factoryReset() {
+        emit("deviceEvent", mapOf("hex" to "factory reset (simulated)"))
+        disconnect()
     }
 
     override fun takePhoto() {
