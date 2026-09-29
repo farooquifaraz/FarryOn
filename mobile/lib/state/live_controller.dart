@@ -1558,16 +1558,12 @@ class LiveController {
     _foreground = true;
 
     _client.start();
-    // Keep the mic legal + the CPU awake while the screen is off, so the user
-    // can talk to Farry hands-free without the phone in hand (Android 11+ mutes
-    // background mic capture unless a microphone foreground service is running).
-    unawaited(Future(() async {
-      try {
-        await _glassesBridge?.startMicService();
-      } catch (e) {
-        _log.warn('startMicService failed: $e');
-      }
-    }));
+    // The mic foreground service (+ CPU wake-lock + Wi-Fi lock) that keeps a
+    // session alive with the screen off is started when the socket actually
+    // CONNECTS, not here — see _followConnectionForMicService. Started here
+    // it ran for as long as the app kept trying to reach a server it could
+    // not: batterystats on the S23 (2026-09-29) showed the service alive for
+    // 8 h 14 m of an 8 h 14 m uptime against 13 min of real sessions.
     // Wear-to-talk: auto-connect the saved glasses in the background so wear
     // events flow, then let put-on / take-off drive the mic. Best with the
     // mic on phone/earbuds (the glasses mic is push-to-talk by hardware).
@@ -1643,7 +1639,12 @@ class LiveController {
     await _player.stop();
     unawaited(_voice.stop());
     await _client.stop();
-    // Session over — drop the mic foreground service + wake-lock.
+    // Session over — drop the mic foreground service + wake-lock. The status
+    // stream does this too on `disconnected`; here it is done directly so the
+    // service is gone by the time disconnect() returns.
+    _micServiceDrop?.cancel();
+    _micServiceDrop = null;
+    _micServiceOn = false;
     try {
       await _glassesBridge?.stopMicService();
     } catch (e) {
@@ -1662,6 +1663,7 @@ class LiveController {
     _statusSub = _client.status.listen((status) {
       _log.info('event: connection → ${status.name}');
       _emit(_state.copyWith(connection: status));
+      _followConnectionForMicService(status);
     });
 
     _frameSub = _client.frames.listen((frame) {
@@ -1683,6 +1685,68 @@ class LiveController {
     });
 
     _eventSub = _client.events.listen(_onServerMessage);
+  }
+
+  /// Whether the mic foreground service is up, so it is started and stopped
+  /// once each rather than on every status flicker.
+  bool _micServiceOn = false;
+  Timer? _micServiceDrop;
+
+  /// How long a reconnect may run before the mic service is let go. Long
+  /// enough to ride out a Wi-Fi blip (the client's backoff tops out at 8 s),
+  /// short enough that "Connecting…" to an unreachable server does not hold
+  /// a wake-lock, a Wi-Fi lock and a microphone notification all afternoon.
+  static Duration micServiceGrace = const Duration(seconds: 60);
+
+  /// Keep the mic foreground service (CPU wake-lock, Wi-Fi lock, "Farry is
+  /// listening" notification) tied to a LIVE socket.
+  ///
+  /// Android 11+ mutes background mic capture unless a microphone foreground
+  /// service is running, so the service is what lets the user talk with the
+  /// screen off. It used to start the moment a session was asked for and stop
+  /// only when the user ended it — so an app left on "Connecting…" (server
+  /// unreachable, phone on the wrong network) held everything with no session
+  /// behind it. Now: up when connected, dropped when the socket is gone, and
+  /// dropped after [micServiceGrace] of reconnecting.
+  void _followConnectionForMicService(ConnectionStatus status) {
+    switch (status) {
+      case ConnectionStatus.connected:
+        _micServiceDrop?.cancel();
+        _micServiceDrop = null;
+        _setMicService(true);
+      case ConnectionStatus.connecting:
+      case ConnectionStatus.reconnecting:
+        if (_micServiceOn && _micServiceDrop == null) {
+          _micServiceDrop = Timer(micServiceGrace, () {
+            _micServiceDrop = null;
+            if (_state.connection != ConnectionStatus.connected) {
+              _log.info('mic service dropped: reconnecting for '
+                  '${micServiceGrace.inSeconds}s with no session');
+              _setMicService(false);
+            }
+          });
+        }
+      case ConnectionStatus.disconnected:
+        _micServiceDrop?.cancel();
+        _micServiceDrop = null;
+        _setMicService(false);
+    }
+  }
+
+  void _setMicService(bool on) {
+    if (_micServiceOn == on) return;
+    _micServiceOn = on;
+    unawaited(Future(() async {
+      try {
+        if (on) {
+          await _glassesBridge?.startMicService();
+        } else {
+          await _glassesBridge?.stopMicService();
+        }
+      } catch (e) {
+        _log.warn('${on ? 'start' : 'stop'}MicService failed: $e');
+      }
+    }));
   }
 
   /// Mute the mic for the duration of an assistant turn's audio.
@@ -3439,6 +3503,7 @@ class LiveController {
     await _callAudioSub?.cancel();
     _historySaveTimer?.cancel();
     _locationTimer?.cancel();
+    _micServiceDrop?.cancel();
     await ChatHistoryStore.saveSession(_state.transcripts);
     _ttsClear?.cancel();
     _userLogTimer?.cancel();

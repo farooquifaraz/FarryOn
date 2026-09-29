@@ -11,7 +11,9 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 
 /**
@@ -23,14 +25,26 @@ import android.os.PowerManager
  * wake-lock also keeps the CPU (and with it the audio pump + WebSocket) running
  * through Doze so the reply keeps streaming.
  *
- * Started on session connect, stopped on disconnect. START_STICKY so the system
- * brings it back if it's killed mid-session.
+ * Started when the session's socket connects, stopped when it is gone
+ * (state/live_controller.dart, _followConnectionForMicService).
+ *
+ * NOT sticky. It was START_STICKY "so the system brings it back if it's killed
+ * mid-session" — but a restarted service has no session behind it: the Dart
+ * side that fed the socket died with the process, and nothing ever stops the
+ * service again. batterystats on the S23 (2026-09-29) had it alive for
+ * 8 h 14 m of an 8 h 14 m uptime against 13 min of real sessions, wake-lock,
+ * Wi-Fi lock and "Farry is listening" notification included. A system restart
+ * (null intent) now stops itself, and a hard ceiling stops the service on its
+ * own if the app never does.
  */
 class SessionMicService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "farry_session"
         private const val NOTIF_ID = 7802
+        /** No session runs longer (the server caps at 30 min, translate at
+         *  60): a service still up past this belongs to nothing. */
+        private const val MAX_LIFE_MS = 65 * 60 * 1000L
 
         fun start(context: Context) {
             // A microphone-type FGS is illegal without RECORD_AUDIO (Android 14+
@@ -55,6 +69,8 @@ class SessionMicService : Service() {
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private val lifeCeiling = Runnable { stopSelf() }
 
     // The partial wake-lock keeps the CPU alive but NOT the Wi-Fi radio:
     // Samsung's power-save drops an idle radio into PS-poll mode between the
@@ -86,12 +102,17 @@ class SessionMicService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // RECORD_AUDIO can be revoked while the service is sticky-restarting
-        // (user toggles it off mid-session); startForeground with the
-        // microphone type then throws SecurityException and crashes the app.
-        // Bail out instead — stopSelf() satisfies the startForegroundService
-        // contract, and NOT_STICKY stops the system from restarting us into
-        // the same crash.
+        // A null intent is the system restarting us after the process died.
+        // There is no session behind that: the app starts the service again
+        // itself when its next socket connects.
+        if (intent == null) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        // RECORD_AUDIO can be revoked between starts (user toggles it off
+        // mid-session); startForeground with the microphone type then throws
+        // SecurityException and crashes the app. Bail out instead — stopSelf()
+        // satisfies the startForegroundService contract.
         if (!hasMicPermission(this)) {
             stopSelf()
             return START_NOT_STICKY
@@ -129,7 +150,9 @@ class SessionMicService : Service() {
         }
         acquireWakeLock()
         acquireWifiLock()
-        return START_STICKY
+        handler.removeCallbacks(lifeCeiling)
+        handler.postDelayed(lifeCeiling, MAX_LIFE_MS)
+        return START_NOT_STICKY
     }
 
     private fun acquireWakeLock() {
@@ -166,6 +189,7 @@ class SessionMicService : Service() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(lifeCeiling)
         try {
             if (wakeLock?.isHeld == true) wakeLock?.release()
         } catch (e: Exception) {

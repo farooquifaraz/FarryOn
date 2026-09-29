@@ -16,6 +16,7 @@ import 'package:farryon/state/live_controller.dart';
 import 'package:farryon/state/live_state.dart';
 import 'package:farryon/state/permissions.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'live_client_test.dart' show FakeChannel;
 
@@ -202,10 +203,12 @@ class FakeGlassesBridge implements GlassesBridgeApi {
   Future<void> setVolume(String type, int level) async {}
   @override
   Future<void> enableBluetooth() async {}
+  /// Every start/stop of the mic foreground service, in order.
+  final micCalls = <String>[];
   @override
-  Future<void> startMicService() async {}
+  Future<void> startMicService() async => micCalls.add('start');
   @override
-  Future<void> stopMicService() async {}
+  Future<void> stopMicService() async => micCalls.add('stop');
 }
 
 class GrantingPermissions implements PermissionsService {
@@ -1469,5 +1472,90 @@ void main() {
     await tick();
     expect(ctl.state.micOpen, isFalse,
         reason: "a closed mic must stay closed — don't hand back more than we took");
+  });
+  group('the mic foreground service follows the socket', () {
+    // batterystats on the S23 (2026-09-29): the service — wake-lock, Wi-Fi
+    // lock, "Farry is listening" notification — alive for 8 h 14 m of an
+    // 8 h 14 m uptime against 13 min of real sessions. It started the moment
+    // a session was asked for and stopped only when the user ended one, so
+    // an app left on "Connecting…" held it all with nothing behind it.
+    late FakeGlassesBridge glasses;
+    var dials = 0;
+
+    LiveController build({WebSocketChannel Function(Uri)? channel}) {
+      glasses = FakeGlassesBridge();
+      dials = 0;
+      final ctl = LiveController(
+        config: const AppConfig(host: 'h', port: 8000, secure: false),
+        registry: DeviceRegistry(factory: (_) => FakeCaptureSource()),
+        player: FakePcmPlayer(),
+        permissions: GrantingPermissions(),
+        clientFactory: (cfg, deviceInfo) => WebSocketLiveClient(
+          config: cfg,
+          platform: 'android',
+          deviceInfoProvider: deviceInfo,
+          // The shared channel first; a reconnect gets a fresh one, like the
+          // real thing (a Dart stream can only be listened to once).
+          channelFactory: channel ?? (_) => dials++ == 0 ? fake : FakeChannel(),
+        ),
+        platform: 'android',
+        glassesBridge: glasses,
+      );
+      addTearDown(ctl.dispose);
+      return ctl;
+    }
+
+    setUp(() => LiveController.micServiceGrace = const Duration(milliseconds: 60));
+    tearDown(() => LiveController.micServiceGrace = const Duration(seconds: 60));
+
+    test('starts on connected, not on asking, and stops when the socket goes',
+        () async {
+      final ctl = build();
+      await ctl.connect();
+      await tick();
+      expect(glasses.micCalls, isEmpty, reason: 'still connecting');
+
+      fake.pushJson({
+        'type': 'ready',
+        'sessionId': 's1',
+        'protocolVersion': 1,
+        'model': 'mock',
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(glasses.micCalls, ['start']);
+
+      await ctl.disconnect();
+      expect(glasses.micCalls.first, 'start');
+      expect(glasses.micCalls.where((c) => c == 'start').length, 1);
+      expect(glasses.micCalls.last, 'stop');
+    });
+
+    test('a reconnect that goes on too long lets it go', () async {
+      final ctl = build();
+      await ctl.connect();
+      await tick();
+      fake.pushJson({
+        'type': 'ready',
+        'sessionId': 's1',
+        'protocolVersion': 1,
+        'model': 'mock',
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(glasses.micCalls, ['start']);
+
+      fake.drop(); // the link is gone; the client keeps trying
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(ctl.state.connection, isNot(ConnectionStatus.connected));
+      expect(glasses.micCalls, ['start', 'stop'],
+          reason: 'past the grace with no session, the service is dropped');
+    });
+
+    test('a server that cannot be reached never gets it started', () async {
+      final ctl = build(channel: (_) => throw StateError('no route to host'));
+      await ctl.connect();
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(ctl.state.connection, isNot(ConnectionStatus.connected));
+      expect(glasses.micCalls, isEmpty);
+    });
   });
 }
