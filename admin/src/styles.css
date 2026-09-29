@@ -96,6 +96,11 @@ input, select {
 }
 input::placeholder { color: var(--td); }
 input:focus, select:focus { outline: none; border-color: rgba(0, 212, 170, 0.45); }
+/* The native dropdown list takes the select's light text but paints its own
+   (light) popup, so every option but the highlighted one vanished
+   (2026-09-29, the Payment link dialog). Dark popup, dark options. */
+select { color-scheme: dark; }
+select option { background: #0b1526; color: #e7ecf3; }
 label { display: block; font-family: var(--fm); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--tm); margin-bottom: 5px; }
 
 /* layout */
