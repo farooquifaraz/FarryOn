@@ -359,6 +359,8 @@ class TranslateController {
     // after the user pressed stop is alarming.
     await _voice.stop();
     await _stopAudio();
+    _heldSince = null;
+    _longHoldLogged = false;
     await _teardownSocket();
     await _player.flush();
     await _player.stop();
@@ -455,7 +457,11 @@ class TranslateController {
         // delivering, which is all the watchdog needs to know. Counting only
         // forwarded chunks would make a long translation look like a dead mic.
         _lastChunkAt = DateTime.now();
-        if (_shouldHoldForEcho()) return;
+        if (_shouldHoldForEcho()) {
+          _noteHeld();
+          return;
+        }
+        _heldSince = null;
         _client?.sendAudio(chunk);
       },
       // A capture source that ends or errors mid-session is the shape a phone
@@ -469,6 +475,25 @@ class TranslateController {
     await source.startAudio();
     _client?.send(const AudioStartMessage());
     _startMicWatchdog();
+  }
+
+  /// When the current run of withheld chunks began, or null while forwarding.
+  DateTime? _heldSince;
+  bool _longHoldLogged = false;
+  static const Duration _longHold = Duration(seconds: 12);
+
+  /// A hold longer than any sentence takes to say is the shape of the deaf
+  /// session: one translation, then "listening" for as long as the user cared
+  /// to wait (Vivo, 2026-09-30). The device voice now bounds its own wait, but
+  /// if it ever happens again the exported log must say which source held it.
+  void _noteHeld() {
+    final now = DateTime.now();
+    final since = _heldSince ??= now;
+    if (_longHoldLogged || now.difference(since) < _longHold) return;
+    _longHoldLogged = true;
+    _log.warn('microphone held for echo for ${_longHold.inSeconds}s — '
+        'player=${_player.isPlayingWithin(_echoTail)} '
+        'voice=${_voice.isSpeakingWithin(_echoTail)}');
   }
 
   /// Whether to withhold this chunk because it is probably our own output.
