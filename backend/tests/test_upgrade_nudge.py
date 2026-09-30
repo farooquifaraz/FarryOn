@@ -112,17 +112,13 @@ async def test_talk_usage_names_the_state_the_admin_filters_on() -> None:
 # ---- The email -----------------------------------------------------------------
 
 
-def test_the_email_carries_their_numbers_and_their_regions_plans() -> None:
-    s = get_settings()
+def test_the_email_carries_their_numbers_and_one_button_to_the_plans() -> None:
     user = User(id=42, external_id="x", email="sana.k@example.com",
                 display_name="Sana Khan", country="IN")
     usage = nudge.TalkUsage(plan="free", used_s=2100, cap_s=1800,
                             window="lifetime", image_scans=6, web_searches=7)
-    plans = nudge.plans_to_offer(s, "IN")
-    rec = nudge.recommended_plan(s, plans)
     subject, text, html = nudge.build_upgrade_email(
-        settings=s, user=user, usage=usage, plans=plans, recommended=rec,
-        checkout_url="https://checkout.stripe.test/cs_1",
+        user=user, usage=usage,
         pricing_url="https://farryon.test/#pricing",
         app_url="https://farryon.test/#download",
         opt_out_url="https://farryon.test/api/v1/billing/nudge/opt-out?u=42&t=abc",
@@ -130,34 +126,36 @@ def test_the_email_carries_their_numbers_and_their_regions_plans() -> None:
     assert subject == "You've used your 30 free minutes — keep talking with Farry"
     assert "Sana, you've used all 30 free minutes" in html
     assert "35 min" in html and ">6<" in html and ">7<" in html
-    # India's list, in rupees, the popular one recommended with the button
-    assert plans == ["sathi_in", "plus_in", "pro_in"] and rec == "plus_in"
-    assert "₹299" in html and "₹599" in html and "₹999" in html
-    assert "MOST POPULAR" in html and "Upgrade to Plus" in html
-    assert 'href="https://checkout.stripe.test/cs_1"' in html
-    assert "120 min talk" in html and "250 min talk" in html
+    # No plan cards (Faraz, 2026-09-30: they collided in Gmail, and the site
+    # already shows each region its own prices) — one button, to the site.
+    assert "₹" not in html and "$" not in html and "MOST POPULAR" not in html
+    assert 'href="https://farryon.test/#pricing"' in html and "See the plans" in html
     assert "opt-out?u=42&amp;t=abc" in html
     # the plain-text twin says the same things
-    assert "35 min talking with Farry" in text and "₹599" in text
+    assert "35 min talking with Farry" in text
+    assert "See the plans: https://farryon.test/#pricing" in text
     assert "Don't send me offers like this: https://farryon.test" in text
 
 
-def test_a_global_user_gets_dollars_and_a_monthly_cap_reads_as_this_month() -> None:
+def test_the_regions_plans_and_prices_are_what_the_site_sells() -> None:
     s = get_settings()
-    user = User(id=7, external_id="x", email="omar@example.com", country="US")
-    plans = nudge.plans_to_offer(s, None)
-    assert plans == ["lite", "plus", "pro"]
+    assert nudge.plans_to_offer(s, "IN") == ["sathi_in", "plus_in", "pro_in"]
+    assert nudge.recommended_plan(s, nudge.plans_to_offer(s, "IN")) == "plus_in"
+    assert nudge.plans_to_offer(s, None) == ["lite", "plus", "pro"]
     assert nudge.price_label(s, "lite") == "$5" and nudge.price_label(s, "pro") == "$15"
+    assert nudge.price_label(s, "sathi_in") == "₹299"
+
+
+def test_a_monthly_cap_reads_as_this_month() -> None:
+    user = User(id=7, external_id="x", email="omar@example.com", country="US")
     usage = nudge.TalkUsage(plan="lite", used_s=7200, cap_s=7200, window="2026-09")
     subject, _, html = nudge.build_upgrade_email(
-        settings=s, user=user, usage=usage, plans=plans,
-        recommended=nudge.recommended_plan(s, plans), checkout_url=None,
+        user=user, usage=usage,
         pricing_url="https://x/#pricing", app_url="https://x/#download",
         opt_out_url="https://x/o",
     )
     assert subject.startswith("You've used this month's 120 minutes")
     assert "omar, this month's 120 minutes are used up" in html
-    # no checkout link: the button goes to the pricing page instead
     assert 'href="https://x/#pricing"' in html
 
 
@@ -213,7 +211,9 @@ async def test_the_cap_being_hit_sends_it_by_itself_exactly_once(outbox) -> None
 
 
 @pytest.mark.asyncio
-async def test_with_stripe_the_button_is_the_users_own_checkout_link(outbox, monkeypatch) -> None:
+async def test_even_with_stripe_no_checkout_is_made_the_button_is_the_site(outbox, monkeypatch) -> None:
+    # The email names no plan, so it must not open a checkout for one either:
+    # a Stripe session per nudge would be a charge waiting to be misread.
     from app.modules.billing import service as billing
 
     uid = await _seed_app_user("stripe@example.com", talk_s=1906, country="AE")
@@ -229,9 +229,11 @@ async def test_with_stripe_the_button_is_the_users_own_checkout_link(outbox, mon
     async with db_base.get_sessionmaker()() as db:
         user = await db.get(User, uid)
         assert await nudge.send_upgrade_nudge(db, user=user, source="auto") == "sent"
-    assert asked == ["plus_ae"], "the UAE list's popular plan"
-    assert 'href="https://checkout.stripe.test/cs_ae"' in outbox[0]["html"]
-    assert "AED 25" in outbox[0]["html"]
+    assert asked == []
+    assert "checkout.stripe" not in outbox[0]["html"]
+    assert "AED 25" not in outbox[0]["html"]
+    base = s.sso_redirect_base_url.rstrip("/")
+    assert f'href="{base}/#pricing"' in outbox[0]["html"]
 
 
 # ---- The session stamps the build --------------------------------------------

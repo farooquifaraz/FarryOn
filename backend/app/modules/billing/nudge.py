@@ -8,9 +8,9 @@ not the admin, not the users — had been told (Faraz, 2026-09-29). Here:
   for a trial, this month for a paid plan) and a state the admin can filter
   on: ``ok`` / ``near`` (80 %+) / ``out`` / ``unlimited``.
 * :func:`build_upgrade_email` — the email, in the app's own look, with the
-  person's numbers, the plans sold in their region (allowances and prices
-  straight from the catalog, so it can never disagree with the website) and
-  one checkout button.
+  person's numbers and one button to the plans on the website. The plans
+  themselves are NOT in the email (Faraz, 2026-09-30): the cards collided in
+  Gmail, and the website already shows each region its own prices.
 * :func:`send_upgrade_nudge` — the rules: only to a verified address, never
   after an opt-out, at most one every ``upgrade_nudge_gap_days``. Sent by
   itself the first time a person hits their limit (``upgrade_nudge_auto``),
@@ -146,24 +146,6 @@ def price_label(settings: Settings, plan: str) -> str:
     return f"${_money(amount)}"
 
 
-def _plan_row(settings: Settings, plan: str) -> dict:
-    p = settings.plan_catalog.get(plan, {})
-    base = plan.split("_")[0]
-    copy = PLAN_COPY.get(base, {})
-    return {
-        "name": plan,
-        "title": settings.plan_title(plan),
-        "price": price_label(settings, plan),
-        "per": "for 30 days" if settings.plan_is_one_time(plan) else "/month",
-        "desc": str(copy.get("desc", "")),
-        "minutes": int(p.get("talk_minutes", 0)),
-        "scans": int(p.get("image_scans", 0)),
-        "searches": int(p.get("web_searches", 0)),
-        "extra": [str(x) for x in copy.get("extra", [])],
-        "popular": bool(copy.get("popular")),
-    }
-
-
 # ---- The email ----------------------------------------------------------------
 
 
@@ -201,12 +183,8 @@ def _minutes(seconds: int) -> int:
 
 def build_upgrade_email(
     *,
-    settings: Settings,
     user: User,
     usage: TalkUsage,
-    plans: list[str],
-    recommended: str | None,
-    checkout_url: str | None,
     pricing_url: str,
     app_url: str,
     opt_out_url: str,
@@ -216,7 +194,6 @@ def build_upgrade_email(
     name = _first_name(user)
     used_min = _minutes(usage.used_s)
     cap_min = _minutes(usage.cap_s) if usage.cap_s > 0 else 0
-    rows = [_plan_row(settings, p) for p in plans]
 
     if usage.lifetime:
         subject = f"You've used your {cap_min} free minutes — keep talking with Farry"
@@ -225,69 +202,35 @@ def build_upgrade_email(
         subject = f"You've used this month's {cap_min} minutes — keep talking with Farry"
         headline = f"{name}, this month's {cap_min} minutes are used up"
 
-    button_url = checkout_url or pricing_url
-    rec_title = next((r["title"] for r in rows if r["name"] == recommended), None)
-    button_label = f"Upgrade to {rec_title}" if rec_title else "See the plans"
+    button_label = "See the plans"
 
     # -- text --------------------------------------------------------------
     lines = [
         headline,
         "",
-        "Farry has been listening, looking and remembering for you. Pick a plan "
-        "and carry on right where you left off — your notes, reminders and "
-        "conversations are all still there.",
+        (
+            "Farry has been listening, looking and remembering for you. Pick a "
+            "plan and carry on right where you left off — your notes, reminders "
+            "and conversations are all still there."
+        ),
         "",
-        f"So far: {used_min} min talking with Farry · {usage.image_scans} things "
-        f"identified · {usage.web_searches} web searches",
+        (
+            f"So far: {used_min} min talking with Farry · {usage.image_scans} "
+            f"things identified · {usage.web_searches} web searches"
+        ),
         "",
+        f"{button_label}: {pricing_url}",
+        f"Open the app: {app_url}",
+        "",
+        (
+            "You're receiving this because you signed up for FarryOn and used "
+            "your free talk time. Payments are handled securely by Stripe."
+        ),
+        f"Don't send me offers like this: {opt_out_url}",
     ]
-    for r in rows:
-        star = " (most popular)" if r["name"] == recommended else ""
-        lines.append(
-            f"{r['title']}{star} — {r['price']} {r['per']}: {r['minutes']} min talk, "
-            f"{r['scans']} photo scans, {r['searches']} web searches. "
-            + " · ".join(x.replace("&amp;", "&") for x in r["extra"])
-        )
-    lines += ["", f"{button_label}: {button_url}", f"All plans: {pricing_url}",
-              f"Open the app: {app_url}", "",
-              "You're receiving this because you signed up for FarryOn and used "
-              "your free talk time. Payments are handled securely by Stripe.",
-              f"Don't send me offers like this: {opt_out_url}"]
     text = "\n".join(lines)
 
     # -- html --------------------------------------------------------------
-    def card(r: dict) -> str:
-        rec = r["name"] == recommended
-        border = "2px solid #1D9E75" if rec else "1px solid rgba(255,255,255,0.10)"
-        bg = "rgba(29,158,117,0.14)" if rec else "rgba(255,255,255,0.05)"
-        badge = (
-            '<span style="display:inline-block;margin-left:8px;padding:3px 8px;'
-            'border-radius:8px;background:#1D9E75;color:#04342C;font-size:11px;'
-            'font-weight:700;vertical-align:middle">MOST POPULAR</span>'
-            if rec
-            else ""
-        )
-        extras = " · ".join(r["extra"])
-        button = (
-            f'<a href="{escape(button_url)}" style="display:block;margin-top:12px;'
-            'padding:14px 0;border-radius:25px;background:#1D9E75;color:#04342C;'
-            'text-align:center;font-size:16px;font-weight:700;text-decoration:none">'
-            f"{_t(button_label)}</a>"
-            if rec
-            else ""
-        )
-        return f"""
-      <div style="padding:18px;border-radius:16px;background:{bg};border:{border};margin-bottom:12px">
-        <div style="display:flex;justify-content:space-between;align-items:baseline">
-          <span style="font-size:17px;font-weight:700;color:#E8EAED">{_t(r['title'])}{badge}</span>
-          <span style="font-size:22px;font-weight:700;color:#E8EAED">{_t(r['price'])}<span style="font-size:13px;color:#8A9099;font-weight:500"> {_t(r['per'])}</span></span>
-        </div>
-        <div style="font-size:13px;color:#8A9099;margin-top:4px">{_t(r['desc'])}</div>
-        <div style="font-size:13.5px;line-height:1.7;color:#D2D6DC;margin-top:6px">{r['minutes']} min talk · {r['scans']} photo scans · {r['searches']} web searches<br>{extras}</div>
-        {button}
-      </div>"""
-
-    cards = "".join(card(r) for r in rows)
     html = f"""\
 <div style="font-family:Helvetica,Arial,sans-serif;max-width:600px;margin:0 auto;background:#0B0E14;color:#E8EAED;border-radius:20px;overflow:hidden">
   <div style="padding:36px 36px 30px">
@@ -304,10 +247,10 @@ def build_upgrade_email(
       </tr>
     </table>
   </div>
-  <div style="padding:26px 36px;background:#10141B">
-    <div style="font-size:18px;font-weight:700;margin-bottom:14px">Choose how much Farry you need</div>
-    {cards}
-    <div style="font-size:13px;color:#8A9099;text-align:center">Another plan? <a href="{escape(pricing_url)}" style="color:#5DCAA5">See them all</a> · Yearly plans save two months.</div>
+  <div style="padding:26px 36px;background:#10141B;text-align:center">
+    <div style="font-size:18px;font-weight:700">Keep talking with Farry</div>
+    <div style="font-size:14px;line-height:1.6;color:#B7BCC4;margin-top:8px">Monthly plans with more talk time, photo scans and web searches. Yearly plans save two months.</div>
+    <a href="{escape(pricing_url)}" style="display:block;margin:18px auto 0;max-width:280px;padding:14px 0;border-radius:25px;background:#1D9E75;color:#04342C;text-align:center;font-size:16px;font-weight:700;text-decoration:none">{_t(button_label)}</a>
   </div>
   <div style="padding:26px 36px">
     <div style="font-size:16px;font-weight:700">What you keep with a plan</div>
@@ -357,31 +300,14 @@ async def send_upgrade_nudge(
             return "skipped:recent"
 
     usage = await talk_usage(db, user.id)
-    region = region_for_user(user)
-    plans = plans_to_offer(settings, region)
-    rec = recommended_plan(settings, plans)
-
-    checkout_url: str | None = None
-    if rec and settings.stripe_secret_key:
-        try:
-            from app.modules.billing.service import create_payment_link
-
-            checkout_url = (await create_payment_link(db, user=user, plan_name=rec))["url"]
-        except Exception as exc:  # noqa: BLE001 - the pricing page still works
-            logger.warning("nudge.checkout_link_failed", user_id=user.id, error=repr(exc))
-
     base = settings.sso_redirect_base_url.rstrip("/")
     opt_out_url = (
         f"{base}/api/v1/billing/nudge/opt-out?u={user.id}"
         f"&t={opt_out_token(settings, user.id)}"
     )
     subject, text, html = build_upgrade_email(
-        settings=settings,
         user=user,
         usage=usage,
-        plans=plans,
-        recommended=rec,
-        checkout_url=checkout_url,
         pricing_url=f"{base}/#pricing",
         app_url=f"{base}/#download",
         opt_out_url=opt_out_url,
@@ -397,8 +323,6 @@ async def send_upgrade_nudge(
         source=source,
         state=usage.state,
         plan=usage.plan,
-        recommended=rec,
-        checkout=bool(checkout_url),
     )
     return "sent"
 
