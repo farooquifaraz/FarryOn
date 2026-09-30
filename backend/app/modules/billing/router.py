@@ -363,3 +363,32 @@ async def stripe_webhook_endpoint(
         )
         results.append(result)
     return ok({"applied": results})
+
+
+# ---- The upgrade nudge's opt-out ------------------------------------------------
+
+
+@me_router.get("/nudge/opt-out", include_in_schema=False)
+async def nudge_opt_out_endpoint(
+    u: int, t: str, db: AsyncSession = Depends(get_db)
+) -> HTMLResponse:
+    """The "don't send me offers like this" link in the upgrade email. Public
+    by design (it is clicked from a mail client, signed in nowhere), so the
+    token — an HMAC of the user id — is what makes it that person's call."""
+    from app.modules.billing.nudge import opt_out_token_ok
+
+    settings = get_settings()
+    user = await db.get(User, u)
+    if user is None or not opt_out_token_ok(settings, u, t):
+        return HTMLResponse(
+            "<p style='font-family:sans-serif'>That link is not valid.</p>",
+            status_code=404,
+        )
+    if not user.upgrade_nudge_opt_out:
+        user.upgrade_nudge_opt_out = True
+        await db.commit()
+    return HTMLResponse(
+        "<div style='font-family:sans-serif;max-width:480px;margin:48px auto;"
+        "line-height:1.6'><h2>Done — no more upgrade offers.</h2>"
+        "<p>You can still pick a plan any time from the FarryOn app.</p></div>"
+    )

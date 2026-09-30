@@ -209,3 +209,9 @@ def send_operator_mail(*, to_email: str, subject: str, text: str, html: str) -> 
     """A themed mail to the operator (a new glasses order) — same sender,
     log-only without SMTP."""
     _send(to_email=to_email, subject=subject, text=text, html=html, kind="operator")
+
+
+def send_upgrade_email(*, to_email: str, subject: str, text: str, html: str) -> None:
+    """The upgrade nudge (modules/billing/nudge.py) — same sender, log-only
+    without SMTP."""
+    _send(to_email=to_email, subject=subject, text=text, html=html, kind="upgrade")

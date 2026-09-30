@@ -76,6 +76,22 @@ class User(Base):
     # ISO country from the phone's timezone at signup (X-Timezone) — where
     # the person was when they joined; no permission asked, no IP lookup.
     country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    # The app build (the website's base number, 2560…) and platform this
+    # person last connected with, and when. Stamped from every session hello
+    # so the admin can see who is on an old build (migration 0013).
+    last_app_build: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_app_platform: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # The upgrade nudge (app/modules/billing/nudge.py): when the last "you've
+    # used your talk time" email went, and whether they asked for no more.
+    upgrade_nudged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    upgrade_nudge_opt_out: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0"
+    )
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

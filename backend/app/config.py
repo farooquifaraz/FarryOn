@@ -520,6 +520,13 @@ class Settings(BaseSettings):
     # Where the refusal message and the app's Download button send people.
     app_download_url: str = Field(default="https://farryon.izylrn.com/download")
 
+    # The upgrade nudge (app/modules/billing/nudge.py): the email a person
+    # gets when their talk time is used up. Sent once by itself the first
+    # time the cap is hit; after that only by hand from the admin, and never
+    # more often than the gap — an offer that arrives every day is spam.
+    upgrade_nudge_auto: bool = Field(default=True)
+    upgrade_nudge_gap_days: int = Field(default=7)
+
     #: Run the model's activity detection MANUALLY for a glasses microphone:
     #: the app's own energy gate says when speech starts and stops
     #: (``speech_start`` / ``speech_end``) and the session maps that to the

@@ -50,3 +50,11 @@ class BulkActionResultItem(BaseModel):
     user_id: int
     ok: bool
     error: str | None = None
+
+
+class UpgradeEmailBulkRequest(BaseModel):
+    """Who gets the upgrade email: explicit ids, and/or everyone whose talk
+    time is used up."""
+
+    ids: list[int] = Field(default_factory=list)
+    all_out_of_quota: bool = False

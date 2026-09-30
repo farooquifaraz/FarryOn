@@ -324,6 +324,9 @@ class Session:
         self._voice_used_s: float = 0.0
         self._voice_pending_s: float = 0.0
         self._voice_capped: bool = False
+        #: Background upgrade-nudge sends started by a refusal (kept so the
+        #: tasks are not garbage-collected mid-flight).
+        self._nudge_tasks: set[asyncio.Task[None]] = set()
         # Monotonic time before which a failed usage write must not be retried.
         self._voice_flush_retry_at: float = 0.0
         self._voice_flush_task: asyncio.Task[None] | None = None
@@ -2357,6 +2360,21 @@ class Session:
         every few seconds instead of showing the Upgrade overlay."""
         await self._send_error("quota_exceeded", message, fatal=True)
         await self._expire_session("quota_exceeded")
+        # Tell them by email, once, in the background: the offer to upgrade
+        # with their own numbers and a checkout link (billing/nudge.py). A
+        # task of its own so nothing about it can hold up or break this
+        # refusal.
+        owner = self._owner_id
+        if owner is not None:
+            from app.modules.billing.nudge import auto_nudge_on_cap
+
+            # getattr: the metering tests build a Session without __init__.
+            tasks = getattr(self, "_nudge_tasks", None)
+            if tasks is None:
+                tasks = self._nudge_tasks = set()
+            task = asyncio.create_task(auto_nudge_on_cap(owner))
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
 
     async def _refuse_if_budget_spent(self) -> bool:
         """True — and the session told, fatally — when the talk budget
@@ -2678,6 +2696,21 @@ class Session:
         assert user is not None  # token_rejection returns a code for None
         return user
 
+    def _stamp_client(self, user: User, client: dict[str, Any]) -> None:
+        """Note the build and platform this hello came from on the user row
+        (flushed with the session row). Anonymous rows are left alone."""
+        if user.external_id == repo.ANON_EXTERNAL_ID:
+            return
+        from app.core.app_version import base_build
+
+        build = base_build(client.get("appVersion"), client.get("abi"))
+        platform = client.get("platform")
+        user.last_app_build = build if isinstance(build, int) else user.last_app_build
+        user.last_app_platform = (
+            str(platform)[:16] if isinstance(platform, str) and platform else None
+        ) or user.last_app_platform
+        user.last_seen_at = datetime.now(timezone.utc)
+
     async def _persist_session_start(self) -> bool:
         """Resolve the session's owner and record the session start row.
 
@@ -2701,6 +2734,9 @@ class Session:
                 user = await self._resolve_owner(db)
                 self._user_id = user.id
                 client = (self._hello or {}).get("client") or {}
+                # Which build this person runs, for the admin (0013). The
+                # hello carries it; until now only the log kept it.
+                self._stamp_client(user, client)
                 device = (self._hello or {}).get("device") or {}
                 await repo.create_session_row(
                     db,

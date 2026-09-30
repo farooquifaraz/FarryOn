@@ -16,6 +16,7 @@ from app.modules.users.schemas import (
     BulkActionRequest,
     InviteUserRequest,
     UpdateUserRequest,
+    UpgradeEmailBulkRequest,
 )
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -60,25 +61,45 @@ async def list_users_endpoint(
     status: str | None = None,
     role: str | None = None,
     kind: str | None = None,
+    quota: str | None = None,
+    app: str | None = None,
     page: int = 1,
     page_size: int = service.PAGE_SIZE_DEFAULT,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """``kind=app`` — people who signed up in the app (no admin role);
-    ``kind=staff`` — anyone with one. Omitted: everyone."""
+    ``kind=staff`` — anyone with one. Omitted: everyone.
+
+    Every row carries the person's talk budget, app build and nudge state
+    (billing/nudge.py). ``quota=out|near`` and ``app=outdated`` filter on
+    those — computed, so the page is cut after the filter, not before.
+    """
+    from app.modules.billing.nudge import latest_app_build, user_insight
+
+    filtered = quota in ("out", "near") or app == "outdated"
     items, total = await service.list_users(
         db,
         search=search,
         status_filter=status,
         role_filter=role,
         kind=kind,
-        page=page,
-        page_size=page_size,
+        page=1 if filtered else page,
+        page_size=service.PAGE_SIZE_MAX if filtered else page_size,
     )
-    return ok(
-        [_list_item(u, roles) for u, roles in items],
-        meta={"page": page, "page_size": page_size, "total": total},
-    )
+    latest = latest_app_build()
+    rows = []
+    for u, roles in items:
+        insight = await user_insight(db, u, latest_build=latest)
+        if quota and insight["quota"]["state"] != quota:
+            continue
+        if app == "outdated" and not insight["app"]["outdated"]:
+            continue
+        rows.append({**_list_item(u, roles), **insight})
+    if filtered:
+        total = len(rows)
+        start = (max(page, 1) - 1) * page_size
+        rows = rows[start : start + page_size]
+    return ok(rows, meta={"page": page, "page_size": page_size, "total": total})
 
 
 @router.get(
@@ -113,6 +134,135 @@ async def users_usage_endpoint(
             db, month=month, page=page, page_size=page_size, search=q
         )
     )
+
+
+@router.get(
+    "/summary", dependencies=[Depends(require_permission("users.read"))]
+)
+async def users_summary_endpoint(db: AsyncSession = Depends(get_db)) -> dict:
+    """The dashboard's counts over app users: how many have used up their
+    talk time without upgrading, how many are near it, how many run an old
+    build — and what the latest build is. Declared before ``/{user_id}``
+    like ``/usage``."""
+    from app.modules.billing.nudge import latest_app_build, user_insight
+
+    settings = get_settings()
+    items, total = await service.list_users(
+        db, search=None, status_filter=None, role_filter=None, kind="app",
+        page=1, page_size=service.PAGE_SIZE_MAX,
+    )
+    latest = latest_app_build()
+    out = near = outdated = paying = 0
+    for u, _roles in items:
+        insight = await user_insight(db, u, latest_build=latest)
+        state = insight["quota"]["state"]
+        out += state == "out"
+        near += state == "near"
+        outdated += insight["app"]["outdated"]
+        plan = insight["quota"]["plan"]
+        paying += plan != settings.default_plan and not settings.is_trial_plan(plan)
+    return ok({
+        "app_users": total,
+        "paying": paying,
+        "out_of_quota": out,
+        "near_limit": near,
+        "outdated_app": outdated,
+        "latest_build": latest,
+    })
+
+
+@router.post(
+    "/upgrade-email",
+    dependencies=[Depends(require_permission("billing.manage"))],
+)
+async def upgrade_email_bulk_endpoint(
+    body: UpgradeEmailBulkRequest,
+    request: Request,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Send the upgrade email to several people: the ids given, or everyone
+    who has used up their talk time. Each send follows the nudge rules (a
+    verified address, no opt-out, the 7-day gap), so the answer says who
+    was skipped and why."""
+    from app.modules.billing.nudge import (
+        latest_app_build,
+        send_upgrade_nudge,
+        user_insight,
+    )
+
+    targets: list[User] = []
+    if body.all_out_of_quota:
+        items, _ = await service.list_users(
+            db, search=None, status_filter=None, role_filter=None, kind="app",
+            page=1, page_size=service.PAGE_SIZE_MAX,
+        )
+        latest = latest_app_build()
+        for u, _roles in items:
+            if (await user_insight(db, u, latest_build=latest))["quota"]["state"] == "out":
+                targets.append(u)
+    for uid in body.ids or []:
+        targets.append(await service.get_user_or_404(db, uid))
+
+    sent: list[int] = []
+    skipped: list[dict] = []
+    seen: set[int] = set()
+    for u in targets:
+        if u.id in seen:
+            continue
+        seen.add(u.id)
+        result = await send_upgrade_nudge(db, user=u, source="admin")
+        if result == "sent":
+            sent.append(u.id)
+        else:
+            skipped.append({"id": u.id, "reason": result.split(":", 1)[1]})
+    if sent:
+        await write_audit(
+            db,
+            actor_id=actor.id,
+            action="billing.upgrade_email",
+            entity_type="user",
+            entity_id=sent[0] if len(sent) == 1 else None,
+            after={"sent": sent, "skipped": skipped},
+            ip=_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+        )
+    await db.commit()
+    return ok({"sent": sent, "skipped": skipped})
+
+
+@router.post(
+    "/{user_id}/upgrade-email",
+    dependencies=[Depends(require_permission("billing.manage"))],
+)
+async def upgrade_email_endpoint(
+    user_id: int,
+    request: Request,
+    actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Send one person the upgrade email now (subject to the nudge rules)."""
+    from app.modules.billing.nudge import send_upgrade_nudge
+
+    user = await service.get_user_or_404(db, user_id)
+    result = await send_upgrade_nudge(db, user=user, source="admin")
+    if result == "sent":
+        await write_audit(
+            db,
+            actor_id=actor.id,
+            action="billing.upgrade_email",
+            entity_type="user",
+            entity_id=user.id,
+            after={"sent": [user.id]},
+            ip=_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+        )
+    await db.commit()
+    return ok({
+        "result": result.split(":", 1)[0],
+        "reason": result.split(":", 1)[1] if ":" in result else None,
+        "nudged_at": user.upgrade_nudged_at.isoformat() if user.upgrade_nudged_at else None,
+    })
 
 
 @router.get("/{user_id}", dependencies=[Depends(require_permission("users.read"))])
