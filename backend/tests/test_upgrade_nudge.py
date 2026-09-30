@@ -74,6 +74,12 @@ async def _seed_app_user(
         return user.id
 
 
+async def _set_opt_out(uid: int, value: bool = True) -> None:
+    async with db_base.get_sessionmaker()() as db:
+        (await db.get(User, uid)).upgrade_nudge_opt_out = value
+        await db.commit()
+
+
 def _login(client: TestClient, email: str) -> dict:
     r = client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
     assert r.status_code == 200, r.text
@@ -361,12 +367,20 @@ def test_the_admin_sends_the_email_by_hand_and_in_bulk(outbox, monkeypatch) -> N
     r = client.post(f"/api/v1/users/{a}/upgrade-email", headers=h)
     assert r.json()["data"] == {"result": "skipped", "reason": "recent",
                                 "nudged_at": r.json()["data"]["nudged_at"]}
+    # "Send anyway": the admin may go inside the week — but not past an opt-out
+    r = client.post(f"/api/v1/users/{a}/upgrade-email", headers=h, json={"force": True})
+    assert r.json()["data"]["result"] == "sent"
+    asyncio.run(_set_opt_out(a))
+    r = client.post(f"/api/v1/users/{a}/upgrade-email", headers=h, json={"force": True})
+    assert r.json()["data"] == {"result": "skipped", "reason": "opted_out",
+                                "nudged_at": r.json()["data"]["nudged_at"]}
+    asyncio.run(_set_opt_out(a, False))
 
     r = client.post("/api/v1/users/upgrade-email", headers=h,
                     json={"all_out_of_quota": True})
     assert r.status_code == 200, r.text
     assert r.json()["data"] == {"sent": [b], "skipped": [{"id": a, "reason": "recent"}]}
-    assert [m["to"] for m in outbox] == ["a@example.com", "b@example.com"]
+    assert [m["to"] for m in outbox] == ["a@example.com", "a@example.com", "b@example.com"]
 
     # the list now shows when, and that it must wait
     r = client.get("/api/v1/users?kind=app&quota=out", headers=h)

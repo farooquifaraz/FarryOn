@@ -276,11 +276,15 @@ export default function Users() {
                           {kind === "app" && row.nudge && (
                             <button
                               className="btn-outline btn-sm"
-                              disabled={!row.nudge.can_send}
+                              // Only the person's own blockers grey it out; a
+                              // recent send is explained in the box, with
+                              // "Send anyway" (a grey button with a tooltip
+                              // read as "nothing happens" — Faraz, 2026-09-30).
+                              disabled={row.nudge.opt_out || !row.email_verified}
                               title={
                                 row.nudge.opt_out ? "They asked for no more offers"
                                   : !row.email_verified ? "No verified email"
-                                  : row.nudge.next_at ? `Sent recently — again in ${inDays(row.nudge.next_at)} d`
+                                  : row.nudge.next_at ? `Sent recently — due again in ${inDays(row.nudge.next_at)} d`
                                   : "Send the upgrade email now"
                               }
                               onClick={() => setNudgeFor(row)}
@@ -408,12 +412,17 @@ function NudgeOneModal({ user, onClose, onSent }: { user: UserRow; onClose: () =
   const q = user.quota;
   const used = q ? Math.round(q.used_s / 60) : null;
   const cap = q && q.cap_s >= 0 ? Math.round(q.cap_s / 60) : null;
+  // Inside the weekly gap: say so, and send only on "Send anyway".
+  const recent = !!user.nudge?.next_at;
 
   async function send() {
     setBusy(true);
     setError(null);
     try {
-      const r = await api<Envelope<{ result: string; reason: string | null }>>(`/api/v1/users/${user.id}/upgrade-email`, { method: "POST" });
+      const r = await api<Envelope<{ result: string; reason: string | null }>>(`/api/v1/users/${user.id}/upgrade-email`, {
+        method: "POST",
+        body: { force: recent },
+      });
       const ok = r.data.result === "sent";
       setResult({
         ok,
@@ -447,10 +456,16 @@ function NudgeOneModal({ user, onClose, onSent }: { user: UserRow; onClose: () =
               To <b>{user.email}</b>{q ? <> — {used} min used{cap != null ? ` of ${cap}` : ""} on the {q.plan} plan</> : null}.
               The email shows their own numbers and one button to the plans on the website.
             </p>
+            {recent && user.nudge?.last_at && (
+              <p style={{ color: "var(--gold)", fontSize: 13, lineHeight: 1.5, marginTop: 10 }}>
+                Already emailed {ago(user.nudge.last_at)} — the weekly email is due again in {inDays(user.nudge.next_at!)} d.
+                Sending now is a second email inside the week.
+              </p>
+            )}
             {error && <div className="error-text">{error}</div>}
             <div className="modal-actions">
               <button className="btn-outline" onClick={onClose} disabled={busy}>Cancel</button>
-              <button className="btn-primary" onClick={send} disabled={busy}>{busy ? "Sending…" : "Send email"}</button>
+              <button className="btn-primary" onClick={send} disabled={busy}>{busy ? "Sending…" : recent ? "Send anyway" : "Send email"}</button>
             </div>
           </>
         )}

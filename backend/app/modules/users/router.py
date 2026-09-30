@@ -17,6 +17,7 @@ from app.modules.users.schemas import (
     InviteUserRequest,
     UpdateUserRequest,
     UpgradeEmailBulkRequest,
+    UpgradeEmailRequest,
 )
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -238,14 +239,17 @@ async def upgrade_email_bulk_endpoint(
 async def upgrade_email_endpoint(
     user_id: int,
     request: Request,
+    body: UpgradeEmailRequest | None = None,
     actor: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Send one person the upgrade email now (subject to the nudge rules)."""
+    """Send one person the upgrade email now (subject to the nudge rules;
+    ``force`` waives the weekly gap only)."""
     from app.modules.billing.nudge import send_upgrade_nudge
 
     user = await service.get_user_or_404(db, user_id)
-    result = await send_upgrade_nudge(db, user=user, source="admin")
+    force = bool(body and body.force)
+    result = await send_upgrade_nudge(db, user=user, source="admin", ignore_gap=force)
     if result == "sent":
         await write_audit(
             db,
@@ -253,7 +257,7 @@ async def upgrade_email_endpoint(
             action="billing.upgrade_email",
             entity_type="user",
             entity_id=user.id,
-            after={"sent": [user.id]},
+            after={"sent": [user.id], "forced": force},
             ip=_client_ip(request),
             user_agent=request.headers.get("user-agent"),
         )

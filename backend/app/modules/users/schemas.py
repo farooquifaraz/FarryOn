@@ -52,6 +52,14 @@ class BulkActionResultItem(BaseModel):
     error: str | None = None
 
 
+class UpgradeEmailRequest(BaseModel):
+    """One person's upgrade email. ``force`` sends inside the weekly gap —
+    the admin's call; it never overrides an opt-out or an unverified
+    address."""
+
+    force: bool = False
+
+
 class UpgradeEmailBulkRequest(BaseModel):
     """Who gets the upgrade email: explicit ids, and/or everyone whose talk
     time is used up."""

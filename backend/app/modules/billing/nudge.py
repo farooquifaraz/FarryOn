@@ -277,12 +277,22 @@ def build_upgrade_email(
 # ---- Sending, with the rules -------------------------------------------------
 
 
-def nudge_blocker(settings: Settings, user: User, now: datetime) -> str | None:
-    """Why this person must NOT be emailed right now, or None."""
+def nudge_blocker(
+    settings: Settings, user: User, now: datetime, *, ignore_gap: bool = False
+) -> str | None:
+    """Why this person must NOT be emailed right now, or None.
+
+    ``ignore_gap`` is the admin's "Send anyway": a human decided this one is
+    worth a second email inside the week. The other two blockers are the
+    person's own (no address of theirs verified, or they asked us to stop)
+    and nobody overrides those.
+    """
     if not user.email or user.email_verified_at is None:
         return "no_verified_email"
     if user.upgrade_nudge_opt_out:
         return "opted_out"
+    if ignore_gap:
+        return None
     gap = timedelta(days=int(settings.upgrade_nudge_gap_days))
     last = user.upgrade_nudged_at
     if last is not None:
@@ -299,6 +309,7 @@ async def send_upgrade_nudge(
     user: User,
     source: str,
     now: datetime | None = None,
+    ignore_gap: bool = False,
 ) -> str:
     """Send the upgrade email to ``user`` if the rules allow; returns
     ``"sent"`` or ``"skipped:<reason>"``. Marks ``upgrade_nudged_at`` on a
@@ -308,7 +319,7 @@ async def send_upgrade_nudge(
     """
     settings = get_settings()
     now = now or datetime.now(timezone.utc)
-    blocked = nudge_blocker(settings, user, now)
+    blocked = nudge_blocker(settings, user, now, ignore_gap=ignore_gap)
     if blocked:
         return f"skipped:{blocked}"
 
