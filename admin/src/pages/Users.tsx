@@ -89,6 +89,7 @@ export default function Users() {
   });
   const [summary, setSummary] = useState<UsersSummary | null>(null);
   const [nudgeAll, setNudgeAll] = useState(false);
+  const [nudgeFor, setNudgeFor] = useState<UserRow | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -127,23 +128,6 @@ export default function Users() {
   useEffect(() => {
     loadSummary();
   }, [loadSummary]);
-
-  async function nudge(row: UserRow) {
-    setError(null);
-    setNotice(null);
-    try {
-      const r = await api<Envelope<{ result: string; reason: string | null }>>(`/api/v1/users/${row.id}/upgrade-email`, { method: "POST" });
-      setNotice(
-        r.data.result === "sent"
-          ? `Upgrade email sent to ${row.email}.`
-          : `Not sent to ${row.email}: ${NUDGE_REASON[r.data.reason ?? ""] ?? r.data.reason}.`,
-      );
-      void load();
-      loadSummary();
-    } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : "Could not send the email.");
-    }
-  }
 
   useEffect(() => {
     if (can("permissions.read"))
@@ -299,9 +283,9 @@ export default function Users() {
                                   : row.nudge.next_at ? `Sent recently — again in ${inDays(row.nudge.next_at)} d`
                                   : "Send the upgrade email now"
                               }
-                              onClick={() => nudge(row)}
+                              onClick={() => setNudgeFor(row)}
                             >
-                              Send upgrade email
+                              Upgrade email
                             </button>
                           )}
                           <button className="btn-outline btn-sm" onClick={() => setLinkFor(row)}>Payment link</button>
@@ -327,11 +311,18 @@ export default function Users() {
         <RolesModal user={rolesFor} roles={roles} onClose={() => setRolesFor(null)} onDone={() => { setRolesFor(null); void load(); }} />
       )}
       {linkFor && <PaymentLinkModal user={linkFor} onClose={() => setLinkFor(null)} />}
+      {nudgeFor && (
+        <NudgeOneModal
+          user={nudgeFor}
+          onClose={() => setNudgeFor(null)}
+          onSent={() => { void load(); loadSummary(); }}
+        />
+      )}
       {nudgeAll && summary && (
         <NudgeAllModal
           count={summary.out_of_quota}
           onClose={() => setNudgeAll(false)}
-          onDone={(msg) => { setNudgeAll(false); setNotice(msg); void load(); loadSummary(); }}
+          onSent={(msg) => { setNotice(msg); void load(); loadSummary(); }}
         />
       )}
     </>
@@ -404,9 +395,70 @@ function NudgeCell({ row }: { row: UserRow }) {
   );
 }
 
-function NudgeAllModal({ count, onClose, onDone }: { count: number; onClose: () => void; onDone: (msg: string) => void }) {
+/** Ask first, then say what happened — in the same box, so the admin sees
+ *  "sent" (or why not) before the table refreshes under them. */
+function NudgeOneModal({ user, onClose, onSent }: { user: UserRow; onClose: () => void; onSent: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const q = user.quota;
+  const used = q ? Math.round(q.used_s / 60) : null;
+  const cap = q && q.cap_s >= 0 ? Math.round(q.cap_s / 60) : null;
+
+  async function send() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api<Envelope<{ result: string; reason: string | null }>>(`/api/v1/users/${user.id}/upgrade-email`, { method: "POST" });
+      const ok = r.data.result === "sent";
+      setResult({
+        ok,
+        text: ok
+          ? `The upgrade email is on its way to ${user.email}.`
+          : `Not sent: ${NUDGE_REASON[r.data.reason ?? ""] ?? r.data.reason}.`,
+      });
+      if (ok) onSent();
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "Could not send the email.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        {result ? (
+          <>
+            <h3>{result.ok ? "Email sent" : "Email not sent"}</h3>
+            <p className={result.ok ? "notice-text" : "error-text"} style={{ textAlign: "left", fontSize: 13, lineHeight: 1.5 }}>{result.text}</p>
+            <div className="modal-actions">
+              <button className="btn-primary" onClick={onClose}>Done</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h3>Send the upgrade email to {user.display_name ?? user.email}?</h3>
+            <p style={{ color: "var(--tm)", fontSize: 13, lineHeight: 1.5 }}>
+              To <b>{user.email}</b>{q ? <> — {used} min used{cap != null ? ` of ${cap}` : ""} on the {q.plan} plan</> : null}.
+              The email shows their own numbers and one button to the plans on the website.
+            </p>
+            {error && <div className="error-text">{error}</div>}
+            <div className="modal-actions">
+              <button className="btn-outline" onClick={onClose} disabled={busy}>Cancel</button>
+              <button className="btn-primary" onClick={send} disabled={busy}>{busy ? "Sending…" : "Send email"}</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NudgeAllModal({ count, onClose, onSent }: { count: number; onClose: () => void; onSent: (msg: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<string | null>(null);
 
   async function send() {
     setBusy(true);
@@ -417,9 +469,12 @@ function NudgeAllModal({ count, onClose, onDone }: { count: number; onClose: () 
         body: { all_out_of_quota: true },
       });
       const skipped = r.data.skipped.length;
-      onDone(`Upgrade email sent to ${r.data.sent.length} user${r.data.sent.length === 1 ? "" : "s"}${skipped ? `, ${skipped} skipped (${r.data.skipped.map((x) => NUDGE_REASON[x.reason] ?? x.reason).filter((v, i, a) => a.indexOf(v) === i).join("; ")})` : ""}.`);
+      const msg = `Upgrade email sent to ${r.data.sent.length} user${r.data.sent.length === 1 ? "" : "s"}${skipped ? `, ${skipped} skipped (${r.data.skipped.map((x) => NUDGE_REASON[x.reason] ?? x.reason).filter((v, i, a) => a.indexOf(v) === i).join("; ")})` : ""}.`;
+      setResult(msg);
+      onSent(msg);
     } catch (err) {
       setError(err instanceof ApiRequestError ? err.message : "Sending failed.");
+    } finally {
       setBusy(false);
     }
   }
@@ -427,16 +482,28 @@ function NudgeAllModal({ count, onClose, onDone }: { count: number; onClose: () 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>Send the upgrade email to {count} user{count === 1 ? "" : "s"}?</h3>
-        <p style={{ color: "var(--tm)", fontSize: 13, lineHeight: 1.5 }}>
-          Everyone who has used up their talk time and has not upgraded. Each email carries their own numbers, the plans for their region and a checkout link.
-          Anyone emailed in the last 7 days, without a verified address, or who opted out is skipped.
-        </p>
-        {error && <div className="error-text">{error}</div>}
-        <div className="modal-actions">
-          <button className="btn-outline" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="btn-primary" onClick={send} disabled={busy}>{busy ? "Sending…" : `Send ${count} email${count === 1 ? "" : "s"}`}</button>
-        </div>
+        {result ? (
+          <>
+            <h3>Emails sent</h3>
+            <p className="notice-text" style={{ fontSize: 13, lineHeight: 1.5 }}>{result}</p>
+            <div className="modal-actions">
+              <button className="btn-primary" onClick={onClose}>Done</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h3>Send the upgrade email to {count} user{count === 1 ? "" : "s"}?</h3>
+            <p style={{ color: "var(--tm)", fontSize: 13, lineHeight: 1.5 }}>
+              Everyone who has used up their talk time and has not upgraded. Each email shows their own numbers and one button to the plans on the website.
+              Anyone emailed in the last 7 days, without a verified address, or who opted out is skipped.
+            </p>
+            {error && <div className="error-text">{error}</div>}
+            <div className="modal-actions">
+              <button className="btn-outline" onClick={onClose} disabled={busy}>Cancel</button>
+              <button className="btn-primary" onClick={send} disabled={busy}>{busy ? "Sending…" : `Send ${count} email${count === 1 ? "" : "s"}`}</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
