@@ -48,6 +48,10 @@ os.environ.setdefault("LOG_LEVEL", "WARNING")
 # verified-email login gate has its own dedicated tests that re-enable it.
 os.environ.setdefault("REQUIRE_VERIFIED_EMAIL", "false")
 os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_TMP_DB}")
+# The weekly upgrade-email loop would otherwise start with every app the
+# suite builds and, given a slow enough run, sweep a test's seeded users
+# into another test's outbox. The sweep itself has its own tests.
+os.environ.setdefault("UPGRADE_NUDGE_SWEEP", "false")
 # Force every provider key empty. We *set* (not pop) them so that an operator's
 # real keys in a local ``.env`` file cannot leak in — an os.environ value
 # overrides the dotenv file, keeping the suite fully offline and deterministic.

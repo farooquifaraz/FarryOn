@@ -14,17 +14,22 @@ not the admin, not the users — had been told (Faraz, 2026-09-29). Here:
 * :func:`send_upgrade_nudge` — the rules: only to a verified address, never
   after an opt-out, at most one every ``upgrade_nudge_gap_days``. Sent by
   itself the first time a person hits their limit (``upgrade_nudge_auto``),
-  and by hand from the admin after that.
+  by hand from the admin, and again by :func:`sweep_out_of_quota` for as
+  long as they stay out of talk time — once a gap, so weekly by default
+  (``upgrade_nudge_sweep``; Faraz, 2026-09-30).
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
+import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html import escape
 
+from sqlalchemy import or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
@@ -272,6 +277,22 @@ def build_upgrade_email(
 # ---- Sending, with the rules -------------------------------------------------
 
 
+def nudge_blocker(settings: Settings, user: User, now: datetime) -> str | None:
+    """Why this person must NOT be emailed right now, or None."""
+    if not user.email or user.email_verified_at is None:
+        return "no_verified_email"
+    if user.upgrade_nudge_opt_out:
+        return "opted_out"
+    gap = timedelta(days=int(settings.upgrade_nudge_gap_days))
+    last = user.upgrade_nudged_at
+    if last is not None:
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        if now - last < gap:
+            return "recent"
+    return None
+
+
 async def send_upgrade_nudge(
     db: AsyncSession,
     *,
@@ -287,17 +308,9 @@ async def send_upgrade_nudge(
     """
     settings = get_settings()
     now = now or datetime.now(timezone.utc)
-    if not user.email or user.email_verified_at is None:
-        return "skipped:no_verified_email"
-    if user.upgrade_nudge_opt_out:
-        return "skipped:opted_out"
-    gap = timedelta(days=int(settings.upgrade_nudge_gap_days))
-    last = user.upgrade_nudged_at
-    if last is not None:
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=timezone.utc)
-        if now - last < gap:
-            return "skipped:recent"
+    blocked = nudge_blocker(settings, user, now)
+    if blocked:
+        return f"skipped:{blocked}"
 
     usage = await talk_usage(db, user.id)
     base = settings.sso_redirect_base_url.rstrip("/")
@@ -348,6 +361,101 @@ async def auto_nudge_on_cap(user_id: int) -> None:
             logger.info("nudge.auto", user_id=user_id, result=result)
     except Exception as exc:  # noqa: BLE001 - never reaches the session
         logger.warning("nudge.auto_failed", user_id=user_id, error=repr(exc))
+
+
+# ---- The weekly sweep ---------------------------------------------------------
+
+
+async def sweep_out_of_quota(now: datetime | None = None) -> dict[str, int]:
+    """Email everyone still out of talk time whose gap has passed.
+
+    Runs on its own DB session. Returns ``{"checked", "sent", "skipped"}``.
+
+    Two uvicorn workers run this loop, and a sweep that simply read the
+    users and sent would have two sweeps read the same user before either
+    had stamped them. So the stamp comes FIRST, as a conditional update —
+    ``upgrade_nudged_at`` moves to now only where it is still older than the
+    gap — and only the worker whose update changed a row goes on to send.
+    A send that then fails gives the stamp back, so the person is not
+    silently skipped until next week.
+    """
+    settings = get_settings()
+    now = now or datetime.now(timezone.utc)
+    gap = timedelta(days=int(settings.upgrade_nudge_gap_days))
+    from app.db.base import get_sessionmaker
+    from app.modules.users import service as users
+
+    checked = sent = skipped = 0
+    async with get_sessionmaker()() as db:
+        page = 1
+        while True:
+            items, _total = await users.list_users(
+                db, search=None, status_filter="active", role_filter=None,
+                kind="app", page=page, page_size=users.PAGE_SIZE_MAX,
+            )
+            for user, _roles in items:
+                checked += 1
+                if nudge_blocker(settings, user, now) is not None:
+                    continue
+                usage = await talk_usage(db, user.id)
+                if usage.state != "out":
+                    continue
+                claimed = await db.execute(
+                    update(User)
+                    .where(
+                        User.id == user.id,
+                        or_(
+                            User.upgrade_nudged_at.is_(None),
+                            User.upgrade_nudged_at < now - gap,
+                        ),
+                    )
+                    .values(upgrade_nudged_at=now)
+                    # Decided by the database, not by the ORM re-evaluating
+                    # the WHERE in Python (SQLite hands back naive datetimes).
+                    .execution_options(synchronize_session=False)
+                )
+                await db.commit()
+                if claimed.rowcount != 1:
+                    skipped += 1  # the other worker got there first
+                    continue
+                try:
+                    # The stamp is ours; the send must not refuse it as recent.
+                    user.upgrade_nudged_at = None
+                    result = await send_upgrade_nudge(db, user=user, source="weekly", now=now)
+                    await db.commit()
+                except Exception as exc:  # noqa: BLE001 - give the claim back
+                    await db.rollback()
+                    user.upgrade_nudged_at = None
+                    await db.commit()
+                    logger.warning("nudge.sweep_send_failed", user_id=user.id, error=repr(exc))
+                    skipped += 1
+                    continue
+                if result == "sent":
+                    sent += 1
+                else:
+                    skipped += 1
+            if len(items) < users.PAGE_SIZE_MAX:
+                break
+            page += 1
+    logger.info("nudge.sweep", checked=checked, sent=sent, skipped=skipped)
+    return {"checked": checked, "sent": sent, "skipped": skipped}
+
+
+async def nudge_sweeper() -> None:
+    """The loop behind the weekly email: a sweep every
+    ``upgrade_nudge_sweep_hours``, the first one a few minutes after start
+    so a deploy is not what decides when people are emailed. Never raises:
+    a failed sweep is logged and the next one still happens."""
+    settings = get_settings()
+    await asyncio.sleep(120 + random.uniform(0, 60))
+    while True:
+        try:
+            await sweep_out_of_quota()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error("nudge.sweep_failed", error=repr(exc))
+        await asyncio.sleep(float(settings.upgrade_nudge_sweep_hours) * 3600)
 
 
 # ---- What the admin sees ------------------------------------------------------

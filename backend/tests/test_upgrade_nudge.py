@@ -192,6 +192,61 @@ async def test_no_verified_address_and_an_opt_out_are_both_respected(outbox) -> 
 
 
 @pytest.mark.asyncio
+async def test_the_weekly_sweep_emails_whoever_is_still_out_and_due(outbox) -> None:
+    # Faraz, 2026-09-30: the email should go again, by itself, every week.
+    due = await _seed_app_user("due@example.com", talk_s=1906)
+    never = await _seed_app_user("never@example.com", talk_s=1906)
+    recent = await _seed_app_user("recent@example.com", talk_s=1906)
+    opted = await _seed_app_user("opted@example.com", talk_s=1906)
+    fine = await _seed_app_user("fine@example.com", talk_s=100)
+    unverified = await _seed_app_user("unv@example.com", talk_s=1906, verified=False)
+    now = datetime.now(timezone.utc)
+    async with db_base.get_sessionmaker()() as db:
+        (await db.get(User, due)).upgrade_nudged_at = now - timedelta(days=8)
+        (await db.get(User, recent)).upgrade_nudged_at = now - timedelta(days=2)
+        (await db.get(User, opted)).upgrade_nudge_opt_out = True
+        await db.commit()
+
+    result = await nudge.sweep_out_of_quota(now=now)
+
+    assert sorted(m["to"] for m in outbox) == ["due@example.com", "never@example.com"]
+    assert result == {"checked": 6, "sent": 2, "skipped": 0}
+    async with db_base.get_sessionmaker()() as db:
+        stamped = (await db.get(User, due)).upgrade_nudged_at
+        assert stamped is not None and stamped.replace(tzinfo=timezone.utc) >= now - timedelta(seconds=1)
+        assert (await db.get(User, fine)).upgrade_nudged_at is None
+        assert (await db.get(User, unverified)).upgrade_nudged_at is None
+    # a second sweep the same day finds nobody due
+    assert (await nudge.sweep_out_of_quota(now=now))["sent"] == 0
+    assert len(outbox) == 2
+
+
+@pytest.mark.asyncio
+async def test_two_workers_sweeping_at_once_send_one_email_not_two(outbox) -> None:
+    # Production runs two uvicorn workers, each with its own loop; the stamp
+    # is claimed with a conditional update before anything is sent.
+    await _seed_app_user("twice@example.com", talk_s=1906)
+    now = datetime.now(timezone.utc)
+    a, b = await asyncio.gather(nudge.sweep_out_of_quota(now=now), nudge.sweep_out_of_quota(now=now))
+    assert [m["to"] for m in outbox] == ["twice@example.com"]
+    assert sorted([a["sent"], b["sent"]]) == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_a_send_that_fails_gives_the_claim_back(outbox, monkeypatch) -> None:
+    uid = await _seed_app_user("retry@example.com", talk_s=1906)
+
+    def boom(**_kw):
+        raise RuntimeError("smtp down")
+
+    monkeypatch.setattr(notifications, "send_upgrade_email", boom)
+    result = await nudge.sweep_out_of_quota()
+    assert result["sent"] == 0 and result["skipped"] == 1
+    async with db_base.get_sessionmaker()() as db:
+        assert (await db.get(User, uid)).upgrade_nudged_at is None, "still due next sweep"
+
+
+@pytest.mark.asyncio
 async def test_the_cap_being_hit_sends_it_by_itself_exactly_once(outbox) -> None:
     uid = await _seed_app_user("auto@example.com", talk_s=1906)
     await nudge.auto_nudge_on_cap(uid)

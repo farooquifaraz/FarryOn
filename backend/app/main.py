@@ -11,6 +11,8 @@ Wires up logging, the database bootstrap (``create_all``), CORS, the
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
@@ -89,9 +91,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         database=settings.database_url.split("://", 1)[0],
     )
     await init_db(settings)
+    sweeper: asyncio.Task[None] | None = None
+    if settings.upgrade_nudge_sweep:
+        from app.modules.billing.nudge import nudge_sweeper
+
+        sweeper = asyncio.create_task(nudge_sweeper(), name="nudge_sweeper")
     try:
         yield
     finally:
+        if sweeper is not None:
+            sweeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sweeper
         await dispose_db()
         logger.info("app.stopped")
 

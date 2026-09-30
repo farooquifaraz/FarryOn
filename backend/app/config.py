@@ -526,6 +526,11 @@ class Settings(BaseSettings):
     # more often than the gap — an offer that arrives every day is spam.
     upgrade_nudge_auto: bool = Field(default=True)
     upgrade_nudge_gap_days: int = Field(default=7)
+    # And again, by itself, for as long as they stay out of talk time: a
+    # sweep every ``upgrade_nudge_sweep_hours`` emails whoever is still out
+    # and whose gap has passed — so once a week per person by default.
+    upgrade_nudge_sweep: bool = Field(default=True)
+    upgrade_nudge_sweep_hours: float = Field(default=6.0)
 
     #: Run the model's activity detection MANUALLY for a glasses microphone:
     #: the app's own energy gate says when speech starts and stops
