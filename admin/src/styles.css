@@ -170,7 +170,7 @@ tbody tr:hover { background: rgba(0, 212, 170, 0.03); }
 
 .pill {
   display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 700;
-  padding: 3px 10px; border-radius: 50px; font-family: var(--fm);
+  padding: 3px 10px; border-radius: 50px; font-family: var(--fm); white-space: nowrap;
 }
 .pill::before { content: ""; width: 5px; height: 5px; border-radius: 50%; }
 .pill.good { background: rgba(0, 212, 170, 0.1); color: var(--pl); border: 1px solid rgba(0, 212, 170, 0.2); }
@@ -265,3 +265,7 @@ select.status-select option { background: #0b1526; color: #e7ecf3; }
 .chip.attention-near.on { border-color: rgba(244, 196, 58, 0.5); color: #f4c43a; background: rgba(244, 196, 58, 0.1); }
 .chip.attention-outdated.on { border-color: rgba(123, 79, 224, 0.55); color: #b39cf0; background: rgba(123, 79, 224, 0.12); }
 .notice-text { color: var(--pl); font-size: 13px; }
+/* Five buttons in a cell: let them take a second line rather than be cut
+   off at the table's edge. */
+.row-actions { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 360px; }
+.row-actions .btn-sm { white-space: nowrap; }

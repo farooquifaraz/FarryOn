@@ -261,9 +261,9 @@ export default function Users() {
                   </td>
                   {kind === "app" ? <td><AppCell row={row} /></td> : <td>{row.email_verified ? "✓" : "—"}</td>}
                   {kind === "app" ? <td><NudgeCell row={row} /></td> : <td className="num">{new Date(row.created_at).toLocaleDateString()}</td>}
-                  <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+                  <td style={{ textAlign: "right" }}>
                     {row.id !== me?.id && (
-                      <span style={{ display: "inline-flex", gap: 6 }}>
+                      <span className="row-actions">
                         <Can permission="users.update">
                           <button className="btn-outline btn-sm" onClick={() => setRolesFor(row)}>Roles</button>
                           {row.status === "suspended" ? (
@@ -362,8 +362,11 @@ function TalkCell({ row }: { row: UserRow }) {
 
 function QuotaBadge({ row }: { row: UserRow }) {
   const st = row.quota?.state;
-  if (st === "out") return <span className="pill crit" style={{ marginLeft: 6 }}>Talk time used up</span>;
-  if (st === "near") return <span className="pill warn" style={{ marginLeft: 6 }}>Near the limit</span>;
+  // Its own line, never wrapped: beside the status it wrapped word by word
+  // into a tall oval and the row grew to three times its height (Faraz's
+  // screenshot, 2026-09-30).
+  if (st === "out") return <div style={{ marginTop: 4 }}><span className="pill crit">Talk time used up</span></div>;
+  if (st === "near") return <div style={{ marginTop: 4 }}><span className="pill warn">Near the limit</span></div>;
   return null;
 }
 
