@@ -250,3 +250,18 @@ select.status-cancelled { border-color: rgba(255, 92, 122, 0.45); color: #ff8ba3
 select.status-select option { background: #0b1526; color: #e7ecf3; }
 .pill.info { background: rgba(57, 169, 255, 0.1); color: #6dbdff; border: 1px solid rgba(57, 169, 255, 0.22); }
 .pill.info::before { background: #6dbdff; }
+
+/* Attention cards on the dashboard and chips on Users (billing/nudge.py) */
+.stat.attention { display: block; text-decoration: none; color: var(--t); transition: transform 0.15s; }
+.stat.attention:hover { transform: translateY(-1px); }
+.stat.attention.crit { border-color: rgba(255, 92, 122, 0.45); background: rgba(255, 92, 122, 0.07); }
+.stat.attention.crit .value { color: #ff8ba3; }
+.stat.attention.warn { border-color: rgba(244, 196, 58, 0.4); background: rgba(244, 196, 58, 0.06); }
+.stat.attention.warn .value { color: #f4c43a; }
+.stat.attention.info { border-color: rgba(123, 79, 224, 0.45); background: rgba(123, 79, 224, 0.08); }
+.stat.attention.info .value { color: #b39cf0; }
+.stat .hint { font-size: 11px; color: var(--tm); margin-top: 6px; }
+.chip.attention-out.on { border-color: rgba(255, 92, 122, 0.55); color: #ff8ba3; background: rgba(255, 92, 122, 0.12); }
+.chip.attention-near.on { border-color: rgba(244, 196, 58, 0.5); color: #f4c43a; background: rgba(244, 196, 58, 0.1); }
+.chip.attention-outdated.on { border-color: rgba(123, 79, 224, 0.55); color: #b39cf0; background: rgba(123, 79, 224, 0.12); }
+.notice-text { color: var(--pl); font-size: 13px; }

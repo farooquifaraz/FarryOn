@@ -25,6 +25,14 @@ export function money(cents: number, currency: string): string {
   if (c === "USD") return `$${(cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
   return `${c} ${(cents / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
+interface UsersSummary {
+  app_users: number;
+  paying: number;
+  out_of_quota: number;
+  near_limit: number;
+  outdated_app: number;
+  latest_build: number | null;
+}
 interface AuditRow {
   id: number;
   actor_id: number | null;
@@ -39,6 +47,7 @@ const usd = (cents: number) => `$${(cents / 100).toLocaleString(undefined, { min
 export default function Dashboard() {
   const { can, user } = useAuth();
   const [userTotal, setUserTotal] = useState<number | null>(null);
+  const [users, setUsers] = useState<UsersSummary | null>(null);
   const [revenue, setRevenue] = useState<RevenueSummary | null>(null);
   const [shop, setShop] = useState<ShopSummary | null>(null);
   const [recent, setRecent] = useState<AuditRow[]>([]);
@@ -46,6 +55,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (can("users.read"))
       api<Envelope<unknown[]>>("/api/v1/users?page_size=1").then((r) => setUserTotal(r.meta?.total ?? 0)).catch(() => {});
+      api<Envelope<UsersSummary>>("/api/v1/users/summary").then((r) => setUsers(r.data)).catch(() => {});
     if (can("billing.read"))
       api<Envelope<RevenueSummary>>("/api/v1/admin/revenue/summary").then((r) => setRevenue(r.data)).catch(() => {});
     if (can("billing.read"))
@@ -65,6 +75,30 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {users && (
+        <div className="stats">
+          <a className="stat attention crit" href="/admin/users?attention=out">
+            <div className="label">Out of talk time</div>
+            <div className="value num">{users.out_of_quota}</div>
+            <div className="hint">Used their whole allowance, not upgraded · view →</div>
+          </a>
+          <a className="stat attention warn" href="/admin/users?attention=near">
+            <div className="label">Near the limit</div>
+            <div className="value num">{users.near_limit}</div>
+            <div className="hint">Over 80 % of their talk time · view →</div>
+          </a>
+          <a className="stat attention info" href="/admin/users?attention=outdated">
+            <div className="label">Outdated app</div>
+            <div className="value num">{users.outdated_app}</div>
+            <div className="hint">{users.latest_build ? `Latest is ${users.latest_build} · ` : ""}on older builds · view →</div>
+          </a>
+          <div className="stat">
+            <div className="label">Paying</div>
+            <div className="value num">{users.paying}</div>
+            <div className="hint">of {users.app_users} app users</div>
+          </div>
+        </div>
+      )}
       <div className="stats">
         {userTotal !== null && (
           <div className="stat">

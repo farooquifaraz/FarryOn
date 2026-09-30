@@ -14,7 +14,42 @@ interface UserRow {
   country: string | null;
   timezone: string | null;
   created_at: string;
+  // billing/nudge.py — the talk budget, the app build, the upgrade nudge
+  quota?: { plan: string; used_s: number; cap_s: number; window: string; state: "ok" | "near" | "out" | "unlimited" };
+  app?: { build: number | null; platform: string | null; seen_at: string | null; latest_build: number | null; behind: number | null; outdated: boolean };
+  nudge?: { last_at: string | null; opt_out: boolean; can_send: boolean; next_at: string | null };
 }
+
+interface UsersSummary {
+  app_users: number;
+  paying: number;
+  out_of_quota: number;
+  near_limit: number;
+  outdated_app: number;
+  latest_build: number | null;
+}
+
+/** "out" = talk time used up, "near" = 80 %+ of it, "outdated" = an older
+ * app build than the website serves. */
+const ATTENTION = ["all", "out", "near", "outdated"] as const;
+type Attention = (typeof ATTENTION)[number];
+const ATTENTION_LABEL: Record<Attention, string> = {
+  all: "All",
+  out: "Out of quota",
+  near: "Near limit",
+  outdated: "Outdated app",
+};
+
+const ago = (iso: string | null) => {
+  if (!iso) return "—";
+  const ms = Date.now() - new Date(iso).getTime();
+  const h = Math.round(ms / 3_600_000);
+  if (h < 1) return "just now";
+  if (h < 24) return `${h} h ago`;
+  const d = Math.round(h / 24);
+  return d === 1 ? "yesterday" : `${d} d ago`;
+};
+const inDays = (iso: string) => Math.max(1, Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000));
 
 const COUNTRY_NAMES: Record<string, string> = {
   AE: "UAE", IN: "India", SA: "Saudi Arabia", QA: "Qatar", OM: "Oman", BH: "Bahrain", KW: "Kuwait",
@@ -48,6 +83,13 @@ export default function Users() {
   // App users (signed up in the app, role "user") and Staff (any admin role)
   // are two lists; nobody has to read roles to tell them apart.
   const [kind, setKind] = useState<"app" | "staff">("app");
+  const [attention, setAttention] = useState<Attention>(() => {
+    const a = new URLSearchParams(window.location.search).get("attention");
+    return (ATTENTION as readonly string[]).includes(a ?? "") ? (a as Attention) : "all";
+  });
+  const [summary, setSummary] = useState<UsersSummary | null>(null);
+  const [nudgeAll, setNudgeAll] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [rolesFor, setRolesFor] = useState<UserRow | null>(null);
@@ -62,6 +104,8 @@ export default function Users() {
       if (search) params.set("search", search);
       if (statusFilter !== "all") params.set("status", statusFilter);
       params.set("kind", kind);
+      if (kind === "app" && (attention === "out" || attention === "near")) params.set("quota", attention);
+      if (kind === "app" && attention === "outdated") params.set("app", "outdated");
       const res = await api<Envelope<UserRow[]>>(`/api/v1/users?${params}`);
       setRows(res.data);
       setTotal(res.meta?.total ?? 0);
@@ -71,11 +115,35 @@ export default function Users() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, statusFilter, kind]);
+  }, [page, search, statusFilter, kind, attention]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  const loadSummary = useCallback(() => {
+    api<Envelope<UsersSummary>>("/api/v1/users/summary").then((r) => setSummary(r.data)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
+
+  async function nudge(row: UserRow) {
+    setError(null);
+    setNotice(null);
+    try {
+      const r = await api<Envelope<{ result: string; reason: string | null }>>(`/api/v1/users/${row.id}/upgrade-email`, { method: "POST" });
+      setNotice(
+        r.data.result === "sent"
+          ? `Upgrade email sent to ${row.email}.`
+          : `Not sent to ${row.email}: ${NUDGE_REASON[r.data.reason ?? ""] ?? r.data.reason}.`,
+      );
+      void load();
+      loadSummary();
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "Could not send the email.");
+    }
+  }
 
   useEffect(() => {
     if (can("permissions.read"))
@@ -108,16 +176,41 @@ export default function Users() {
           <h2>Users</h2>
           <p>{total} {kind === "app" ? "app users" : "staff accounts"}</p>
         </div>
-        <Can permission="users.create">
-          <button className="btn-primary" onClick={() => setInviteOpen(true)}>
-            Invite user
-          </button>
-        </Can>
+        <span style={{ display: "inline-flex", gap: 8 }}>
+          {kind === "app" && summary && summary.out_of_quota > 0 && (
+            <Can permission="billing.manage">
+              <button className="btn-outline" onClick={() => setNudgeAll(true)}>
+                Email all out-of-quota ({summary.out_of_quota})
+              </button>
+            </Can>
+          )}
+          <Can permission="users.create">
+            <button className="btn-primary" onClick={() => setInviteOpen(true)}>
+              Invite user
+            </button>
+          </Can>
+        </span>
       </div>
 
       <div className="toolbar" style={{ marginBottom: 10 }}>
         <button className={`chip${kind === "app" ? " on" : ""}`} onClick={() => { setKind("app"); setPage(1); }}>App users</button>
         <button className={`chip${kind === "staff" ? " on" : ""}`} onClick={() => { setKind("staff"); setPage(1); }}>Staff</button>
+        {kind === "app" && (
+          <span style={{ display: "inline-flex", gap: 6, marginLeft: 14 }}>
+            {ATTENTION.map((a) => {
+              const n = a === "out" ? summary?.out_of_quota : a === "near" ? summary?.near_limit : a === "outdated" ? summary?.outdated_app : null;
+              return (
+                <button
+                  key={a}
+                  className={`chip attention-${a}${attention === a ? " on" : ""}`}
+                  onClick={() => { setAttention(a); setPage(1); }}
+                >
+                  {ATTENTION_LABEL[a]}{n != null ? ` · ${n}` : ""}
+                </button>
+              );
+            })}
+          </span>
+        )}
       </div>
       <div className="toolbar">
         <input
@@ -149,6 +242,7 @@ export default function Users() {
       </div>
 
       {error && <div className="error-text" style={{ textAlign: "left", marginBottom: 10 }}>{error}</div>}
+      {notice && <div className="notice-text" style={{ marginBottom: 10 }}>{notice}</div>}
 
       <div className="tbl-wrap">
         <table>
@@ -156,10 +250,10 @@ export default function Users() {
             <tr>
               <th>User</th>
               <th>Country</th>
-              <th>{kind === "staff" ? "Roles" : "Plan role"}</th>
+              <th>{kind === "staff" ? "Roles" : "Plan · talk time"}</th>
               <th>Status</th>
-              <th>Verified</th>
-              <th>Joined</th>
+              {kind === "app" ? <th title={summary?.latest_build ? `Latest on the website: ${summary.latest_build}` : undefined}>App{summary?.latest_build ? ` · latest ${summary.latest_build}` : ""}</th> : <th>Verified</th>}
+              {kind === "app" ? <th>Last nudge</th> : <th>Joined</th>}
               <th></th>
             </tr>
           </thead>
@@ -176,10 +270,13 @@ export default function Users() {
                     <div style={{ color: "var(--td)", fontSize: 11 }}>{row.email}</div>
                   </td>
                   <td title={row.timezone ?? ""}>{row.country ? `${flag(row.country)} ${COUNTRY_NAMES[row.country] ?? row.country}` : <span style={{ color: "var(--td)" }}>—</span>}</td>
-                  <td>{row.roles.join(", ") || "—"}</td>
-                  <td><span className={`pill ${STATUS_PILL[row.status] ?? "muted"}`}>{row.status}</span></td>
-                  <td>{row.email_verified ? "✓" : "—"}</td>
-                  <td className="num">{new Date(row.created_at).toLocaleDateString()}</td>
+                  <td>{kind === "staff" ? (row.roles.join(", ") || "—") : <TalkCell row={row} />}</td>
+                  <td>
+                    <span className={`pill ${STATUS_PILL[row.status] ?? "muted"}`}>{row.status}</span>
+                    {kind === "app" && <QuotaBadge row={row} />}
+                  </td>
+                  {kind === "app" ? <td><AppCell row={row} /></td> : <td>{row.email_verified ? "✓" : "—"}</td>}
+                  {kind === "app" ? <td><NudgeCell row={row} /></td> : <td className="num">{new Date(row.created_at).toLocaleDateString()}</td>}
                   <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
                     {row.id !== me?.id && (
                       <span style={{ display: "inline-flex", gap: 6 }}>
@@ -192,6 +289,21 @@ export default function Users() {
                           )}
                         </Can>
                         <Can permission="billing.manage">
+                          {kind === "app" && row.nudge && (
+                            <button
+                              className="btn-outline btn-sm"
+                              disabled={!row.nudge.can_send}
+                              title={
+                                row.nudge.opt_out ? "They asked for no more offers"
+                                  : !row.email_verified ? "No verified email"
+                                  : row.nudge.next_at ? `Sent recently — again in ${inDays(row.nudge.next_at)} d`
+                                  : "Send the upgrade email now"
+                              }
+                              onClick={() => nudge(row)}
+                            >
+                              Send upgrade email
+                            </button>
+                          )}
                           <button className="btn-outline btn-sm" onClick={() => setLinkFor(row)}>Payment link</button>
                         </Can>
                         <Can permission="users.delete">
@@ -215,7 +327,118 @@ export default function Users() {
         <RolesModal user={rolesFor} roles={roles} onClose={() => setRolesFor(null)} onDone={() => { setRolesFor(null); void load(); }} />
       )}
       {linkFor && <PaymentLinkModal user={linkFor} onClose={() => setLinkFor(null)} />}
+      {nudgeAll && summary && (
+        <NudgeAllModal
+          count={summary.out_of_quota}
+          onClose={() => setNudgeAll(false)}
+          onDone={(msg) => { setNudgeAll(false); setNotice(msg); void load(); loadSummary(); }}
+        />
+      )}
     </>
+  );
+}
+
+const NUDGE_REASON: Record<string, string> = {
+  recent: "emailed in the last 7 days",
+  opted_out: "they asked for no more offers",
+  no_verified_email: "no verified email address",
+};
+
+/** "35 / 30 min" with a bar in the plan's colour: red past the cap, amber
+ * from 80 %, teal below. */
+function TalkCell({ row }: { row: UserRow }) {
+  const q = row.quota;
+  if (!q) return <span style={{ color: "var(--td)" }}>—</span>;
+  const used = Math.round(q.used_s / 60);
+  const cap = q.cap_s < 0 ? null : Math.round(q.cap_s / 60);
+  const share = cap ? Math.min(1, q.used_s / Math.max(q.cap_s, 1)) : 0;
+  const color = q.state === "out" ? "var(--crit)" : q.state === "near" ? "var(--gold)" : "var(--pl)";
+  return (
+    <div style={{ minWidth: 120 }}>
+      <div style={{ fontSize: 12 }}>
+        <b>{q.plan}</b>
+        <span style={{ color: "var(--td)" }}> · {q.window === "lifetime" ? "trial" : q.window}</span>
+      </div>
+      <div className="num" style={{ fontSize: 12 }}>{cap == null ? `${used} min / ∞` : `${used} / ${cap} min`}</div>
+      {cap != null && (
+        <div style={{ height: 4, borderRadius: 2, background: "rgba(255,255,255,0.08)", marginTop: 4 }}>
+          <div style={{ width: `${share * 100}%`, height: 4, borderRadius: 2, background: color }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuotaBadge({ row }: { row: UserRow }) {
+  const st = row.quota?.state;
+  if (st === "out") return <span className="pill crit" style={{ marginLeft: 6 }}>Talk time used up</span>;
+  if (st === "near") return <span className="pill warn" style={{ marginLeft: 6 }}>Near the limit</span>;
+  return null;
+}
+
+function AppCell({ row }: { row: UserRow }) {
+  const a = row.app;
+  if (!a || a.build == null) return <span style={{ color: "var(--td)" }}>never connected</span>;
+  const behind = a.behind ?? 0;
+  const color = behind === 0 ? "var(--pl)" : behind < 10 ? "var(--gold)" : "var(--crit)";
+  return (
+    <div>
+      <div className="num" style={{ fontSize: 12, color }}>
+        {a.build} · {a.latest_build == null ? "—" : behind === 0 ? "latest" : `${behind} behind`}
+      </div>
+      <div style={{ fontSize: 11, color: "var(--td)" }}>{a.platform ?? "—"} · seen {ago(a.seen_at)}</div>
+    </div>
+  );
+}
+
+function NudgeCell({ row }: { row: UserRow }) {
+  const n = row.nudge;
+  if (!n) return <span style={{ color: "var(--td)" }}>—</span>;
+  if (n.opt_out) return <span style={{ color: "var(--td)" }}>opted out</span>;
+  if (!n.last_at) return <span style={{ color: "var(--td)" }}>never</span>;
+  return (
+    <div>
+      <div style={{ fontSize: 12 }}>{new Date(n.last_at).toLocaleDateString()}</div>
+      {n.next_at && <div style={{ fontSize: 11, color: "var(--td)" }}>again in {inDays(n.next_at)} d</div>}
+    </div>
+  );
+}
+
+function NudgeAllModal({ count, onClose, onDone }: { count: number; onClose: () => void; onDone: (msg: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function send() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api<Envelope<{ sent: number[]; skipped: { id: number; reason: string }[] }>>("/api/v1/users/upgrade-email", {
+        method: "POST",
+        body: { all_out_of_quota: true },
+      });
+      const skipped = r.data.skipped.length;
+      onDone(`Upgrade email sent to ${r.data.sent.length} user${r.data.sent.length === 1 ? "" : "s"}${skipped ? `, ${skipped} skipped (${r.data.skipped.map((x) => NUDGE_REASON[x.reason] ?? x.reason).filter((v, i, a) => a.indexOf(v) === i).join("; ")})` : ""}.`);
+    } catch (err) {
+      setError(err instanceof ApiRequestError ? err.message : "Sending failed.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h3>Send the upgrade email to {count} user{count === 1 ? "" : "s"}?</h3>
+        <p style={{ color: "var(--tm)", fontSize: 13, lineHeight: 1.5 }}>
+          Everyone who has used up their talk time and has not upgraded. Each email carries their own numbers, the plans for their region and a checkout link.
+          Anyone emailed in the last 7 days, without a verified address, or who opted out is skipped.
+        </p>
+        {error && <div className="error-text">{error}</div>}
+        <div className="modal-actions">
+          <button className="btn-outline" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn-primary" onClick={send} disabled={busy}>{busy ? "Sending…" : `Send ${count} email${count === 1 ? "" : "s"}`}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
