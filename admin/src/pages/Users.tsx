@@ -365,8 +365,9 @@ function QuotaBadge({ row }: { row: UserRow }) {
   // Its own line, never wrapped: beside the status it wrapped word by word
   // into a tall oval and the row grew to three times its height (Faraz's
   // screenshot, 2026-09-30).
-  if (st === "out") return <div style={{ marginTop: 4 }}><span className="pill crit">Talk time used up</span></div>;
-  if (st === "near") return <div style={{ marginTop: 4 }}><span className="pill warn">Near the limit</span></div>;
+  // One word each (Faraz, 2026-09-30); the tooltip says what it means.
+  if (st === "out") return <div style={{ marginTop: 4 }}><span className="pill crit" title="Talk time used up">Exhausted</span></div>;
+  if (st === "near") return <div style={{ marginTop: 4 }}><span className="pill warn" title="Near the talk-time limit (80%+)">Low</span></div>;
   return null;
 }
 
