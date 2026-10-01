@@ -98,6 +98,30 @@ class _FakeTranslator:
         return f"[{target}] {text}", self.detected
 
 
+class _FlakyTranslator:
+    """Fails its first `fail_first` calls, or never answers at all."""
+
+    def __init__(self, *, fail_first: int = 0, hang: bool = False) -> None:
+        self.attempts = 0
+        self._fail_first = fail_first
+        self._hang = hang
+
+    async def translate(
+        self,
+        text: str,
+        *,
+        source_lang: str | None,
+        target: str,
+        previous: str | None = None,
+    ) -> tuple[str, str | None]:
+        self.attempts += 1
+        if self._hang:
+            await asyncio.sleep(60)
+        if self.attempts <= self._fail_first:
+            raise RuntimeError("a passing fault")
+        return f"[{target}] {text}", None
+
+
 class _FakeSpeaker:
     def __init__(self, *, fail: bool = False, chunks: int = 3) -> None:
         self.spoken: list[str] = []
@@ -219,7 +243,11 @@ class TestOneBrokenStepIsNotABrokenSession:
             [_heard("مرحبا"), _heard("كيف حالك")],
             translator=_FakeTranslator(fail=True),
         )
-        assert len(translator.calls) == 2, "it kept trying the next utterance"
+        # Each sentence gets a second try, and the next sentence is still
+        # attempted after the one before it was given up on.
+        assert [c[0] for c in translator.calls] == [
+            "مرحبا", "مرحبا", "كيف حالك", "كيف حالك"
+        ]
         assert speaker.spoken == []
         # The heard side is still delivered — the user can at least read what
         # was said, and the session stays open.
@@ -228,7 +256,39 @@ class TestOneBrokenStepIsNotABrokenSession:
             if e.type == EventType.TRANSCRIPT and e.role == "user"
         ]
         assert len(heard) == 2
+        # And the loss is said, not left as a card that never fills in — but
+        # never as a fatal error: one sentence is not the session.
+        errors = [e for e in events if e.type == EventType.ERROR]
+        assert [e.code for e in errors] == ["translate_failed"] * 2
+        assert not any(e.fatal for e in errors)
+
+    async def test_one_stumble_is_retried_and_the_sentence_survives(self) -> None:
+        translator = _FlakyTranslator(fail_first=1)
+        events, _, _ = await _run([_heard("مرحبا بالعالم")], translator=translator)
+        assert translator.attempts == 2
+        said = [
+            e.text for e in events
+            if e.type == EventType.TRANSCRIPT and e.role == "assistant"
+        ]
+        assert said == ["[hi] مرحبا بالعالم"]
         assert not [e for e in events if e.type == EventType.ERROR]
+
+    async def test_a_translation_that_never_answers_is_given_up_on(self) -> None:
+        # The call runs in a worker thread and had no limit: one that hung
+        # left its sentence untranslated for the rest of the session.
+        translator = _FlakyTranslator(hang=True)
+        gw = CascadeTranslateGateway(
+            target_language="hi",
+            listener=_FakeListener([_heard("مرحبا بالعالم")]),
+            translator=translator,
+            speaker=_FakeSpeaker(),
+        )
+        gw._translate_timeout_s = 0.05
+        await gw.connect()
+        events = await _collect(gw)
+        assert translator.attempts == 2
+        errors = [e for e in events if e.type == EventType.ERROR]
+        assert [e.code for e in errors] == ["translate_failed"]
 
     async def test_a_failed_voice_still_leaves_the_translation_on_screen(self) -> None:
         # Reading it is most of the value. Losing the text because the speech
@@ -254,6 +314,31 @@ class TestSpeakingTheTargetLanguage:
     async def test_a_region_variant_still_counts_as_the_same_language(self) -> None:
         _, translator, _ = await _run([_heard("hello", lang="en-US")], target="en")
         assert translator.calls == []
+
+    async def test_the_translator_says_it_was_already_the_target(self) -> None:
+        # The recogniser reports no language on the real path — every live
+        # translation has logged `source_lang: None` — so the two tests above
+        # never fire there. Hindi into a Hindi target was translated to Hindi
+        # and read back by the phone (live, 2026-10-01).
+        events, translator, speaker = await _run(
+            [TranscriptEvent(role="user", text="नमस्ते, आप कैसे हैं?", final=True,
+                             lang=None, utterance=4)],
+            target="hi",
+            translator=_FakeTranslator(detected="hi-IN"),
+        )
+        assert len(translator.calls) == 1
+        assert speaker.spoken == []
+        assert not [
+            e for e in events
+            if e.type == EventType.TRANSCRIPT and e.role == "assistant"
+        ]
+        # The heard line is re-sent under the target's own code: that exact
+        # match is what the phone uses to explain the silence in words.
+        relabelled = [
+            e for e in events
+            if e.type == EventType.TRANSCRIPT and e.role == "user" and e.lang
+        ]
+        assert [(e.lang, e.utterance) for e in relabelled] == [("hi", 4)]
 
     async def test_echo_on_means_say_it_anyway(self) -> None:
         translator = _FakeTranslator()

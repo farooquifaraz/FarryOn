@@ -262,3 +262,162 @@ class TestTheLanguageItReports:
         await asr._handle(_msg(" في القاهره بيفتح بدري.", None))
         finals = _finals(await _drain(asr))
         assert finals[0].lang == "ar-EG"
+
+
+class _FakeSocket:
+    """One upstream live socket: plays its script, then does what it is told."""
+
+    def __init__(self, script: list, *, then: str = "wait") -> None:
+        self._script = list(script)
+        self._then = then
+        self.sent: list[bytes] = []
+        self.done = asyncio.Event()
+
+    async def receive(self):
+        script, self._script = self._script, []
+        for message in script:
+            yield message
+        self.done.set()
+        if self._then == "raise":
+            raise RuntimeError("1008 None. Connection aborted because the client")
+        if self._then == "wait":
+            await asyncio.sleep(3600)
+
+    async def send_realtime_input(self, *, audio) -> None:
+        self.sent.append(audio.data)
+
+
+def _go_away() -> SimpleNamespace:
+    return SimpleNamespace(go_away=SimpleNamespace(time_left="5s"), server_content=None)
+
+
+async def _connected(sockets: list[_FakeSocket], *, fail_reopen: bool = False):
+    """A recogniser whose upstream is the given sockets, in order."""
+    asr = _asr()
+    opened: list[_FakeSocket] = []
+
+    async def open_upstream() -> None:
+        if opened and fail_reopen:
+            raise RuntimeError("the key was revoked")
+        sock = sockets[len(opened)]
+        opened.append(sock)
+        asr._session = sock
+
+    asr._open_upstream = open_upstream  # type: ignore[method-assign]
+    await asr.connect()
+    return asr, opened
+
+
+async def _until(predicate, *, limit: float = 2.0) -> None:
+    deadline = time.monotonic() + limit
+    while not predicate():
+        assert time.monotonic() < deadline, "it never happened"
+        await asyncio.sleep(0.01)
+
+
+class TestTheSocketDoesNotLastAConversation:
+    """The Live API hangs up at about ten minutes and says so first.
+
+    The single-model path was taught this on 2026-08-11. This recogniser
+    replaced it two days later and never inherited the lesson, so a cascade
+    session could not outlive ten minutes whatever the configured hour said.
+    """
+
+    async def test_a_go_away_is_answered_with_a_new_socket(self) -> None:
+        first = _FakeSocket([_msg("The old market in Cairo", "en"), _go_away()])
+        second = _FakeSocket([_msg(" opens at nine in the morning.", "en")])
+        asr, opened = await _connected([first, second])
+        try:
+            await _until(lambda: second.done.is_set())
+            events = await _drain(asr)
+            assert opened == [first, second]
+            assert not [e for e in events if e.type == EventType.ERROR]
+            # The sentence that was open across the swap arrives whole: the
+            # text heard so far is ours, not the socket's.
+            finals = _finals(events)
+            assert [e.text for e in finals] == [
+                "The old market in Cairo opens at nine in the morning."
+            ]
+        finally:
+            await asr.close()
+
+    async def test_sentence_numbers_carry_on_across_the_swap(self) -> None:
+        # The phone files each translation under its sentence's number. A new
+        # socket that counted from zero again would overwrite the first card.
+        first = _FakeSocket(
+            [_msg("The old market in Cairo opens at nine.", "en"), _go_away()])
+        second = _FakeSocket([_msg("My uncle Kareem sells spices there.", "en")])
+        asr, _ = await _connected([first, second])
+        try:
+            await _until(lambda: second.done.is_set())
+            finals = _finals(await _drain(asr))
+            assert [e.utterance for e in finals] == [0, 1]
+        finally:
+            await asr.close()
+
+    async def test_a_socket_that_dies_without_warning_is_replaced_too(self) -> None:
+        first = _FakeSocket([_msg("hello", "en")], then="raise")
+        second = _FakeSocket([])
+        asr, opened = await _connected([first, second])
+        try:
+            await _until(lambda: second.done.is_set())
+            assert opened == [first, second]
+            assert not [
+                e for e in await _drain(asr) if e.type == EventType.ERROR
+            ]
+        finally:
+            await asr.close()
+
+    async def test_what_is_said_during_the_swap_reaches_the_new_socket(self) -> None:
+        asr, _ = await _connected([_FakeSocket([])])
+        try:
+            asr._reopening = True
+            await asr.send_audio(b"\x01" * 640)
+            await asr.send_audio(b"\x02" * 640)
+            assert asr._held == [b"\x01" * 640, b"\x02" * 640]
+
+            # A new socket, and the swap finishes the way `_reopen_upstream`
+            # finishes it.
+            fresh = _FakeSocket([])
+
+            async def open_upstream() -> None:
+                asr._session = fresh
+
+            asr._open_upstream = open_upstream  # type: ignore[method-assign]
+            assert await asr._reopen_upstream("go_away")
+            assert fresh.sent == [b"\x01" * 640, b"\x02" * 640]
+            assert asr._held == []
+        finally:
+            await asr.close()
+
+    async def test_when_it_cannot_reopen_the_user_reads_a_sentence(self) -> None:
+        first = _FakeSocket([], then="raise")
+        asr, _ = await _connected([first], fail_reopen=True)
+        try:
+            await _until(lambda: not asr._queue.empty())
+            errors = [e for e in await _drain(asr) if e and e.type == EventType.ERROR]
+            assert len(errors) == 1 and errors[0].fatal
+            # Written for a person. The upstream's own words are about GoAway
+            # frames, and they reached a screen once, cut off mid-word.
+            assert "1008" not in errors[0].message
+            assert "GoAway" not in errors[0].message
+        finally:
+            await asr.close()
+
+    async def test_reopening_forever_is_not_recovery(self) -> None:
+        # A revoked key reconnects and dies, reconnects and dies. That would
+        # bill in silence; after a handful inside two minutes it stops.
+        from app.ai.gemini_asr import _MAX_REOPENS
+
+        sockets = [_FakeSocket([], then="raise") for _ in range(_MAX_REOPENS + 2)]
+        asr, opened = await _connected(sockets)
+        try:
+            await _until(
+                lambda: any(
+                    getattr(e, "type", None) == EventType.ERROR
+                    for e in list(asr._queue._queue)  # type: ignore[attr-defined]
+                )
+            )
+            assert len(opened) == _MAX_REOPENS + 1
+        finally:
+            await asr.close()

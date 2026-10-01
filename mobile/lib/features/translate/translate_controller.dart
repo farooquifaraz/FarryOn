@@ -698,7 +698,10 @@ class TranslateController {
         // A quota heads-up is not a failure. Painting "10 minutes left" in the
         // same red as "translation is unavailable" teaches people to ignore
         // both, and the one that matters is the one they then miss.
-        if (!fatal && code == 'quota_warning') {
+        //
+        // Nor is one sentence the server could not translate (it tried twice):
+        // the session carries on, and the heard line is still on its card.
+        if (!fatal && (code == 'quota_warning' || code == 'translate_failed')) {
           _emit(_state.copyWith(notice: message));
         } else {
           _emit(_state.copyWith(error: message));

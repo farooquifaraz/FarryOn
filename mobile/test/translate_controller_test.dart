@@ -468,6 +468,20 @@ void main() {
           reason: 'a warning must not end the session');
     });
 
+    test('one sentence lost is a notice, and the session carries on', () async {
+      await connect();
+      fake.pushJson({
+        'type': 'error',
+        'code': 'translate_failed',
+        'message': 'One sentence could not be translated.',
+        'fatal': false,
+      });
+      await pump();
+      expect(controller.state.notice, contains('could not be translated'));
+      expect(controller.state.error, isNull);
+      expect(controller.state.isRunning, isTrue);
+    });
+
     test('running out ends the session with the reason on screen', () async {
       await connect();
       fake.pushJson({

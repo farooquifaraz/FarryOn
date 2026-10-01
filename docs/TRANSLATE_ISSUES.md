@@ -354,6 +354,29 @@ close this without a second data point.
 
 ---
 
+## 2026-10-01 — robustness pass (branch `translate-robust`, device test pending)
+
+Found by reading the code against one evening's live log, not on a device.
+Each is covered by a test; none has been watched on a phone yet.
+
+| | Fault | What was done |
+|---|---|---|
+| R1 | **A cascade session could not outlive ten minutes.** The GoAway rollover of 2026-08-11 lives in `gemini_translate.py`; the recogniser that replaced that path (`gemini_asr.py`) never got it, and ended the session with a fatal "Speech recognition stopped unexpectedly". | The recogniser replaces its socket on GoAway, on a stream error and on a stream that just ends. The open sentence stays in the buffer, sentence numbers keep counting, and up to five seconds of audio said during the swap is held and sent to the new socket. Six swaps inside two minutes ends the session with a sentence written for a person. |
+| R2 | **A translation call that hung was never given up on**, and one that failed lost its sentence in silence — the card kept its heard line and nothing else. | Six seconds per attempt, two attempts, then a non-fatal `translate_failed` error. The app shows it as a notice, not in failure-red, and carries on. |
+| R3 | **Speech already in the target language was read back.** The recogniser reports no language (`source_lang: None` on every live call), so the same-language check never fired on the real path. | Checked again against the language the translator reports. Nothing is spoken; the heard line is re-sent under the target's code so the phone explains the silence. The translate call is still paid for — this saves the voice and the held microphone, not the call. |
+| R4 | **The log could not explain a gap.** It recorded translations and nothing else; a 39-second silence could have been a quiet room, a held microphone or a deaf recogniser. | `gemini_asr.utterance` (number, length, why it closed, seconds into the session — never the words), `gemini_asr.summary` and `cascade_translate.summary` at close. |
+
+To verify on the device: a session of twelve minutes or more (expect
+`gemini_asr.reopened` near ten and no break on screen), and Hindi spoken into a
+Hindi target (expect the "already in हिन्दी" card and no voice).
+
+Still open after this pass, and not attempted: cards overwritten when the
+phone's own socket reconnects (the new server session counts sentences from
+zero), audio dropped while the phone reconnects, translations spoken out of
+order when a later one finishes first, and the 4.5 s wait on a one-word reply.
+
+---
+
 ## Not issues
 
 Recorded so they are not re-investigated:

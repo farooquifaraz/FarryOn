@@ -51,8 +51,23 @@ from app.ai.events import (
 )
 from app.config import get_settings
 from app.logging_conf import get_logger
+from app.observability import metrics
 
 logger = get_logger(__name__)
+
+#: How many times the upstream socket may be replaced inside
+#: :data:`_REOPEN_WINDOW_S`. The Live API ends a socket roughly every ten
+#: minutes, so a long conversation costs a handful over an hour. Six inside two
+#: minutes is not a long conversation — it is a failure that reconnecting
+#: cannot fix (a revoked key, a withdrawn model), and retrying forever would
+#: bill for it in silence. The same numbers as the single-model path.
+_MAX_REOPENS = 6
+_REOPEN_WINDOW_S = 120.0
+
+#: Audio that arrives while the socket is being replaced is kept, up to this
+#: much, and sent to the new one. A rollover takes about half a second and
+#: people do not stop talking for it; five seconds of 16 kHz mono PCM16.
+_REOPEN_AUDIO_CAP_BYTES = 5 * 32000
 
 #: Characters that end a sentence, across the scripts this product is used in.
 _SENTENCE_ENDINGS = ".?!।॥؟。！？…"
@@ -150,6 +165,18 @@ class GeminiStreamingASR(AIGateway):
         #: into money — a chunk count alone never told anyone what it cost.
         self._spoke_anyway = 0
         self._spoke_bytes = 0
+        #: The upstream said it is about to hang up (see `_reopen_upstream`).
+        self._goaway = False
+        self._reopens = 0
+        self._reopens_total = 0
+        self._reopen_window_at = 0.0
+        #: Set while the socket is being replaced; audio waits in `_held`.
+        self._reopening = False
+        self._held: list[bytes] = []
+        self._held_bytes = 0
+        #: For the closing summary — the only record of what a session did.
+        self._connected_at = 0.0
+        self._audio_bytes = 0
 
     # -- Setup ---------------------------------------------------------------
 
@@ -181,6 +208,14 @@ class GeminiStreamingASR(AIGateway):
         )
 
     async def connect(self) -> None:
+        await self._open_upstream()
+        self._connected_at = self._last_delta_at = time.monotonic()
+        self._recv_task = asyncio.create_task(self._receive_loop())
+        self._watchdog_task = asyncio.create_task(self._quiet_watchdog())
+
+    async def _open_upstream(self) -> None:
+        """Open one live socket. Called at the start, and again at each
+        rollover — see :meth:`_reopen_upstream`."""
         try:
             from google import genai
             from google.genai import types
@@ -204,9 +239,6 @@ class GeminiStreamingASR(AIGateway):
                 logger.info(
                     "gemini_asr.connected", model=self.model, api_version=api_version
                 )
-                self._last_delta_at = time.monotonic()
-                self._recv_task = asyncio.create_task(self._receive_loop())
-                self._watchdog_task = asyncio.create_task(self._quiet_watchdog())
                 return
             except Exception as exc:  # noqa: BLE001
                 last = exc
@@ -221,9 +253,21 @@ class GeminiStreamingASR(AIGateway):
     # -- Sending -------------------------------------------------------------
 
     async def send_audio(self, pcm: bytes, ts_ms: int | None = None) -> None:
-        session = self._session
-        if session is None or self._closed:
+        if self._closed:
             return
+        self._audio_bytes += len(pcm)
+        session = self._session
+        if self._reopening or session is None:
+            # The socket is being replaced. Keep what is said meanwhile — the
+            # oldest goes first if the wait outlasts the cap.
+            self._held.append(pcm)
+            self._held_bytes += len(pcm)
+            while self._held_bytes > _REOPEN_AUDIO_CAP_BYTES and len(self._held) > 1:
+                self._held_bytes -= len(self._held.pop(0))
+            return
+        await self._send_pcm(session, pcm)
+
+    async def _send_pcm(self, session: Any, pcm: bytes) -> None:
         from google.genai import types
 
         with contextlib.suppress(Exception):
@@ -245,35 +289,127 @@ class GeminiStreamingASR(AIGateway):
     # -- Receiving -----------------------------------------------------------
 
     async def _receive_loop(self) -> None:
+        """Read the upstream until the session is closed.
+
+        The upstream socket does not last a conversation. It is replaced
+        underneath this loop when it has to be; the caller never notices.
+        """
         try:
             while not self._closed:
                 saw = False
+                reason: str | None = None
                 try:
                     async for message in self._session.receive():
                         saw = True
                         await self._handle(message)
+                        if self._goaway:
+                            # Leave on our own terms, before it hangs up on us.
+                            reason = "go_away"
+                            break
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001
                     if self._closed:
                         break
+                    reason = "upstream_error"
                     logger.warning("gemini_asr.stream_error", error=str(exc))
-                    await self._queue.put(
-                        ErrorEvent(
-                            code="provider_error",
-                            message="Speech recognition stopped unexpectedly.",
-                            fatal=True,
-                        )
+                if self._closed:
+                    break
+                if reason is None and not saw:
+                    reason = "stream_ended"
+                if reason is None:
+                    continue
+                if await self._reopen_upstream(reason):
+                    continue
+                await self._queue.put(
+                    ErrorEvent(
+                        code="provider_error",
+                        # Never `str(exc)`: what the upstream says here is a
+                        # sentence about GoAway frames, and it went to a
+                        # user's screen once, cut off mid-word.
+                        message=(
+                            "Speech recognition stopped and could not be "
+                            "restarted. Start translation again."
+                        ),
+                        fatal=True,
                     )
-                    break
-                if not saw:
-                    break
+                )
+                break
         except asyncio.CancelledError:
             raise
         finally:
             await self._queue.put(None)
 
+    async def _reopen_upstream(self, reason: str) -> bool:
+        """Replace the upstream socket without ending the user's session.
+
+        The Live API caps how long one socket may live and sends a **GoAway**
+        first, expecting the client to close and reconnect. The single-model
+        path learned this on 2026-08-11 (it died 9m43s in); this recogniser
+        replaced that path two days later and never inherited the fix, so a
+        cascade session ended at about ten minutes with "Speech recognition
+        stopped unexpectedly" — whatever TRANSLATE_MAX_SESSION_SECONDS said.
+
+        The text heard so far is ours, not the socket's: the open utterance
+        stays in the buffer and carries on, sentence numbers keep counting,
+        and audio spoken during the swap is held and sent to the new socket.
+
+        Returns True if recognition can carry on.
+        """
+        now = time.monotonic()
+        if now - self._reopen_window_at > _REOPEN_WINDOW_S:
+            self._reopen_window_at = now
+            self._reopens = 0
+        self._reopens += 1
+        if self._reopens > _MAX_REOPENS:
+            logger.error(
+                "gemini_asr.reopen_gave_up", reason=reason, attempts=self._reopens
+            )
+            return False
+
+        held: list[bytes] = []
+        self._reopening = True
+        try:
+            old_cm, self._session, self._session_cm = self._session_cm, None, None
+            with contextlib.suppress(Exception):
+                if old_cm is not None:
+                    await old_cm.__aexit__(None, None, None)
+            try:
+                await self._open_upstream()
+            except Exception as exc:  # noqa: BLE001 - reported to the caller
+                logger.error(
+                    "gemini_asr.reopen_failed", reason=reason, error=repr(exc)
+                )
+                return False
+            self._goaway = False
+            held, self._held, self._held_bytes = self._held, [], 0
+            for pcm in held:
+                await self._send_pcm(self._session, pcm)
+        finally:
+            self._reopening = False
+
+        self._reopens_total += 1
+        metrics.TRANSLATE_UPSTREAM_REOPENS.inc()
+        logger.info(
+            "gemini_asr.reopened",
+            reason=reason,
+            attempts=self._reopens,
+            held_audio_s=round(sum(len(p) for p in held) / 32000, 2),
+        )
+        return True
+
     async def _handle(self, message: Any) -> None:
+        # "I am about to hang up." Acting on it is the difference between a
+        # clean rollover and a session that dies at ten minutes.
+        go_away = getattr(message, "go_away", None)
+        if go_away is not None:
+            self._goaway = True
+            logger.info(
+                "gemini_asr.go_away",
+                time_left=str(getattr(go_away, "time_left", None)),
+            )
+            return
+
         content = getattr(message, "server_content", None)
         if content is None:
             return
@@ -311,9 +447,9 @@ class GeminiStreamingASR(AIGateway):
         # never cut, which is what stopped words being split in half.
         cut = self._last_sentence_end()
         if cut is not None and _length_units(self._buf[:cut]) >= _MIN_SENTENCE_UNITS:
-            await self._close(cut)
+            await self._close(cut, "sentence_end")
         elif _length_units(self._buf) > _MAX_UTTERANCE_UNITS:
-            await self._close(len(self._buf))
+            await self._close(len(self._buf), "too_long")
 
     def _last_sentence_end(self) -> int | None:
         """Where the last sentence ends, or None if none has yet.
@@ -342,13 +478,26 @@ class GeminiStreamingASR(AIGateway):
             return i + 1
         return None
 
-    async def _close(self, cut: int) -> None:
+    async def _close(self, cut: int, why: str = "sentence_end") -> None:
         """Emit everything up to `cut` as final; keep the rest for next time."""
         head, self._buf = self._buf[:cut].strip(), self._buf[cut:].lstrip()
         if not head:
             return
         closed = self._utterances
         self._utterances += 1
+        # Lengths and the reason, never the words. Without this line the log
+        # showed translations and nothing else: a 39-second gap in a live
+        # session (2026-10-01) could have been a quiet room, a held microphone
+        # or a deaf recogniser, and nothing recorded could tell them apart.
+        logger.info(
+            "gemini_asr.utterance",
+            n=closed,
+            chars=len(head),
+            why=why,
+            at_s=round(time.monotonic() - self._connected_at, 1)
+            if self._connected_at
+            else 0.0,
+        )
         await self._queue.put(
             TranscriptEvent(
                 role="user",
@@ -382,7 +531,7 @@ class GeminiStreamingASR(AIGateway):
                 short = _length_units(self._buf) < _MIN_SENTENCE_UNITS
                 gap = _SHORT_QUIET_GAP_S if short else _QUIET_GAP_S
                 if time.monotonic() - self._last_delta_at >= gap:
-                    await self._close(len(self._buf))
+                    await self._close(len(self._buf), "pause")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -407,8 +556,18 @@ class GeminiStreamingASR(AIGateway):
             return
         with contextlib.suppress(Exception):
             if self._buf:
-                await self._close(len(self._buf))
+                await self._close(len(self._buf), "session_end")
         self._closed = True
+        logger.info(
+            "gemini_asr.summary",
+            seconds=round(time.monotonic() - self._connected_at, 1)
+            if self._connected_at
+            else 0.0,
+            # 16 kHz mono PCM16 in, which is 32000 bytes a second.
+            audio_s=round(self._audio_bytes / 32000, 1),
+            utterances=self._utterances,
+            reopens=self._reopens_total,
+        )
         if self._spoke_anyway:
             logger.warning(
                 "gemini_asr.model_spoke",

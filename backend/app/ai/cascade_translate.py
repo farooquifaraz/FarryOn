@@ -65,6 +65,15 @@ _LISTEN_TARGET = "en"
 #: counts heard ones from 1, so the two can never share a card on the phone.
 _TYPED_UTTERANCE_BASE = 1_000_000
 
+#: How long one attempt at the translate step may take, and how many attempts
+#: a sentence gets. The step normally answers in 1.1-1.7 s (live, 2026-10-01).
+#: It had no limit at all: the call runs in a worker thread, so one that hung
+#: left its sentence on screen with no translation, for good, and said nothing
+#: to anyone. Six seconds is several times the normal answer; past two tries
+#: the sentence is stale — the speaker has moved on — and the user is told.
+_TRANSLATE_TIMEOUT_S = 6.0
+_TRANSLATE_ATTEMPTS = 2
+
 
 def _has_words(text: str) -> bool:
     """Whether this fragment carries anything a person could have said.
@@ -125,6 +134,15 @@ class CascadeTranslateGateway(AIGateway):
         self._previous_text: str | None = None
         #: Typed sentences so far (see :meth:`send_text`).
         self._typed = 0
+        #: What this session did, for the one summary line written at close.
+        self._stats = {
+            "heard": 0,
+            "translated": 0,
+            "same_language": 0,
+            "retried": 0,
+            "failed": 0,
+        }
+        self._translate_timeout_s = _TRANSLATE_TIMEOUT_S
 
         if listener is None:
             from app.ai.gemini_asr import GeminiStreamingASR
@@ -204,6 +222,9 @@ class CascadeTranslateGateway(AIGateway):
         if self._closed:
             return
         self._closed = True
+        logger.info(
+            "cascade_translate.summary", target=self.target_language, **self._stats
+        )
         for task in list(self._work):
             task.cancel()
         with contextlib.suppress(Exception):
@@ -266,25 +287,61 @@ class CascadeTranslateGateway(AIGateway):
         utterance: int | None = None,
         previous: str | None = None,
     ) -> None:
+        self._stats["heard"] += 1
         if self._same_language(source_lang):
             # Already in the target. Saying it back is what
             # `echo_target_language=False` avoids upstream; the client shows its
             # own explanation for the silence.
+            self._stats["same_language"] += 1
             return
-        try:
-            started = time.monotonic()
-            translated, detected = await self._translator.translate(
-                text,
-                source_lang=source_lang,
-                target=self.target_language,
-                previous=previous,
-            )
-        except Exception as exc:  # noqa: BLE001 - one utterance, not the session
-            logger.error("cascade_translate.translate_failed", error=repr(exc))
+        started = time.monotonic()
+        result = await self._translate_with_retry(text, source_lang, previous)
+        if self._closed:
+            return
+        if result is None:
+            self._stats["failed"] += 1
             metrics.TRANSLATE_ERRORS.labels(stage="translate").inc()
+            # Said out loud, once per lost sentence. A card that shows what was
+            # heard and never gets its translation is indistinguishable from a
+            # slow one, and nobody knows when to stop waiting.
+            await self._queue.put(
+                ErrorEvent(
+                    code="translate_failed",
+                    message="One sentence could not be translated.",
+                    fatal=False,
+                )
+            )
             return
-        if not translated.strip() or self._closed:
+        translated, detected = result
+        if not translated.strip():
             return
+        if self._same_language(detected):
+            # The recogniser reports no language (every live call so far has
+            # logged `source_lang: None`), so the check above never fires on
+            # the real path — and Hindi spoken into a Hindi target was
+            # "translated" into Hindi and read back by the phone, which then
+            # held its own microphone shut to do it. The translator has just
+            # read the sentence and does know. The heard line goes out again
+            # under the target's own code, which is what the phone matches on
+            # to explain the silence in words.
+            self._stats["same_language"] += 1
+            logger.info(
+                "cascade_translate.same_language",
+                target=self.target_language,
+                source_chars=len(text),
+            )
+            if utterance is not None:
+                await self._queue.put(
+                    TranscriptEvent(
+                        role="user",
+                        text=text,
+                        final=True,
+                        lang=self.target_language,
+                        utterance=utterance,
+                    )
+                )
+            return
+        self._stats["translated"] += 1
         logger.info(
             "cascade_translate.translated",
             source_lang=source_lang,
@@ -322,6 +379,37 @@ class CascadeTranslateGateway(AIGateway):
             return
         await self._speak(translated)
 
+
+    async def _translate_with_retry(
+        self, text: str, source_lang: str | None, previous: str | None
+    ) -> tuple[str, str | None] | None:
+        """The translate step, bounded. None when every attempt failed."""
+        for attempt in range(1, _TRANSLATE_ATTEMPTS + 1):
+            try:
+                return await asyncio.wait_for(
+                    self._translator.translate(
+                        text,
+                        source_lang=source_lang,
+                        target=self.target_language,
+                        previous=previous,
+                    ),
+                    timeout=self._translate_timeout_s,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one utterance, not the session
+                last = attempt == _TRANSLATE_ATTEMPTS
+                (logger.error if last else logger.warning)(
+                    "cascade_translate.translate_failed",
+                    attempt=attempt,
+                    gave_up=last,
+                    source_chars=len(text),
+                    error=repr(exc),
+                )
+                if last or self._closed:
+                    return None
+                self._stats["retried"] += 1
+        return None
 
     async def _speak(self, text: str) -> None:
         opened = False
