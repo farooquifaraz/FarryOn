@@ -46,6 +46,12 @@ class DeviceRegistry {
   /// The source backing the microphone (created on first access).
   CaptureSource get audioSource => _sourceFor(_audioKind);
 
+  /// The source for [kind], without making it the active one.
+  ///
+  /// Live translation picks its own microphone and must not move the
+  /// assistant's: asking for a source this way leaves [audioKind] alone.
+  CaptureSource sourceFor(CaptureDeviceKind kind) => _sourceFor(kind);
+
   /// The source backing the camera (created on first access).
   CaptureSource get videoSource => _sourceFor(_videoKind);
 

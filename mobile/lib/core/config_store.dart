@@ -162,6 +162,7 @@ class ConfigStore {
       micDevice: p.getString('cfg.micDevice'),
       translateTargetLanguage: p.getString('cfg.translate.target'),
       translateCaptionsOnly: p.getBool('cfg.translate.captionsOnly'),
+      translateMic: p.getString('cfg.translate.mic'),
     );
   }
 
@@ -249,6 +250,7 @@ class ConfigStore {
     await p.setString('cfg.micDevice', c.micDevice);
     await p.setString('cfg.translate.target', c.translateTargetLanguage);
     await p.setBool('cfg.translate.captionsOnly', c.translateCaptionsOnly);
+    await p.setString('cfg.translate.mic', c.translateMic);
   }
 
   // ---- Email accounts ----------------------------------------------------

@@ -41,6 +41,7 @@ class AppConfig {
     this.micDevice = 'phone',
     this.translateTargetLanguage = '',
     this.translateCaptionsOnly = false,
+    this.translateMic = '',
   });
 
   /// Backend host (IP or DNS name), without scheme or port.
@@ -186,6 +187,13 @@ class AppConfig {
   /// or for reading along while listening to the original voice.
   final bool translateCaptionsOnly;
 
+  /// Which microphone live translation listens with: `phone`, `glasses`, or
+  /// empty to follow [micDevice]. Kept apart from [micDevice] on purpose —
+  /// the best microphone for translating a room (the phone, on the table near
+  /// whoever is speaking, with the translation in the glasses) is rarely the
+  /// one the assistant should use, and choosing it here must not move hers.
+  final String translateMic;
+
   /// Build the initial config from `--dart-define` values, falling back to the
   /// LIVE backend.
   ///
@@ -277,6 +285,7 @@ class AppConfig {
     String? micDevice,
     String? translateTargetLanguage,
     bool? translateCaptionsOnly,
+    String? translateMic,
   }) =>
       AppConfig(
         host: host ?? this.host,
@@ -311,6 +320,7 @@ class AppConfig {
             translateTargetLanguage ?? this.translateTargetLanguage,
         translateCaptionsOnly:
             translateCaptionsOnly ?? this.translateCaptionsOnly,
+        translateMic: translateMic ?? this.translateMic,
       );
 
   @override

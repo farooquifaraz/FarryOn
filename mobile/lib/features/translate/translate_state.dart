@@ -33,7 +33,13 @@ class TranslateTurn {
     this.heardFinal = false,
     this.sameLanguage = false,
     this.id,
+    this.targetLang,
   });
+
+  /// The language [translated] is in. Kept on the turn because the target can
+  /// be changed mid-session: without it every earlier card was relabelled
+  /// with the new language's name the moment the user switched.
+  final String? targetLang;
 
   /// Which sentence this is, as the server numbered it.
   ///
@@ -75,6 +81,7 @@ class TranslateTurn {
     bool? heardFinal,
     bool? sameLanguage,
     int? id,
+    String? targetLang,
   }) =>
       TranslateTurn(
         heard: heard ?? this.heard,
@@ -83,6 +90,7 @@ class TranslateTurn {
         heardFinal: heardFinal ?? this.heardFinal,
         sameLanguage: sameLanguage ?? this.sameLanguage,
         id: id ?? this.id,
+        targetLang: targetLang ?? this.targetLang,
       );
 }
 
@@ -95,11 +103,16 @@ class TranslateState {
     this.startedAt,
     this.captionsOnly = false,
     this.typing = false,
+    this.mic = 'phone',
     this.error,
     this.notice,
   });
 
   final TranslateStatus status;
+
+  /// The microphone this session listens with: `phone` or `glasses`. The
+  /// translate screen's own choice — the assistant's is not touched by it.
+  final String mic;
 
   /// A typed session: sentences are typed, not heard. Opened when the
   /// glasses are not connected — there is nowhere for a spoken translation
@@ -152,6 +165,7 @@ class TranslateState {
     bool clearStartedAt = false,
     bool? captionsOnly,
     bool? typing,
+    String? mic,
     String? error,
     bool clearError = false,
     String? notice,
@@ -164,6 +178,7 @@ class TranslateState {
         startedAt: clearStartedAt ? null : (startedAt ?? this.startedAt),
         captionsOnly: captionsOnly ?? this.captionsOnly,
         typing: typing ?? this.typing,
+        mic: mic ?? this.mic,
         error: clearError ? null : (error ?? this.error),
         notice: clearNotice ? null : (notice ?? this.notice),
       );

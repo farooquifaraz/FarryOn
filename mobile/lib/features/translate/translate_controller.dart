@@ -193,10 +193,67 @@ class TranslateController {
   /// platform, not from this flag.
   void primeFromConfig(AppConfig cfg, {bool glassesConnected = false}) {
     _config = cfg;
+    _glassesConnected = glassesConnected;
+    _micChoice = switch (cfg.translateMic) {
+      'phone' => CaptureDeviceKind.phone,
+      'glasses' => CaptureDeviceKind.glasses,
+      _ => null,
+    };
     _emit(_state.copyWith(
       targetLanguage: cfg.translateTargetLanguage,
       captionsOnly: cfg.translateCaptionsOnly,
+      mic: _mic.name,
     ));
+  }
+
+  // -- Microphone -----------------------------------------------------------
+
+  /// What the user picked on this screen, or null to follow the assistant's.
+  CaptureDeviceKind? _micChoice;
+  bool _glassesConnected = false;
+
+  /// The microphone this session listens with.
+  ///
+  /// Its own choice, read from the registry WITHOUT making it the registry's
+  /// active device: the assistant's microphone setting is hers, and a
+  /// translator that moved it would hand her the wrong microphone when the
+  /// user went back (asked for 2026-10-02 — "mic selection here, everything
+  /// else untouched"). The glasses can only be the microphone while they are
+  /// connected; when they are not, the phone listens whatever was chosen.
+  CaptureDeviceKind get _mic {
+    final wanted = _micChoice ?? _registry.audioKind;
+    return wanted == CaptureDeviceKind.glasses && !_glassesConnected
+        ? CaptureDeviceKind.phone
+        : wanted;
+  }
+
+  /// Choose the microphone for translation. Mid-session the microphone is
+  /// swapped under the running session: the socket, the transcript and the
+  /// target language all stay as they are.
+  Future<void> setMic(CaptureDeviceKind kind) async {
+    _micChoice = kind;
+    await _applyMic();
+  }
+
+  /// The glasses came or went, as the screen sees it.
+  ///
+  /// Only between sessions. While one is running the glasses bridge reports
+  /// the same change itself (see [_watchGlasses]), and that path also decides
+  /// what happens to the session; two listeners racing to swap the microphone
+  /// is how it ends up swapped twice.
+  Future<void> setGlassesConnected(bool connected) async {
+    if (_state.isRunning || connected == _glassesConnected) return;
+    _glassesConnected = connected;
+    await _applyMic();
+  }
+
+  Future<void> _applyMic() async {
+    final mic = _mic;
+    if (mic.name == _state.mic) return;
+    _emit(_state.copyWith(mic: mic.name));
+    if (_audioSub == null) return; // not listening — the next start reads it
+    await _stopAudio();
+    if (_state.isRunning && !_state.typing) await _startAudio();
   }
 
   /// Change the language to translate into.
@@ -206,11 +263,31 @@ class TranslateController {
   /// their mind about the output, not about what was already said.
   Future<void> setTargetLanguage(String code) async {
     if (code == _state.targetLanguage) return;
-    _emit(_state.copyWith(targetLanguage: code));
-    if (_state.isRunning) {
+    final wasRunning = _state.isRunning;
+    _emit(_state.copyWith(
+      targetLanguage: code,
+      // Said, not hidden: the upstream is rebuilt for the new language and
+      // for a second nothing is being heard.
+      status: wasRunning ? TranslateStatus.reconnecting : null,
+      clearNotice: true,
+    ));
+    if (wasRunning) {
+      // Whatever was queued to be said was in the OLD language. Letting it
+      // play would read Hindi to someone who has just asked for Arabic — and
+      // the phone would say it in the new language's voice.
+      await _voice.stop();
+      await _player.flush();
+      _heldSince = null;
       await _teardownSocket();
       await _openSocket();
     }
+  }
+
+  /// Empty the transcript on screen. The session, if one is running, carries
+  /// on: this clears what was said, not the listening.
+  void clearTranscript() {
+    if (_state.turns.isEmpty) return;
+    _emit(_state.copyWith(turns: const []));
   }
 
   void setCaptionsOnly(bool value) {
@@ -401,9 +478,9 @@ class TranslateController {
   }
 
   DeviceInfo _deviceInfo() {
-    final source = _registry.audioSource;
+    final source = _registry.sourceFor(_mic);
     return DeviceInfo(
-      kind: _registry.audioKind.name,
+      kind: _mic.name,
       id: source.info.id,
       capabilities: const ['audio_in', 'audio_out'],
     );
@@ -435,7 +512,7 @@ class TranslateController {
 
   Future<void> _startAudio() async {
     if (_audioSub != null) return;
-    final source = _registry.audioSource;
+    final source = _registry.sourceFor(_mic);
     _audioSource = source;
     try {
       await source.initialize();
@@ -606,12 +683,37 @@ class TranslateController {
       // move the sound into the wearer's ear, glasses leaving bring it back to
       // the phone's speaker and the echo path with it.
       _outputIsInEar = connected;
-      if (!_state.isRunning) return;
-      if (connected) {
-        _onGlassesReturned();
+      final listeningOnGlasses = _mic == CaptureDeviceKind.glasses;
+      _glassesConnected = connected;
+      if (!_state.isRunning) {
+        _emit(_state.copyWith(mic: _mic.name));
         return;
       }
-      _onGlassesLost();
+      if (connected) {
+        if (_glassesGrace != null) {
+          _onGlassesReturned();
+        } else {
+          // The phone was listening and still can; the sound has moved back
+          // into the wearer's ear, so nothing needs to be held any more.
+          _emit(_state.copyWith(clearNotice: true));
+          unawaited(_applyMic());
+        }
+        return;
+      }
+      if (listeningOnGlasses) {
+        _onGlassesLost();
+        return;
+      }
+      // The glasses were only the SPEAKER. The phone's microphone is still
+      // listening, so the session carries on — but the translation now comes
+      // out of the loudspeaker, where the microphone can hear it, and the
+      // echo guard goes back to holding it while it plays.
+      _emit(_state.copyWith(
+        notice: _state.captionsOnly
+            ? 'The glasses disconnected. Still listening on the phone.'
+            : 'The glasses disconnected. The translation now plays on the '
+                'phone speaker, and anything said while it plays is missed.',
+      ));
     });
   }
 
@@ -670,6 +772,9 @@ class TranslateController {
   void _onServerMessage(ServerMessage msg) {
     switch (msg) {
       case ReadyMessage(:final mode):
+        // A new server session, and it numbers its sentences from zero again.
+        _sessions++;
+        if (_sessions > 1) _settleOpenTurns();
         if (mode != 'translate') {
           // The server gave us an assistant. Say so and stop rather than
           // present its answers as translations.
@@ -692,7 +797,7 @@ class TranslateController {
           text: text,
           isFinal: isFinal,
           lang: lang,
-          utterance: utterance,
+          utterance: _cardId(utterance),
         );
       case ErrorMessage(:final code, :final message, :final fatal):
         // A quota heads-up is not a failure. Painting "10 minutes left" in the
@@ -710,6 +815,38 @@ class TranslateController {
       case _:
         break;
     }
+  }
+
+  /// Server sessions this controller has been through. Each `ready` is one:
+  /// the first connect, every reconnect, and every change of target language.
+  int _sessions = 0;
+
+  /// How far apart two server sessions' sentence numbers are kept. Far more
+  /// than a session can hold: heard sentences count from 0 and typed ones from
+  /// 1,000,000.
+  static const int _sessionSpan = 100000000;
+
+  /// A sentence's number on THIS screen.
+  ///
+  /// The server counts from zero in every session, and the transcript outlives
+  /// the session — it is kept across a dropped connection and across a change
+  /// of language. So the second session's sentence 0 found the first
+  /// session's sentence 0 still on screen and wrote itself over it: the first
+  /// card of the conversation quietly became the newest sentence. The first
+  /// session keeps the server's own numbers; later ones are moved clear.
+  int? _cardId(int? utterance) => utterance == null || _sessions <= 1
+      ? utterance
+      : utterance + (_sessions - 1) * _sessionSpan;
+
+  /// Close any sentence still open from the session that just ended. Its
+  /// ending is never coming, and a card left open is where the next unnumbered
+  /// line would be written.
+  void _settleOpenTurns() {
+    if (!_state.turns.any((t) => !t.heardFinal)) return;
+    _emit(_state.copyWith(turns: [
+      for (final t in _state.turns)
+        t.heardFinal ? t : t.copyWith(heardFinal: true),
+    ]));
   }
 
   /// Say a finished translation with the phone's own voice.
@@ -764,6 +901,9 @@ class TranslateController {
         sameLanguage: sameLanguage,
         translated: openIndex >= 0 ? turns[openIndex].translated : '',
         id: utterance ?? (openIndex >= 0 ? turns[openIndex].id : null),
+        targetLang: sameLanguage
+            ? _state.targetLanguage
+            : (openIndex >= 0 ? turns[openIndex].targetLang : null),
       );
       if (openIndex >= 0) {
         turns[openIndex] = turn;
@@ -781,7 +921,11 @@ class TranslateController {
           ? turns.length - 1
           : turns.indexWhere((t) => t.id == utterance);
       if (at < 0) return; // its sentence has scrolled out of the backlog
-      turns[at] = turns[at].copyWith(translated: text, sameLanguage: false);
+      turns[at] = turns[at].copyWith(
+        translated: text,
+        sameLanguage: false,
+        targetLang: _state.targetLanguage,
+      );
       // And this is where it is spoken. Only once it is final: saying a
       // sentence twice because a delta arrived would be worse than silence.
       if (isFinal && !_state.captionsOnly) unawaited(_say(text));

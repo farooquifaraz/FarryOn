@@ -195,9 +195,9 @@ void main() {
   /// Primes the glasses as connected: live translation refuses to start
   /// without them, because the translation has to play somewhere the listening
   /// microphone cannot hear it.
-  Future<void> connect({String target = 'hi'}) async {
+  Future<void> connect({String target = 'hi', String mic = ''}) async {
     controller.primeFromConfig(
-      const AppConfig(host: 'h', port: 8000, secure: false),
+      AppConfig(host: 'h', port: 8000, secure: false, translateMic: mic),
       glassesConnected: true,
     );
     await controller.setTargetLanguage(target);
@@ -557,7 +557,7 @@ void main() {
       // Device-seen 2026-08-11: the glasses reported `disconnected` and were
       // back eleven seconds later on their own, but the session had already
       // ended for good. Walking between rooms should not end a conversation.
-      await connect();
+      await connect(mic: 'glasses');
       expect(controller.state.isRunning, isTrue);
 
       glasses.emit('connectionState', {'state': 'disconnected'});
@@ -572,7 +572,7 @@ void main() {
     });
 
     test('they come back inside the window and it carries on', () async {
-      await connect();
+      await connect(mic: 'glasses');
       glasses.emit('connectionState', {'state': 'disconnected'});
       await pump(5);
 
@@ -586,7 +586,7 @@ void main() {
     });
 
     test('they stay away and it ends, saying so', () async {
-      await connect();
+      await connect(mic: 'glasses');
       glasses.emit('connectionState', {'state': 'disconnected'});
       await pump(5);
       // Past the grace window (10ms in this controller — see setUp).
@@ -978,6 +978,176 @@ void main() {
       // A second socket was dialled for the listening session.
       expect(sentJson().where((m) => m['type'] == 'hello').length, 1,
           reason: 'the new channel has its own log; the old one was torn down');
+    });
+  });
+
+  group('the microphone is this screen\'s own', () {
+    // Asked for 2026-10-02: choose the microphone here, and leave everything
+    // else in the app exactly as it was. The best microphone for a room is
+    // the phone on the table with the translation in the glasses — rarely the
+    // one the assistant should be using.
+
+    test('choosing one here does not move the assistant\'s', () async {
+      await connect();
+      expect(registry.audioKind, CaptureDeviceKind.phone);
+
+      await controller.setMic(CaptureDeviceKind.glasses);
+      await pump();
+
+      expect(controller.state.mic, 'glasses');
+      expect(registry.audioKind, CaptureDeviceKind.phone,
+          reason: 'the assistant\'s microphone setting is hers');
+    });
+
+    test('it swaps under a running session without reopening it', () async {
+      await connect();
+      final hellos = sentJson().where((m) => m['type'] == 'hello').length;
+      hear('Good morning everyone.', lang: 'en');
+      await pump();
+
+      await controller.setMic(CaptureDeviceKind.glasses);
+      await pump();
+
+      expect(controller.state.isRunning, isTrue);
+      expect(controller.state.turns, hasLength(1), reason: 'the transcript stays');
+      expect(source.audioStarted, isTrue, reason: 'listening again, on the new one');
+      expect(sentJson().where((m) => m['type'] == 'hello').length, hellos,
+          reason: 'the socket was not rebuilt for a microphone');
+    });
+
+    test('the glasses cannot be the microphone when they are not there',
+        () async {
+      controller.primeFromConfig(
+        const AppConfig(
+            host: 'h', port: 8000, secure: false, translateMic: 'glasses'),
+        glassesConnected: false,
+      );
+      expect(controller.state.mic, 'phone');
+    });
+
+    test('glasses that were only the speaker dropping does not stop the phone',
+        () async {
+      // The phone is listening and still can. Ending the session — or going
+      // deaf for thirty seconds waiting for a speaker to come back — would
+      // punish the one combination that works best.
+      final glasses = _FakeGlasses();
+      addTearDown(glasses.controller.close);
+      await controller.dispose();
+      controller = TranslateController(
+        config: const AppConfig(host: 'h', port: 8000, secure: false),
+        registry: registry,
+        player: player,
+        permissions: _GrantingPermissions(),
+        glasses: glasses,
+        voiceAudioMode: _FakeVoiceAudioMode('skipped_external_route'),
+        clientFactory: factory,
+      );
+      await connect(mic: 'phone');
+
+      glasses.emit('connectionState', {'state': 'disconnected'});
+      await pump(5);
+
+      expect(controller.state.isRunning, isTrue);
+      expect(controller.state.status, TranslateStatus.listening);
+      expect(source.audioStarted, isTrue, reason: 'the phone keeps listening');
+      expect(controller.state.notice, contains('phone speaker'));
+      expect(controller.state.error, isNull);
+    });
+  });
+
+  group('a transcript that outlives its session', () {
+    Future<void> ready(String id) async {
+      fake.pushJson({
+        'type': 'ready',
+        'sessionId': id,
+        'protocolVersion': kProtocolVersion,
+        'mode': 'translate',
+      });
+      await pump();
+    }
+
+    test('a new session\'s first sentence does not overwrite the old one',
+        () async {
+      // The server numbers sentences from zero in every session; the screen
+      // keeps the transcript across a change of language. Sentence 0 of the
+      // second session used to land on sentence 0 of the first.
+      await connect(target: 'hi');
+      fake.pushJson({'type': 'transcript', 'role': 'user',
+        'text': 'The first thing said.', 'final': true, 'utterance': 0});
+      fake.pushJson({'type': 'transcript', 'role': 'assistant',
+        'text': 'पहली बात।', 'final': true, 'utterance': 0});
+      await pump();
+
+      await controller.setTargetLanguage('ar');
+      await pump();
+      await ready('s2');
+      fake.pushJson({'type': 'transcript', 'role': 'user',
+        'text': 'The second thing said.', 'final': true, 'utterance': 0});
+      fake.pushJson({'type': 'transcript', 'role': 'assistant',
+        'text': 'الشيء الثاني.', 'final': true, 'utterance': 0});
+      await pump();
+
+      final turns = controller.state.turns;
+      expect(turns.map((t) => t.heard),
+          ['The first thing said.', 'The second thing said.']);
+      expect(turns.map((t) => t.translated), ['पहली बात।', 'الشيء الثاني.']);
+      // Each card remembers the language it was translated into.
+      expect(turns.map((t) => t.targetLang), ['hi', 'ar']);
+    });
+
+    test('changing the language stops what was queued in the old one',
+        () async {
+      await connect(target: 'hi');
+      voice.speaking = true;
+
+      await controller.setTargetLanguage('ar');
+      await pump();
+
+      expect(voice.speaking, isFalse,
+          reason: 'Hindi must not be read out after Arabic was asked for');
+      expect(controller.state.status, TranslateStatus.reconnecting,
+          reason: 'said, not hidden: nothing is heard for a moment');
+      await ready('s2');
+      expect(controller.state.status, TranslateStatus.listening);
+      expect(source.audioStarted, isTrue);
+    });
+
+    test('a sentence left open by the old session is closed, not reused',
+        () async {
+      await connect(target: 'hi');
+      fake.pushJson({'type': 'transcript', 'role': 'user',
+        'text': 'Half a sent', 'final': false, 'utterance': 3});
+      await pump();
+
+      await controller.setTargetLanguage('ar');
+      await pump();
+      await ready('s2');
+      fake.pushJson({'type': 'transcript', 'role': 'user',
+        'text': 'Something new', 'final': false, 'utterance': 0});
+      await pump();
+
+      expect(controller.state.turns.map((t) => t.heard),
+          ['Half a sent', 'Something new']);
+      expect(controller.state.turns.first.heardFinal, isTrue);
+    });
+
+    test('clearing empties the screen and leaves the session listening',
+        () async {
+      await connect(target: 'hi');
+      hear('Good morning everyone.', lang: 'en');
+      await pump();
+
+      controller.clearTranscript();
+
+      expect(controller.state.turns, isEmpty);
+      expect(controller.state.isRunning, isTrue);
+      expect(source.audioStarted, isTrue);
+      // A translation for a card that is gone has nowhere to go, and says so
+      // by doing nothing rather than by landing on the next sentence.
+      fake.pushJson({'type': 'transcript', 'role': 'assistant',
+        'text': 'सुप्रभात।', 'final': true, 'utterance': 0});
+      await pump();
+      expect(controller.state.turns, isEmpty);
     });
   });
 }

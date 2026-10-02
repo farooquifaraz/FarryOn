@@ -30,11 +30,18 @@ String renderTranslationNote({
     lines.add(lang == null
         ? heard
         : '[${translateLanguageName(lang)}] $heard');
+    // The language this line was translated INTO. The target can be changed
+    // mid-session, so a line names its own when it differs from the heading.
+    final into = turn.targetLang == null || turn.targetLang == targetLanguage
+        ? null
+        : translateLanguageName(turn.targetLang!);
     if (turn.sameLanguage) {
-      lines.add('  (already in $target — nothing to translate)');
+      lines.add('  (already in ${into ?? target} — nothing to translate)');
     } else {
       final translated = turn.translated.trim();
-      if (translated.isNotEmpty) lines.add('  → $translated');
+      if (translated.isNotEmpty) {
+        lines.add(into == null ? '  → $translated' : '  → [$into] $translated');
+      }
     }
     lines.add('');
   }

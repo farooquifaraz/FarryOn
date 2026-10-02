@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 
+import '../../capture/device_registry.dart';
 import '../../core/config.dart';
 import '../../core/theme.dart';
 import '../../data/live_client.dart' show ConnectionStatus;
@@ -168,8 +170,69 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
       ));
   }
 
+  /// Hand the transcript to whatever the user shares with — WhatsApp, mail,
+  /// a notes app. The same text a saved note holds, so what is sent reads the
+  /// same as what is kept.
+  Future<void> _share() async {
+    final s = ref.read(translateProvider);
+    final body = renderTranslationNote(
+      turns: s.turns,
+      targetLanguage: s.targetLanguage,
+      at: DateTime.now(),
+    );
+    try {
+      await Share.share(body, subject: 'Live translation');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(SnackBar(content: Text('Could not share it — $e')));
+    }
+  }
+
+  /// Empty the transcript, after asking. It cannot be brought back, and the
+  /// button sits next to Save.
+  Future<void> _clear() async {
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Aurora.surface,
+        title: const Text('Clear this translation?',
+            style: TextStyle(color: Aurora.textPrimary, fontSize: 17)),
+        content: const Text(
+          'Everything on this screen is removed. Notes you already saved are '
+          'kept, and listening carries on if it is running.',
+          style: TextStyle(color: Aurora.textMuted, fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep', style: TextStyle(color: Aurora.textMuted)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Clear', style: TextStyle(color: Aurora.danger)),
+          ),
+        ],
+      ),
+    );
+    if (sure == true) _controller.clearTranscript();
+  }
+
+  /// The microphone for translation — this screen's own, see
+  /// `TranslateController.setMic`. Remembered, and the assistant's is not
+  /// touched.
+  Future<void> _setMic(CaptureDeviceKind kind) async {
+    await _controller.setMic(kind);
+    final cfg = ref.read(configProvider);
+    ref.read(configProvider.notifier).state =
+        cfg.copyWith(translateMic: kind.name);
+  }
+
   @override
   Widget build(BuildContext context) {
+    ref.listen<bool>(liveProvider.select((l) => l.glassesConnected),
+        (_, connected) => unawaited(_controller.setGlassesConnected(connected)));
     // Keep the session's socket on a live token. Without this the config
     // snapshot taken when the screen opened is the only one it ever sees, and
     // fifteen minutes later every reconnect is refused.
@@ -207,6 +270,27 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
               color: Aurora.mint,
               tooltip: 'Save this translation',
             ),
+          // Share and Clear live behind one button: the bar already holds the
+          // title, Save and the language, and a fourth and fifth icon push
+          // the language off a narrow phone.
+          if (s.turns.isNotEmpty)
+            PopupMenuButton<String>(
+              tooltip: 'More',
+              icon: const Icon(Icons.more_vert, color: Aurora.textPrimary),
+              color: Aurora.surface,
+              onSelected: (v) => v == 'share' ? _share() : _clear(),
+              itemBuilder: (_) => [
+                if (hasSomethingToSave(s.turns))
+                  const PopupMenuItem(
+                    value: 'share',
+                    child: _MenuRow(Icons.ios_share, 'Share…'),
+                  ),
+                const PopupMenuItem(
+                  value: 'clear',
+                  child: _MenuRow(Icons.delete_sweep_outlined, 'Clear'),
+                ),
+              ],
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: TextButton(
@@ -242,6 +326,8 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
               state: s,
               // The phone's microphone listens when the glasses are off.
               enabled: true,
+              // A choice only exists while the glasses are there to choose.
+              onMic: glassesOn ? _setMic : null,
               onToggle: _toggle,
               onCaptionsOnly: (v) {
                 _controller.setCaptionsOnly(v);
@@ -255,6 +341,22 @@ class _TranslateScreenState extends ConsumerState<TranslateScreen> {
       ),
     );
   }
+}
+
+class _MenuRow extends StatelessWidget {
+  const _MenuRow(this.icon, this.label);
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Icon(icon, size: 18, color: Aurora.textPrimary),
+          const SizedBox(width: 10),
+          Text(label,
+              style: const TextStyle(color: Aurora.textPrimary, fontSize: 14)),
+        ],
+      );
 }
 
 class _FarryPausedNotice extends StatelessWidget {
@@ -396,6 +498,9 @@ class _TurnTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The language THIS card was translated into: the screen's target can be
+    // changed mid-session, and an earlier card keeps the one it was made in.
+    final target = turn.targetLang ?? this.target;
     final heardRtl = isRtlLanguage(turn.heardLang);
     final targetRtl = isRtlLanguage(target);
     return Container(
@@ -504,10 +609,14 @@ class _Controls extends StatelessWidget {
     required this.enabled,
     required this.onToggle,
     required this.onCaptionsOnly,
+    this.onMic,
   });
 
   final TranslateState state;
   final bool enabled;
+
+  /// Choose the microphone, or null when there is no choice to make.
+  final Future<void> Function(CaptureDeviceKind kind)? onMic;
   final Future<void> Function() onToggle;
   final ValueChanged<bool> onCaptionsOnly;
 
@@ -572,6 +681,39 @@ class _Controls extends StatelessWidget {
               ),
             ],
           ),
+          if (onMic != null && !state.typing) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Microphone',
+                    style: TextStyle(color: Aurora.textMuted, fontSize: 12),
+                  ),
+                ),
+                for (final kind in CaptureDeviceKind.values) ...[
+                  const SizedBox(width: 8),
+                  ChoiceChip(
+                    label: Text(
+                        kind == CaptureDeviceKind.phone ? 'Phone' : 'Glasses'),
+                    selected: state.mic == kind.name,
+                    onSelected: (_) => onMic!(kind),
+                    showCheckmark: false,
+                    selectedColor: Aurora.teal,
+                    backgroundColor: Colors.transparent,
+                    side: const BorderSide(color: Aurora.glassBorder),
+                    labelStyle: TextStyle(
+                      color: state.mic == kind.name
+                          ? Aurora.tealInk
+                          : Aurora.textMuted,
+                      fontSize: 12,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
+              ],
+            ),
+          ],
           const SizedBox(height: 12),
           Row(
             children: [
