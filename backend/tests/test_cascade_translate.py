@@ -122,6 +122,15 @@ class _FlakyTranslator:
         return f"[{target}] {text}", None
 
 
+class _SameTextTranslator(_FakeTranslator):
+    """Hands the sentence back as it came — what a real translator does with
+    speech that is already in the target language."""
+
+    async def translate(self, text, *, source_lang, target, previous=None):
+        self.calls.append((text, source_lang, target))
+        return text + " ", self.detected
+
+
 class _FakeSpeaker:
     def __init__(self, *, fail: bool = False, chunks: int = 3) -> None:
         self.spoken: list[str] = []
@@ -324,7 +333,7 @@ class TestSpeakingTheTargetLanguage:
             [TranscriptEvent(role="user", text="नमस्ते, आप कैसे हैं?", final=True,
                              lang=None, utterance=4)],
             target="hi",
-            translator=_FakeTranslator(detected="hi-IN"),
+            translator=_SameTextTranslator(detected="hi-IN"),
         )
         assert len(translator.calls) == 1
         assert speaker.spoken == []
@@ -339,6 +348,19 @@ class TestSpeakingTheTargetLanguage:
             if e.type == EventType.TRANSCRIPT and e.role == "user" and e.lang
         ]
         assert [(e.lang, e.utterance) for e in relabelled] == [("hi", 4)]
+
+    async def test_a_language_name_alone_does_not_silence_a_translation(self) -> None:
+        # The recogniser spells accented speech in the listener's script, and
+        # the translator can name the script's language while translating the
+        # words properly: English in Urdu letters came back as "ur" with real
+        # Urdu beside it (2026-10-02). The words changed, so it is said.
+        events, _, speaker = await _run(
+            [TranscriptEvent(role="user", text="واٹ آر یو ڈوئنگ", final=True,
+                             lang=None, utterance=2)],
+            target="ur",
+            translator=_FakeTranslator(detected="ur"),
+        )
+        assert speaker.spoken == ["[ur] واٹ آر یو ڈوئنگ"]
 
     async def test_echo_on_means_say_it_anyway(self) -> None:
         translator = _FakeTranslator()

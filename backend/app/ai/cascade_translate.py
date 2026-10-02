@@ -96,6 +96,19 @@ def _has_words(text: str) -> bool:
 
 
 
+def _unchanged(source: str, translated: str) -> bool:
+    """Whether the translation is the source handed back.
+
+    Compared on letters and digits only, so a full stop added or a space
+    dropped does not make two identical sentences look different.
+    """
+
+    def key(text: str) -> str:
+        return "".join(ch for ch in text.casefold() if ch.isalnum())
+
+    return key(source) == key(translated)
+
+
 class CascadeTranslateGateway(AIGateway):
     """Hear with one model, translate with a second, speak with a third."""
 
@@ -315,7 +328,7 @@ class CascadeTranslateGateway(AIGateway):
         translated, detected = result
         if not translated.strip():
             return
-        if self._same_language(detected):
+        if self._same_language(detected) and _unchanged(text, translated):
             # The recogniser reports no language (every live call so far has
             # logged `source_lang: None`), so the check above never fires on
             # the real path — and Hindi spoken into a Hindi target was
@@ -324,6 +337,11 @@ class CascadeTranslateGateway(AIGateway):
             # read the sentence and does know. The heard line goes out again
             # under the target's own code, which is what the phone matches on
             # to explain the silence in words.
+            #
+            # Both conditions, not the language alone: English spelled out in
+            # Urdu letters was named "ur" and properly translated in the same
+            # answer (2026-10-02). When the words changed, something was
+            # translated, and it is said.
             self._stats["same_language"] += 1
             logger.info(
                 "cascade_translate.same_language",
@@ -520,6 +538,15 @@ class _GeminiTextTranslator:
             f"{target}.\n"
             "Keep names, numbers, times and places exactly as they are. If the "
             "text is a fragment, translate the fragment; do not complete it.\n"
+            # The recogniser writes accented speech in the listener's script:
+            # English said with a Hindi accent arrives as "हेलो हाउ आर यू", and
+            # with a Hindi target that came back untranslated, copied as it
+            # stood (S23, 2026-10-02). It is a spelling, not a language.
+            "The text is a speech transcript, so words of one language may be "
+            "spelled out in another language's script (English written in "
+            "Devanagari or Arabic letters, for example). Read such words by "
+            "their sound, translate what they mean, and never copy them as "
+            "they are. Name the language that was SPOKEN, not the script.\n"
             "Reply with exactly two lines and nothing else — no numbering, no "
             "labels, no quotation marks:\n"
             "first line: the BCP-47 code of the language the text is IN\n"
