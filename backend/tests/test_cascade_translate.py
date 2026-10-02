@@ -131,6 +131,18 @@ class _SameTextTranslator(_FakeTranslator):
         return text + " ", self.detected
 
 
+class _FixedTranslator(_FakeTranslator):
+    """Answers every sentence with the same words."""
+
+    def __init__(self, answer: str, *, detected: str | None = None) -> None:
+        super().__init__(detected=detected)
+        self._answer = answer
+
+    async def translate(self, text, *, source_lang, target, previous=None):
+        self.calls.append((text, source_lang, target))
+        return self._answer, self.detected
+
+
 class _FakeSpeaker:
     def __init__(self, *, fail: bool = False, chunks: int = 3) -> None:
         self.spoken: list[str] = []
@@ -358,9 +370,25 @@ class TestSpeakingTheTargetLanguage:
             [TranscriptEvent(role="user", text="واٹ آر یو ڈوئنگ", final=True,
                              lang=None, utterance=2)],
             target="ur",
-            translator=_FakeTranslator(detected="ur"),
+            translator=_FixedTranslator("آپ کیا کر رہے ہیں؟", detected="ur"),
         )
-        assert speaker.spoken == ["[ur] واٹ آر یو ڈوئنگ"]
+        assert speaker.spoken == ["آپ کیا کر رہے ہیں؟"]
+
+    async def test_a_tidied_copy_is_still_the_same_sentence(self) -> None:
+        # Hindi into a Hindi target does not always come back word for word:
+        # the translator makes it politer. It is still what was just said, and
+        # reading it back to the person who said it is the parroting this
+        # silence exists to prevent (S23, 2026-10-02).
+        from app.ai.cascade_translate import _unchanged
+
+        assert _unchanged(
+            "तुमने तो बनाए थे छोले भटूरे बनाने वाली थी",
+            "आपने छोले भटूरे बनाए थे, मैं बनाने वाली थी",
+        )
+        assert _unchanged("बना लिया", "बना लिया।")
+        # A real translation shares next to nothing with its source.
+        assert not _unchanged("واٹ آر یو ڈوئنگ", "آپ کیا کر رہے ہیں؟")
+        assert not _unchanged("हेलो हाउ आर यू", "नमस्ते आप कैसे हैं")
 
     async def test_echo_on_means_say_it_anyway(self) -> None:
         translator = _FakeTranslator()

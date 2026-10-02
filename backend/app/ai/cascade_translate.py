@@ -97,16 +97,28 @@ def _has_words(text: str) -> bool:
 
 
 def _unchanged(source: str, translated: str) -> bool:
-    """Whether the translation is the source handed back.
+    """Whether the translation is the source handed back, or nearly.
 
-    Compared on letters and digits only, so a full stop added or a space
-    dropped does not make two identical sentences look different.
+    Asked to translate Hindi into Hindi, the translator does not always copy:
+    it tidies. "तुमने तो बनाए थे छोले भटूरे बनाने वाली थी" came back as "आपने
+    छोले भटूरे बनाए थे, मैं बनाने वाली थी" (S23, 2026-10-02) — the same
+    sentence, politer, and the phone would have read it aloud to the person
+    who had just said it. So this is not equality: it is whether at least half
+    of the words that went in came out again. A real translation shares almost
+    none; "واٹ آر یو ڈوئنگ" and "آپ کیا کر رہے ہیں" share nothing at all.
+
+    Words are compared on letters and digits only, so punctuation and case do
+    not make two identical sentences look different.
     """
 
-    def key(text: str) -> str:
-        return "".join(ch for ch in text.casefold() if ch.isalnum())
+    def words(text: str) -> list[str]:
+        cleaned = "".join(ch if ch.isalnum() else " " for ch in text.casefold())
+        return cleaned.split()
 
-    return key(source) == key(translated)
+    said, back = words(source), set(words(translated))
+    if not said:
+        return True
+    return sum(1 for w in said if w in back) * 2 >= len(said)
 
 
 class CascadeTranslateGateway(AIGateway):
