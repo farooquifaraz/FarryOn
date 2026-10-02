@@ -266,9 +266,12 @@ class TestOneBrokenStepIsNotABrokenSession:
         )
         # Each sentence gets a second try, and the next sentence is still
         # attempted after the one before it was given up on.
-        assert [c[0] for c in translator.calls] == [
-            "مرحبا", "مرحبا", "كيف حالك", "كيف حالك"
-        ]
+        # Sorted, because the two sentences are translated at the same time
+        # and whose retry lands first is the event loop's business: this
+        # passed on Windows and failed on the CI's Linux, interleaved.
+        assert sorted(c[0] for c in translator.calls) == sorted(
+            ["مرحبا", "مرحبا", "كيف حالك", "كيف حالك"]
+        )
         assert speaker.spoken == []
         # The heard side is still delivered — the user can at least read what
         # was said, and the session stays open.
