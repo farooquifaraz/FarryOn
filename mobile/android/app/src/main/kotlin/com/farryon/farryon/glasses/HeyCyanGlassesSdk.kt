@@ -204,6 +204,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
          *  MTU (which the delete command needs) is negotiated first. */
         private const val RETENTION_SWEEP_DELAY_MS = 5_000L
 
+        /** A vendor parser crash this soon after a volume write is that
+         *  write's reply (measured: 70–90 ms on the GS4 MAX, fw 2.20.22). */
+        private const val VOLUME_REPLY_WINDOW_MS = 1_500L
+
         /** Longest edge for the chat preview of a synced photo. The originals
          *  are 6560x4928; a preview does not need more than this, and decoding
          *  one at full size would cost ~130 MB. */
@@ -3470,7 +3474,39 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
      */
     private var volCache: IntArray? = null
 
+    /** When the last volume block was written, to recognise its reply. */
+    private var volumeWrittenAt = 0L
+
+    /**
+     * The glasses (by MAC) whose firmware answered a volume write with a
+     * packet the vendor parser choked on — see [VendorCrashGuard]. They are
+     * not asked again in this process: the wearer's own slide on the temple
+     * still works, and asking only buys another dropped packet.
+     */
+    private var volumeRefusedBy: String? = null
+
+    private fun onVendorParserCrash(t: Throwable) {
+        val sinceVolume = SystemClock.elapsedRealtime() - volumeWrittenAt
+        val volume = volumeWrittenAt != 0L && sinceVolume < VOLUME_REPLY_WINDOW_MS
+        if (volume) volumeRefusedBy = pendingMac
+        emit(
+            "deviceEvent",
+            mapOf(
+                "hex" to if (volume) {
+                    "this firmware does not accept the app's volume — use the slide on the glasses (${t.javaClass.simpleName})"
+                } else {
+                    "glasses sent a packet the SDK could not read — dropped (${t.javaClass.simpleName}: ${t.message})"
+                }
+            )
+        )
+    }
+
     private fun writeVolume(type: String, level: Int, block: IntArray) {
+        if (volumeRefusedBy != null && volumeRefusedBy.equals(pendingMac, ignoreCase = true)) {
+            emit("deviceEvent", mapOf("hex" to "setVolume skipped — this firmware does not accept the app's volume"))
+            return
+        }
+        volumeWrittenAt = SystemClock.elapsedRealtime()
         fun scaled(min: Int, max: Int) =
             min + ((max - min) * level.coerceIn(0, 100)) / 100
         when (type) {
@@ -3706,6 +3742,10 @@ class HeyCyanGlassesSdk(private val app: Application) : GlassesSdk {
                 vendorReceiversRegistered = true
             }
         }
+        // Those receivers parse on the main thread with no bounds checks; a
+        // firmware that changes one reply must cost a packet, not the app.
+        VendorCrashGuard.install()
+        VendorCrashGuard.onSwallowed = { onVendorParserCrash(it) }
         BleBaseControl.getInstance(app).setmContext(app)
         localBroadcast(register = true, bleReceiver, BleAction.getIntentFilter())
         receiverRegistered = true
