@@ -271,6 +271,8 @@ class _FakeSocket:
         self._script = list(script)
         self._then = then
         self.sent: list[bytes] = []
+        #: Everything sent, in order: "audio", "start", "end".
+        self.marks: list[str] = []
         self.done = asyncio.Event()
 
     async def receive(self):
@@ -283,8 +285,16 @@ class _FakeSocket:
         if self._then == "wait":
             await asyncio.sleep(3600)
 
-    async def send_realtime_input(self, *, audio) -> None:
-        self.sent.append(audio.data)
+    async def send_realtime_input(
+        self, *, audio=None, activity_start=None, activity_end=None
+    ) -> None:
+        if audio is not None:
+            self.sent.append(audio.data)
+            self.marks.append("audio")
+        if activity_start is not None:
+            self.marks.append("start")
+        if activity_end is not None:
+            self.marks.append("end")
 
 
 def _go_away() -> SimpleNamespace:
@@ -419,5 +429,105 @@ class TestTheSocketDoesNotLastAConversation:
                 )
             )
             assert len(opened) == _MAX_REOPENS + 1
+        finally:
+            await asr.close()
+
+
+_LOUD = bytes([0, 16]) * 640  # 40 ms at an RMS of 4096
+_QUIET = bytes([16, 0]) * 640  # 40 ms at an RMS of 16
+
+
+class TestTheListeningWindowIsOurs:
+    """The model's own speech detector is off, because it could not be trusted.
+
+    Three sessions on 2026-10-02 took 89, 27 and 58 seconds of loud Mandarin —
+    a video already playing when the session opened — and wrote nothing: the
+    detector never decided that anyone had started. The app said "Listening".
+    """
+
+    def test_the_detector_is_switched_off(self) -> None:
+        config = _asr()._build_config()
+        assert config.realtime_input_config.automatic_activity_detection.disabled
+
+    async def test_sound_opens_the_window_before_it_is_sent(self) -> None:
+        sock = _FakeSocket([])
+        asr, _ = await _connected([sock])
+        try:
+            await asr.send_audio(_QUIET)
+            await asr.send_audio(_LOUD)
+            # Quiet goes up unmarked; the first loud chunk goes up INSIDE the
+            # window, so the opening syllable is not left outside it.
+            assert sock.marks == ["audio", "start", "audio"]
+        finally:
+            await asr.close()
+
+    async def test_two_quiet_seconds_close_it(self) -> None:
+        # Left open over silence the model writes things nobody said.
+        sock = _FakeSocket([])
+        asr, _ = await _connected([sock])
+        try:
+            await asr.send_audio(_LOUD)
+            for _ in range(60):  # 2.4 s
+                await asr.send_audio(_QUIET)
+            assert sock.marks.count("end") == 1
+            assert not asr._window_open
+            await asr.send_audio(_LOUD)
+            assert sock.marks[-2:] == ["start", "audio"]
+        finally:
+            await asr.close()
+
+    async def test_a_window_open_too_long_is_renewed(self) -> None:
+        # One window held for a whole session goes deaf after a long silence;
+        # speech that never pauses still gets a new one.
+        from app.ai.gemini_asr import _WINDOW_HARD_S
+
+        sock = _FakeSocket([])
+        asr, _ = await _connected([sock])
+        try:
+            for _ in range(int((_WINDOW_HARD_S + 1) * 25)):
+                await asr.send_audio(_LOUD)
+            assert sock.marks.count("start") == 2
+            assert sock.marks.count("end") == 1
+            assert asr._window_open
+        finally:
+            await asr.close()
+
+    async def test_a_new_socket_gets_its_own_window(self) -> None:
+        first = _FakeSocket([])
+        asr, _ = await _connected([first])
+        try:
+            await asr.send_audio(_LOUD)
+            fresh = _FakeSocket([])
+
+            async def open_upstream() -> None:
+                asr._session = fresh
+                asr._window_open = False
+
+            asr._open_upstream = open_upstream  # type: ignore[method-assign]
+            assert await asr._reopen_upstream("go_away")
+            await asr.send_audio(_LOUD)
+            assert fresh.marks == ["start", "audio"]
+        finally:
+            await asr.close()
+
+    async def test_noise_is_not_a_sentence(self) -> None:
+        asr = _asr()
+        await asr._handle(_msg("[noise]", "en"))
+        await asr._handle(_msg(" <noise> ", "en"))
+        assert not [e for e in await _drain(asr) if e.text.strip()]
+
+    async def test_words_long_after_the_room_went_quiet_are_dropped(self) -> None:
+        sock = _FakeSocket([])
+        asr, _ = await _connected([sock])
+        try:
+            await asr.send_audio(_LOUD)
+            for _ in range(150):  # six quiet seconds
+                await asr.send_audio(_QUIET)
+            await asr._handle(_msg("ครับ", "th"))
+            assert asr._buf == ""
+            # Text that follows its sound closely is the sentence itself.
+            await asr.send_audio(_LOUD)
+            await asr._handle(_msg("Hello there", "en"))
+            assert asr._buf == "Hello there"
         finally:
             await asr.close()

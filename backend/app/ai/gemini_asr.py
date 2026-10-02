@@ -37,8 +37,11 @@ business here, and speech tokens cost six times what listening does.
 
 from __future__ import annotations
 
+import array
 import asyncio
 import contextlib
+import math
+import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -68,6 +71,46 @@ _REOPEN_WINDOW_S = 120.0
 #: much, and sent to the new one. A rollover takes about half a second and
 #: people do not stop talking for it; five seconds of 16 kHz mono PCM16.
 _REOPEN_AUDIO_CAP_BYTES = 5 * 32000
+
+# -- When the upstream is told someone is speaking -----------------------------
+#
+# The model's own speech detector is off (see `_build_config`), so the listening
+# window is ours to open and close. All of it is measured in seconds of AUDIO,
+# not of clock, so a recording replayed fast behaves like the room it was made in.
+
+#: A 40 ms chunk at or above this (RMS of PCM16) counts as sound worth hearing.
+#: Low on purpose: a phone in a quiet room sits near 100 and speech across a
+#: table is 800 and up. Missing a quiet speaker is the worse mistake.
+_SOUND_RMS = 250
+
+#: How long it must be quiet before the window is closed. With it left open
+#: over silence the model writes things nobody said: a replayed 25 seconds of
+#: nothing produced Thai syllables and "[noise]" (2026-10-02).
+_QUIET_CLOSE_S = 2.0
+
+#: A window is closed and reopened at the first quiet chunk after this long...
+_WINDOW_SOFT_S = 8.0
+#: ...and at this long whatever the sound is doing. One window held open for
+#: a whole session goes deaf after a long silence: the second of two identical
+#: English clips, 25 seconds apart, came back as a single stray word. Renewed
+#: every few seconds it came back whole.
+_WINDOW_HARD_S = 15.0
+
+#: Text for a sentence keeps arriving for a moment after its last sound. Past
+#: this long after the sound stopped, with the window closed, it is not that.
+_LATE_TEXT_S = 3.0
+
+#: What the recogniser writes when it hears something that is not speech.
+_NOISE_TAG = re.compile(r"[\[<(]\s*noise\s*[\]>)]", re.IGNORECASE)
+
+
+def _rms(pcm: bytes) -> float:
+    """Loudness of one chunk of PCM16."""
+    samples = array.array("h")
+    samples.frombytes(pcm[: len(pcm) // 2 * 2])
+    if not samples:
+        return 0.0
+    return math.sqrt(sum(v * v for v in samples) / len(samples))
 
 #: Characters that end a sentence, across the scripts this product is used in.
 _SENTENCE_ENDINGS = ".?!।॥؟。！？…"
@@ -177,6 +220,11 @@ class GeminiStreamingASR(AIGateway):
         #: For the closing summary — the only record of what a session did.
         self._connected_at = 0.0
         self._audio_bytes = 0
+        #: The listening window (see `_keep_window`). Positions are in seconds
+        #: of audio received.
+        self._window_open = False
+        self._window_since = 0.0
+        self._sound_at = -1e9
 
     # -- Setup ---------------------------------------------------------------
 
@@ -205,7 +253,63 @@ class GeminiStreamingASR(AIGateway):
             # that experiment at all — `gemini_asr.model_spoke` in a real
             # session is the number to watch.
             max_output_tokens=1,
+            # The model's own speech detector is switched off; the listening
+            # window is opened and closed here instead (see `_keep_window`).
+            # Left on, it decides when "someone started speaking" — and for
+            # speech that is already running when the session opens, or that
+            # never pauses (a video, a lecture, a room of people), it never
+            # decides: the session stays on "Listening" with nothing written
+            # for as long as the user cares to wait. Three sessions of
+            # 2026-10-02 took 89, 27 and 58 seconds of loud Mandarin and wrote
+            # nothing. Replayed, the same 24 seconds gave 0 characters with the
+            # detector on, 42 (after a 17-second wait) with its sensitivity
+            # raised, and 138 from second 2.7 with it off.
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    disabled=True
+                )
+            ),
         )
+
+    async def _mark(self, session: Any, *, start: bool) -> None:
+        """Open or close the listening window on this socket. Best effort: a
+        socket that refuses is found out by the receive loop."""
+        from google.genai import types
+
+        with contextlib.suppress(Exception):
+            if start:
+                await session.send_realtime_input(
+                    activity_start=types.ActivityStart()
+                )
+            else:
+                await session.send_realtime_input(activity_end=types.ActivityEnd())
+
+    async def _keep_window(self, session: Any, pcm: bytes) -> None:
+        """Decide, before this chunk is sent, whether the upstream is listening.
+
+        Open on sound; close after two quiet seconds; and renew a window that
+        has been open a while, at a quiet chunk if one comes and regardless if
+        not. The chunk that opens a window is sent inside it, so the first
+        syllable is not left outside.
+        """
+        now = self._audio_bytes / 32000
+        loud = _rms(pcm) >= _SOUND_RMS
+        if loud:
+            self._sound_at = now
+        if not self._window_open:
+            if loud:
+                await self._mark(session, start=True)
+                self._window_open, self._window_since = True, now
+            return
+        if now - self._sound_at >= _QUIET_CLOSE_S:
+            await self._mark(session, start=False)
+            self._window_open = False
+            return
+        age = now - self._window_since
+        if age >= _WINDOW_HARD_S or (age >= _WINDOW_SOFT_S and not loud):
+            await self._mark(session, start=False)
+            await self._mark(session, start=True)
+            self._window_since = now
 
     async def connect(self) -> None:
         await self._open_upstream()
@@ -236,6 +340,8 @@ class GeminiStreamingASR(AIGateway):
                 )
                 self._session = await cm.__aenter__()
                 self._session_cm = cm
+                # A new socket knows nothing of the old one's window.
+                self._window_open = False
                 logger.info(
                     "gemini_asr.connected", model=self.model, api_version=api_version
                 )
@@ -265,6 +371,7 @@ class GeminiStreamingASR(AIGateway):
             while self._held_bytes > _REOPEN_AUDIO_CAP_BYTES and len(self._held) > 1:
                 self._held_bytes -= len(self._held.pop(0))
             return
+        await self._keep_window(session, pcm)
         await self._send_pcm(session, pcm)
 
     async def _send_pcm(self, session: Any, pcm: bytes) -> None:
@@ -426,7 +533,21 @@ class GeminiStreamingASR(AIGateway):
 
         tx = getattr(content, "input_transcription", None)
         text = getattr(tx, "text", None) if tx else None
+        if text:
+            # "[noise]" is the recogniser saying it heard no words. It went on
+            # screen as a sentence and on to the translator as one.
+            text = _NOISE_TAG.sub("", text)
         if not text:
+            return
+        if (
+            self._audio_bytes
+            and not self._window_open
+            and self._audio_bytes / 32000 - self._sound_at > _LATE_TEXT_S
+        ):
+            # Words that arrive long after the room went quiet were not said
+            # in it. Closing a window over its silent tail is answered, now and
+            # then, with a stray syllable in a language nobody spoke — "ครับ"
+            # six seconds after the last sound of an English sentence.
             return
         self._last_delta_at = time.monotonic()
         self._buf += text
