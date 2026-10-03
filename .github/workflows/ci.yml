@@ -16,6 +16,10 @@ jobs:
   backend:
     name: Backend (pytest)
     runs-on: ubuntu-latest
+    # A normal run is five minutes. Without a limit a hung one sat until
+    # GitHub's own six-hour ceiling — 2026-09-29 and twice on 2026-10-02 —
+    # and nothing said which test it was stuck in.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: backend
@@ -43,7 +47,10 @@ jobs:
         run: ruff check . || true
 
       - name: Run tests
-        run: pytest -q
+        # A test still running after two minutes has every thread's stack
+        # written to the log (and carries on): when this job hangs, the
+        # traceback names the test and the line it is waiting on.
+        run: pytest -q -o faulthandler_timeout=120
 
   # ------------------------------------------- backend (admin module, Postgres)
   backend-postgres:
